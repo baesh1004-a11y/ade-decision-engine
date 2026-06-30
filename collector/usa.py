@@ -9,13 +9,18 @@ class USACollector:
         df = yf.download(ticker, period=period, interval=interval, auto_adjust=False, progress=False)
         if df.empty:
             raise ValueError(f"No data returned for ticker: {ticker}")
+
+        # yfinance can return MultiIndex columns for some requests.
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [col[0] for col in df.columns]
+
         df = df.reset_index()
-        df = df.rename(columns={
-            "Date": "Date",
-            "Open": "Open",
-            "High": "High",
-            "Low": "Low",
-            "Close": "Close",
-            "Volume": "Volume",
-        })
-        return df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+        if "Datetime" in df.columns and "Date" not in df.columns:
+            df = df.rename(columns={"Datetime": "Date"})
+
+        required = ["Date", "Open", "High", "Low", "Close", "Volume"]
+        missing = [col for col in required if col not in df.columns]
+        if missing:
+            raise ValueError(f"Missing expected yfinance columns: {missing}")
+
+        return df[required].dropna(subset=["Open", "High", "Low", "Close"]).reset_index(drop=True)

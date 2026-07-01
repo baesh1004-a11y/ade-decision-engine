@@ -84,10 +84,10 @@ class EntryTimingEngine:
         prev_macd_signal = self._safe_float(prev, "MACD_SIGNAL", macd_signal)
 
         candidate_score = int(candidate.get("score", 0)) if candidate else 0
-        candidate_action = str(candidate.get("action", "")) if candidate else ""
+        candidate_action = str(candidate.get("action", "BUY_CANDIDATE")) if candidate else "BUY_CANDIDATE"
         candidate_risk = str(candidate.get("risk_level", "LOW")) if candidate else "LOW"
-        position_weight = float(position.get("recommended_weight", 0.0)) if position else 0.0
-        position_shares = int(position.get("shares", 0)) if position else 1
+        position_weight = float(position.get("recommended_weight", 1.0)) if position else 1.0
+        position_shares = int(position.get("shares", 1)) if position else 1
 
         if candidate and candidate_action in {"REJECT", "NEUTRAL"}:
             flags.append("Candidate decision is not actionable")

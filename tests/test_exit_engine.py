@@ -118,7 +118,7 @@ def test_rsi_overheated_profit_can_sell_50_when_combined():
 
 
 def test_time_exit_for_underperforming_position():
-    df = _rows(Close=101.0, High=102.0, RSI=50.0)
+    df = _rows(Close=101.0, High=102.0, RSI=50.0, ATR=10.0)
 
     decision = ExitDecisionEngine().evaluate(
         df,

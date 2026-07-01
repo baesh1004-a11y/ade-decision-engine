@@ -1,4 +1,4 @@
--- ADE v0.2 decision engine database schema
+-- ADE v1.0 decision engine database schema
 -- Target: SQLite first, portable to PostgreSQL later.
 
 CREATE TABLE IF NOT EXISTS market_bars (
@@ -55,6 +55,32 @@ CREATE TABLE IF NOT EXISTS candidate_decisions (
     UNIQUE (market, ticker, trade_date, engine_version)
 );
 
+CREATE TABLE IF NOT EXISTS position_recommendations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    decision_id INTEGER,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    account_balance REAL NOT NULL,
+    cash REAL,
+    price REAL NOT NULL,
+    recommended_weight REAL NOT NULL,
+    buy_amount REAL NOT NULL,
+    shares INTEGER NOT NULL,
+    max_loss REAL NOT NULL,
+    risk_score INTEGER NOT NULL,
+    kelly_weight REAL NOT NULL,
+    atr_risk REAL NOT NULL,
+    sector_weight REAL NOT NULL,
+    portfolio_heat REAL NOT NULL,
+    cash_limited INTEGER NOT NULL DEFAULT 0,
+    reasons TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (decision_id) REFERENCES candidate_decisions(id),
+    UNIQUE (market, ticker, trade_date, engine_version)
+);
+
 CREATE TABLE IF NOT EXISTS backtest_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -94,3 +120,6 @@ ON market_bars (market, ticker, trade_date);
 
 CREATE INDEX IF NOT EXISTS idx_candidate_decisions_lookup
 ON candidate_decisions (market, ticker, trade_date, score, grade);
+
+CREATE INDEX IF NOT EXISTS idx_position_recommendations_lookup
+ON position_recommendations (market, ticker, trade_date, recommended_weight, risk_score);

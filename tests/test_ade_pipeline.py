@@ -36,8 +36,11 @@ def test_pipeline_runs_core_decision_chain():
 
     result = ADEPipeline().run(context)
 
+    assert "pattern_memory" in result.decisions
+    assert result.decisions["pattern_memory"]["records"] > 0
     assert "pattern_context" in result.decisions
     assert "pattern" in result.decisions
+    assert result.decisions["pattern"]["engine_version"] == "pattern-memory-matching-v1.0.0"
     assert "probability" in result.decisions
     assert "candidate" in result.decisions
     assert "risk" in result.decisions
@@ -116,6 +119,7 @@ def test_context_serializes_pipeline_result():
     result = ADEPipeline().run(context).to_dict()
 
     assert result["ticker"] == "NVDA"
+    assert "pattern_memory" in result["decisions"]
     assert "pattern_context" in result["decisions"]
     assert "probability" in result["decisions"]
     assert "candidate" in result["decisions"]

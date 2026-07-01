@@ -2,6 +2,7 @@ import pandas as pd
 
 from backtest.execution import ExecutionCostModel
 from backtest.metrics import MetricsEngine
+from backtest.persistence import BacktestRepository
 from backtest.replay import ReplayEngine
 from backtest.simulator import BacktestConfig, BacktestSimulator
 
@@ -81,6 +82,31 @@ def test_metrics_engine_summarizes_backtest_result():
     assert summary.win_rate == 0.6667
     assert summary.profit_factor > 1
     assert summary.expectancy > 0
+
+
+def test_backtest_repository_saves_and_fetches_result():
+    result = BacktestSimulator(
+        BacktestConfig(
+            market="us",
+            ticker="NVDA",
+            initial_cash=100_000_000,
+            min_history=100,
+            max_holding_days=20,
+            buy_score_threshold=40,
+            buy_weight=0.10,
+        )
+    ).run(_market_data())
+
+    repo = BacktestRepository()
+    run_id = repo.save_result(result)
+    fetched = repo.fetch_run(run_id)
+
+    assert repo.count_runs() == 1
+    assert fetched["run"]["ticker"] == "NVDA"
+    assert isinstance(fetched["trades"], list)
+    assert isinstance(fetched["daily_equity"], list)
+    assert fetched["summary"] is not None
+    repo.close()
 
 
 def test_invalid_replay_rows_raise_value_error():

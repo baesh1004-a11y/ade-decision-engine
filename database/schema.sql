@@ -37,6 +37,39 @@ CREATE TABLE IF NOT EXISTS indicator_snapshots (
     UNIQUE (market, ticker, trade_date)
 );
 
+CREATE TABLE IF NOT EXISTS pattern_vectors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    vector_version TEXT NOT NULL,
+    window INTEGER NOT NULL,
+    vector_json TEXT NOT NULL,
+    metadata_json TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (market, ticker, trade_date, vector_version, window)
+);
+
+CREATE TABLE IF NOT EXISTS pattern_match_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    vector_version TEXT NOT NULL,
+    window INTEGER NOT NULL,
+    top_k INTEGER NOT NULL,
+    match_count INTEGER NOT NULL,
+    avg_similarity REAL NOT NULL,
+    expected_returns TEXT NOT NULL,
+    win_rates TEXT NOT NULL,
+    risk_flags TEXT NOT NULL,
+    matches_json TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (market, ticker, trade_date, engine_version, window, top_k)
+);
+
 CREATE TABLE IF NOT EXISTS candidate_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -217,6 +250,12 @@ CREATE TABLE IF NOT EXISTS backtest_signals (
 
 CREATE INDEX IF NOT EXISTS idx_market_bars_lookup
 ON market_bars (market, ticker, trade_date);
+
+CREATE INDEX IF NOT EXISTS idx_pattern_vectors_lookup
+ON pattern_vectors (market, ticker, trade_date, vector_version, window);
+
+CREATE INDEX IF NOT EXISTS idx_pattern_match_decisions_lookup
+ON pattern_match_decisions (market, ticker, trade_date, avg_similarity, match_count);
 
 CREATE INDEX IF NOT EXISTS idx_candidate_decisions_lookup
 ON candidate_decisions (market, ticker, trade_date, score, grade);

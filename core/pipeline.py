@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from calibration.persistence import CalibrationRepository
+from calibration.updater import ProbabilityUpdater
 from core.context import DecisionContext
 from indicators.pipeline import add_all_indicators
 from pattern.context import PatternContextEngine
@@ -18,17 +20,21 @@ from strategy.risk import RiskEngine, RiskInput
 
 
 class ADEPipeline:
-    """Integrated ADE pipeline with memory-first pattern architecture."""
+    """Integrated ADE pipeline with memory-first and calibrated probability architecture."""
 
     def __init__(
         self,
         memory_repository: PatternMemoryRepository | None = None,
+        calibration_repository: CalibrationRepository | None = None,
+        use_calibration: bool = True,
         auto_build_memory: bool = True,
         memory_window: int = 20,
         memory_top_k: int = 10,
         horizons: tuple[int, ...] = (5, 10, 20, 40),
     ) -> None:
         self.memory_repository = memory_repository or PatternMemoryRepository()
+        self.calibration_repository = calibration_repository
+        self.use_calibration = use_calibration
         self.auto_build_memory = auto_build_memory
         self.memory_window = memory_window
         self.memory_top_k = memory_top_k
@@ -42,6 +48,7 @@ class ADEPipeline:
         )
         self.pattern_context_engine = PatternContextEngine(window=memory_window, top_k=memory_top_k, horizons=horizons)
         self.probability_engine = ProbabilityEngine(horizon_days=20)
+        self.probability_updater = ProbabilityUpdater()
         self.risk_engine = RiskEngine()
         self.position_engine = PositionSizingEngine()
         self.entry_engine = EntryTimingEngine()
@@ -70,6 +77,7 @@ class ADEPipeline:
                 },
             )
             probability = self.probability_engine.evaluate(pattern_context).to_dict()
+            probability = self._apply_calibration(probability, context)
             context.add_decision("probability", probability)
 
         latest = score_latest(enriched)
@@ -174,6 +182,24 @@ class ADEPipeline:
             context.add_error(f"pattern_memory: {exc}")
             return None
 
+    def _apply_calibration(self, probability: dict[str, Any], context: DecisionContext) -> dict[str, Any]:
+        if not self.use_calibration or self.calibration_repository is None:
+            probability = dict(probability)
+            probability["calibration"] = {"applied": False, "reason": "Calibration repository not configured"}
+            return probability
+        try:
+            table = self.calibration_repository.fetch_latest_calibration_table(probability.get("horizon", "20d"))
+            if table is None:
+                probability = dict(probability)
+                probability["calibration"] = {"applied": False, "reason": "No calibration table available"}
+                return probability
+            return self.probability_updater.apply(probability, table)
+        except Exception as exc:
+            context.add_error(f"calibration: {exc}")
+            probability = dict(probability)
+            probability["calibration"] = {"applied": False, "reason": str(exc)}
+            return probability
+
     def _apply_probability_to_candidate(self, candidate: dict[str, Any], probability: dict[str, Any]) -> dict[str, Any]:
         adjusted = dict(candidate)
         score = int(adjusted.get("score", 0))
@@ -186,6 +212,7 @@ class ADEPipeline:
         risk_reward = float(probability.get("risk_reward", 0.0))
         prob_confidence = float(probability.get("confidence", 0.0))
         recommendation = str(probability.get("recommendation", "WATCH"))
+        calibration = probability.get("calibration", {})
 
         adjustment = 0
         confidence_delta = 0.0
@@ -207,6 +234,9 @@ class ADEPipeline:
             flags.append("Probability Engine avoid signal")
             reasons.append("Probability Engine: probability evidence is unfavorable")
 
+        if calibration.get("applied"):
+            reasons.append("Probability Calibration: calibrated probability applied before candidate scoring")
+
         adjusted["score"] = max(0, min(100, score + adjustment))
         adjusted["confidence"] = round(max(0.0, min(1.0, confidence + confidence_delta)), 4)
         adjusted["grade"] = self._grade(adjusted["score"])
@@ -217,10 +247,12 @@ class ADEPipeline:
             "score_delta": adjustment,
             "confidence_delta": round(confidence_delta, 4),
             "upside_probability": round(upside, 4),
+            "raw_upside_probability": probability.get("raw_upside_probability"),
             "expected_return": round(expected_return, 4),
             "risk_reward": round(risk_reward, 4),
             "probability_confidence": round(prob_confidence, 4),
             "recommendation": recommendation,
+            "calibration_applied": bool(calibration.get("applied", False)),
         }
         return adjusted
 

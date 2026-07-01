@@ -53,8 +53,14 @@ def run_backtest(
             record = {
                 "Date": data.iloc[i]["Date"],
                 "Close": float(data.iloc[i]["Close"]),
+                "EngineVersion": decision.get("engine_version"),
                 "Score": score,
-                "Reasons": "; ".join(decision["reasons"]),
+                "Grade": decision.get("grade"),
+                "Action": decision.get("action"),
+                "Confidence": decision.get("confidence"),
+                "RiskLevel": decision.get("risk_level"),
+                "RiskFlags": "; ".join(decision.get("risk_flags", [])),
+                "Reasons": "; ".join(decision.get("reasons", [])),
             }
             for horizon in horizons:
                 record[f"Return_{horizon}D"] = future_return(data, i, horizon)

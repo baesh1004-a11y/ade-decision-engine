@@ -5,6 +5,8 @@ from typing import Any
 from core.context import DecisionContext
 from indicators.pipeline import add_all_indicators
 from pattern.context import PatternContextEngine
+from pattern.memory import PatternMemoryBuilder, PatternMemoryRepository
+from pattern.memory_matching import PatternMemoryMatchingEngine
 from strategy.candidate import score_latest
 from strategy.entry import EntryTimingEngine
 from strategy.exit import ExitDecisionEngine, PositionState
@@ -16,10 +18,29 @@ from strategy.risk import RiskEngine, RiskInput
 
 
 class ADEPipeline:
-    """Integrated ADE v1.0 decision pipeline."""
+    """Integrated ADE pipeline with memory-first pattern architecture."""
 
-    def __init__(self) -> None:
-        self.pattern_context_engine = PatternContextEngine(window=20, top_k=10, horizons=(5, 10, 20, 40))
+    def __init__(
+        self,
+        memory_repository: PatternMemoryRepository | None = None,
+        auto_build_memory: bool = True,
+        memory_window: int = 20,
+        memory_top_k: int = 10,
+        horizons: tuple[int, ...] = (5, 10, 20, 40),
+    ) -> None:
+        self.memory_repository = memory_repository or PatternMemoryRepository()
+        self.auto_build_memory = auto_build_memory
+        self.memory_window = memory_window
+        self.memory_top_k = memory_top_k
+        self.horizons = horizons
+        self.memory_builder = PatternMemoryBuilder(window=memory_window, horizons=horizons)
+        self.memory_matching_engine = PatternMemoryMatchingEngine(
+            self.memory_repository,
+            window=memory_window,
+            top_k=memory_top_k,
+            horizons=horizons,
+        )
+        self.pattern_context_engine = PatternContextEngine(window=memory_window, top_k=memory_top_k, horizons=horizons)
         self.probability_engine = ProbabilityEngine(horizon_days=20)
         self.risk_engine = RiskEngine()
         self.position_engine = PositionSizingEngine()
@@ -32,11 +53,12 @@ class ADEPipeline:
         enriched = add_all_indicators(context.market_data)
         context.market_data = enriched
 
-        pattern_context = self._evaluate_pattern_context(enriched, context)
+        pattern_context = self._evaluate_memory_pattern_context(enriched, context)
         probability: dict[str, Any] | None = None
         if pattern_context:
             context.add_decision("pattern_context", pattern_context)
             context.add_decision("pattern", pattern_context.get("pattern", {}))
+            context.add_decision("pattern_memory", {"records": self.memory_repository.count(), "backend": "sqlite"})
             probability = self.probability_engine.evaluate(pattern_context).to_dict()
             context.add_decision("probability", probability)
 
@@ -120,16 +142,21 @@ class ADEPipeline:
 
         return context
 
-    def _evaluate_pattern_context(self, enriched, context: DecisionContext) -> dict[str, Any] | None:
+    def _evaluate_memory_pattern_context(self, enriched, context: DecisionContext) -> dict[str, Any] | None:
         try:
-            return self.pattern_context_engine.evaluate(
-                enriched,
+            if self.auto_build_memory and self.memory_repository.count() == 0:
+                records = self.memory_builder.build_records(enriched, market=context.market, ticker=context.ticker)
+                self.memory_repository.bulk_upsert(records)
+            memory_match = self.memory_matching_engine.evaluate(enriched, market=context.market, ticker=context.ticker).to_dict()
+            return self.pattern_context_engine.evaluate_from_pattern(
+                df=enriched,
+                pattern=memory_match,
                 ticker=context.ticker,
                 market_regime=context.market_regime,
                 vix=context.vix,
             ).to_dict()
         except ValueError as exc:
-            context.add_error(f"pattern_context: {exc}")
+            context.add_error(f"pattern_memory: {exc}")
             return None
 
     def _apply_probability_to_candidate(self, candidate: dict[str, Any], probability: dict[str, Any]) -> dict[str, Any]:

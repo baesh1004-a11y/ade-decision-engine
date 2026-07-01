@@ -38,11 +38,12 @@ def test_pipeline_runs_core_decision_chain():
 
     assert "pattern_context" in result.decisions
     assert "pattern" in result.decisions
+    assert "probability" in result.decisions
     assert "candidate" in result.decisions
     assert "risk" in result.decisions
     assert "position" in result.decisions
     assert "entry" in result.decisions
-    assert "pattern_context_adjustment" in result.decisions["candidate"]
+    assert "probability_adjustment" in result.decisions["candidate"]
     assert result.decisions["risk"]["trade_allowed"] is True
     assert result.errors == []
 
@@ -116,6 +117,6 @@ def test_context_serializes_pipeline_result():
 
     assert result["ticker"] == "NVDA"
     assert "pattern_context" in result["decisions"]
-    assert "pattern" in result["decisions"]
+    assert "probability" in result["decisions"]
     assert "candidate" in result["decisions"]
     assert "risk" in result["decisions"]

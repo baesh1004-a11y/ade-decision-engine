@@ -39,17 +39,26 @@ def run_single_analysis(market: str, ticker: str, start: str, end: str) -> None:
     enriched = add_all_indicators(df)
     latest = score_latest(enriched)
 
-    print("\nLatest Candidate Score")
-    print("----------------------")
-    print(f"Close : {latest['close']:.2f}")
-    print(f"Score : {latest['score']}/100")
+    print("\nLatest Candidate Decision")
+    print("-------------------------")
+    print(f"Engine     : {latest['engine_version']}")
+    print(f"Close      : {latest['close']:.2f}")
+    print(f"Score      : {latest['score']}/100")
+    print(f"Grade      : {latest['grade']}")
+    print(f"Action     : {latest['action']}")
+    print(f"Confidence : {latest['confidence']:.2f}")
+    print(f"Risk Level : {latest['risk_level']}")
+    if latest["risk_flags"]:
+        print("Risk Flags :")
+        for flag in latest["risk_flags"]:
+            print(f"- {flag}")
+    print("Reasons    :")
     for reason in latest["reasons"]:
         print(f"- {reason}")
 
-    bt = run_backtest(df, min_score=70, horizon=20)
+    bt = run_backtest(df, min_score=70)
     summary = summarize_backtest(bt)
     print("\n" + format_summary(summary))
-
 
 
 def parse_args() -> argparse.Namespace:

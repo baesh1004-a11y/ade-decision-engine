@@ -148,6 +148,24 @@ CREATE TABLE IF NOT EXISTS portfolio_decisions (
     UNIQUE (trade_date, engine_version)
 );
 
+CREATE TABLE IF NOT EXISTS risk_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    risk_score INTEGER NOT NULL,
+    risk_level TEXT NOT NULL,
+    action TEXT NOT NULL,
+    trade_allowed INTEGER NOT NULL,
+    max_new_position_weight REAL NOT NULL,
+    target_cash_weight REAL NOT NULL,
+    daily_loss_pct REAL NOT NULL,
+    drawdown_pct REAL NOT NULL,
+    risk_flags TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (trade_date, engine_version)
+);
+
 CREATE TABLE IF NOT EXISTS backtest_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -199,3 +217,6 @@ ON exit_decisions (market, ticker, trade_date, sell_score, action);
 
 CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_lookup
 ON portfolio_decisions (trade_date, portfolio_score, action);
+
+CREATE INDEX IF NOT EXISTS idx_risk_decisions_lookup
+ON risk_decisions (trade_date, risk_score, risk_level, action);

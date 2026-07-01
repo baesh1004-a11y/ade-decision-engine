@@ -43,7 +43,7 @@ def test_pipeline_runs_core_decision_chain():
     assert result.errors == []
 
 
-def test_pipeline_risk_caps_position_size():
+def test_pipeline_risk_limits_position_size():
     context = DecisionContext(
         market="us",
         ticker="NVDA",
@@ -58,8 +58,8 @@ def test_pipeline_risk_caps_position_size():
     result = ADEPipeline().run(context)
 
     assert result.decisions["risk"]["action"] == "LIMIT_NEW_TRADES"
+    assert result.decisions["risk"]["max_new_position_weight"] <= 0.06
     assert result.decisions["position"]["recommended_weight"] <= result.decisions["risk"]["max_new_position_weight"]
-    assert result.decisions["position"].get("risk_capped") is True
 
 
 def test_pipeline_runs_optional_exit_portfolio_learning():

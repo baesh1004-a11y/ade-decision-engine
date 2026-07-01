@@ -5,6 +5,9 @@ from calibration.models import ProbabilityObservation
 from calibration.persistence import CalibrationRepository
 from core.context import DecisionContext
 from core.pipeline import ADEPipeline
+from learning_v2.engine import AdaptiveLearningEngineV2
+from learning_v2.models import RuleSample
+from learning_v2.persistence import LearningV2Repository
 
 
 def _market_data(rows: int = 160) -> pd.DataFrame:
@@ -87,6 +90,37 @@ def test_pipeline_applies_latest_calibration_table():
     assert result.decisions["candidate"]["probability_adjustment"]["calibration_applied"] is True
     assert result.decisions["explanation"]["metadata"]["evidence_count"] > 0
     repo.close()
+
+
+def test_pipeline_applies_adaptive_learning_weights():
+    learning_repo = LearningV2Repository()
+    samples = [
+        RuleSample("probability", True, 0.08),
+        RuleSample("probability", True, 0.06),
+        RuleSample("probability", True, 0.04),
+        RuleSample("pattern", True, 0.05),
+        RuleSample("pattern", True, -0.01),
+        RuleSample("volume", True, -0.04),
+    ]
+    update = AdaptiveLearningEngineV2().update(samples).to_dict()
+    learning_repo.save_update(update)
+
+    context = DecisionContext(
+        market="us",
+        ticker="NVDA",
+        market_data=_market_data(),
+        account_balance=100_000_000,
+        cash=50_000_000,
+        equity_peak=100_000_000,
+        market_regime="BULL",
+        vix=18,
+    )
+
+    result = ADEPipeline(learning_v2_repository=learning_repo).run(context)
+
+    assert "adaptive_learning" in result.decisions["candidate"]
+    assert result.decisions["candidate"]["adaptive_learning"]["applied"] is True
+    learning_repo.close()
 
 
 def test_pipeline_risk_limits_position_size():

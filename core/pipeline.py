@@ -7,6 +7,7 @@ from calibration.updater import ProbabilityUpdater
 from core.context import DecisionContext
 from explain.engine import ExplainableAIEngine
 from indicators.pipeline import add_all_indicators
+from learning_v2.persistence import LearningV2Repository
 from pattern.context import PatternContextEngine
 from pattern.memory import PatternMemoryBuilder, PatternMemoryRepository
 from pattern.memory_matching import PatternMemoryMatchingEngine
@@ -21,14 +22,16 @@ from strategy.risk import RiskEngine, RiskInput
 
 
 class ADEPipeline:
-    """Integrated ADE pipeline with memory, calibration, and explainability."""
+    """Integrated ADE pipeline with memory, calibration, explainability, and adaptive weights."""
 
     def __init__(
         self,
         memory_repository: PatternMemoryRepository | None = None,
         calibration_repository: CalibrationRepository | None = None,
+        learning_v2_repository: LearningV2Repository | None = None,
         use_calibration: bool = True,
         use_explainability: bool = True,
+        use_adaptive_weights: bool = True,
         auto_build_memory: bool = True,
         memory_window: int = 20,
         memory_top_k: int = 10,
@@ -36,8 +39,10 @@ class ADEPipeline:
     ) -> None:
         self.memory_repository = memory_repository or PatternMemoryRepository()
         self.calibration_repository = calibration_repository
+        self.learning_v2_repository = learning_v2_repository
         self.use_calibration = use_calibration
         self.use_explainability = use_explainability
+        self.use_adaptive_weights = use_adaptive_weights
         self.auto_build_memory = auto_build_memory
         self.memory_window = memory_window
         self.memory_top_k = memory_top_k
@@ -89,6 +94,7 @@ class ADEPipeline:
             latest = self._apply_probability_to_candidate(latest, probability)
         elif pattern_context:
             latest = self._apply_pattern_context_to_candidate(latest, pattern_context)
+        latest = self._apply_adaptive_weights(latest, context)
         context.add_decision("candidate", latest)
 
         risk = self.risk_engine.evaluate(
@@ -206,6 +212,46 @@ class ADEPipeline:
             probability = dict(probability)
             probability["calibration"] = {"applied": False, "reason": str(exc)}
             return probability
+
+    def _apply_adaptive_weights(self, candidate: dict[str, Any], context: DecisionContext) -> dict[str, Any]:
+        if not self.use_adaptive_weights or self.learning_v2_repository is None:
+            return candidate
+        try:
+            weights = self.learning_v2_repository.fetch_latest_weights()
+            if not weights:
+                return candidate
+            weighted = dict(candidate)
+            base_score = int(weighted.get("score", 0))
+            applied = self._extract_applicable_rule_weights(weighted, weights)
+            if not applied:
+                return candidate
+            avg_weight = sum(applied.values()) / len(applied)
+            adjusted_score = int(round(base_score * avg_weight))
+            weighted["score"] = max(0, min(100, adjusted_score))
+            weighted["grade"] = self._grade(weighted["score"])
+            weighted["action"] = self._candidate_action(weighted["score"], weighted.get("risk_level", "LOW"))
+            weighted["adaptive_learning"] = {
+                "applied": True,
+                "base_score": base_score,
+                "adjusted_score": weighted["score"],
+                "avg_weight": round(avg_weight, 4),
+                "weights": applied,
+            }
+            weighted.setdefault("reasons", [])
+            weighted["reasons"].append("Adaptive Learning v2: rule weights applied to candidate score")
+            return weighted
+        except Exception as exc:
+            context.add_error(f"adaptive_learning_v2: {exc}")
+            return candidate
+
+    def _extract_applicable_rule_weights(self, candidate: dict[str, Any], weights: dict[str, float]) -> dict[str, float]:
+        reasons = " ".join(str(item).lower() for item in candidate.get("reasons", []))
+        applied: dict[str, float] = {}
+        for rule_name, weight in weights.items():
+            rule_key = rule_name.lower()
+            if rule_key in reasons or rule_key in {"candidate", "probability", "pattern", "trend", "volume"}:
+                applied[rule_name] = float(weight)
+        return applied
 
     def _add_explanation(self, context: DecisionContext) -> None:
         try:

@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime
+from typing import Any
 
 from backtest.engine import run_backtest, summarize_backtest
 from backtest.report import format_summary
 from collector.korea import KoreaCollector
 from collector.usa import USACollector
-from indicators.pipeline import add_all_indicators
-from strategy.candidate import score_latest
-from strategy.entry import EntryTimingEngine
-from strategy.exit import ExitDecisionEngine, PositionState
-from strategy.position_sizing import AccountState, PositionSizingInput, PositionSizingEngine
+from core.context import DecisionContext
+from core.pipeline import ADEPipeline
 
 
 DEFAULT_KOREA_TICKER = "005930"
@@ -29,19 +27,86 @@ def load_market_data(market: str, ticker: str, start: str, end: str):
     raise ValueError("market must be one of: kr, us")
 
 
-def _latest_atr_like_value(enriched) -> float | None:
-    """Return an ATR-like value when the indicator pipeline has one.
+def _print_list(title: str, values: list[str]) -> None:
+    if values:
+        print(f"{title}:")
+        for value in values:
+            print(f"- {value}")
 
-    The current indicator pipeline may not always include ATR. This helper keeps
-    the CLI backward compatible and lets the PSE/EDE run with volatility adjustment
-    when an ATR column is available later.
-    """
-    for column in ["ATR", "ATR14", "atr", "atr14"]:
-        if column in enriched.columns:
-            value = enriched.iloc[-1][column]
-            if value == value:
-                return float(value)
-    return None
+
+def _print_candidate(decision: dict[str, Any]) -> None:
+    print("\nLatest Candidate Decision")
+    print("-------------------------")
+    print(f"Engine     : {decision['engine_version']}")
+    print(f"Close      : {decision['close']:.2f}")
+    print(f"Score      : {decision['score']}/100")
+    print(f"Grade      : {decision['grade']}")
+    print(f"Action     : {decision['action']}")
+    print(f"Confidence : {decision['confidence']:.2f}")
+    print(f"Risk Level : {decision['risk_level']}")
+    _print_list("Risk Flags", decision.get("risk_flags", []))
+    _print_list("Reasons", decision.get("reasons", []))
+
+
+def _print_risk(decision: dict[str, Any]) -> None:
+    print("\nRisk Decision")
+    print("-------------")
+    print(f"Engine              : {decision['engine_version']}")
+    print(f"Risk Score          : {decision['risk_score']}/100")
+    print(f"Risk Level          : {decision['risk_level']}")
+    print(f"Action              : {decision['action']}")
+    print(f"Trade Allowed       : {decision['trade_allowed']}")
+    print(f"Max New Position    : {decision['max_new_position_weight']:.2%}")
+    print(f"Target Cash Weight  : {decision['target_cash_weight']:.2%}")
+    print(f"Daily Loss          : {decision['daily_loss_pct']:.2%}")
+    print(f"Drawdown            : {decision['drawdown_pct']:.2%}")
+    _print_list("Risk Flags", decision.get("risk_flags", []))
+    _print_list("Reasons", decision.get("reasons", []))
+
+
+def _print_position(decision: dict[str, Any]) -> None:
+    print("\nPosition Sizing Recommendation")
+    print("------------------------------")
+    print(f"Engine      : {decision['engine_version']}")
+    print(f"Weight      : {decision['recommended_weight']:.2%}")
+    print(f"Buy Amount  : {decision['buy_amount']:,.0f}")
+    print(f"Shares      : {decision['shares']:,}")
+    print(f"Max Loss    : {decision['max_loss']:,.0f}")
+    print(f"Risk Score  : {decision['risk_score']}/100")
+    print(f"Cash Limited: {decision['cash_limited']}")
+    if decision.get("risk_capped"):
+        print("Risk Capped : True")
+    _print_list("Reasons", decision.get("reasons", []))
+
+
+def _print_entry(decision: dict[str, Any]) -> None:
+    print("\nEntry Timing Decision")
+    print("---------------------")
+    print(f"Engine     : {decision['engine_version']}")
+    print(f"Score      : {decision['entry_score']}/100")
+    print(f"Action     : {decision['action']}")
+    print(f"Order Type : {decision['order_type']}")
+    print(f"Entry Price: {decision['entry_price']:,.2f}")
+    print(f"Limit Price: {decision['limit_price']:,.2f}")
+    print(f"Risk Level : {decision['risk_level']}")
+    _print_list("Risk Flags", decision.get("risk_flags", []))
+    _print_list("Reasons", decision.get("reasons", []))
+
+
+def _print_exit(decision: dict[str, Any]) -> None:
+    print("\nExit Decision")
+    print("-------------")
+    print(f"Engine          : {decision['engine_version']}")
+    print(f"Sell Score      : {decision['sell_score']}/100")
+    print(f"Action          : {decision['action']}")
+    print(f"Sell Ratio      : {decision['sell_ratio']:.2%}")
+    print(f"Sell Shares     : {decision['sell_shares']:,}")
+    print(f"Remaining Shares: {decision['remaining_shares']:,}")
+    print(f"Current Price   : {decision['current_price']:,.2f}")
+    print(f"PnL             : {decision['pnl_pct']:.2%}")
+    print(f"Risk Level      : {decision['risk_level']}")
+    _print_list("Risk Flags", decision.get("risk_flags", []))
+    _print_list("Reasons", decision.get("reasons", []))
 
 
 def run_single_analysis(
@@ -52,127 +117,58 @@ def run_single_analysis(
     account_balance: float,
     cash: float | None,
     market_regime: str,
+    vix: float | None,
+    equity_peak: float | None,
+    daily_pnl: float,
+    portfolio_heat: float,
     entry_price: float | None,
     holding_shares: int | None,
     highest_price: float | None,
     holding_days: int,
     stop_loss_price: float | None,
 ) -> None:
-    """Run collection, indicators, scoring, sizing, entry timing, exit, and backtest summary."""
+    """Run ADE integrated decision pipeline and backtest summary."""
     print("=" * 60)
-    print("ADE (AI Decision Engine)")
+    print("ADE (AI Decision Engine) - Integrated Pipeline")
     print("=" * 60)
     print(f"Start Time : {datetime.now()}")
     print(f"Market     : {market}")
     print(f"Ticker     : {ticker}")
 
     df = load_market_data(market=market, ticker=ticker, start=start, end=end)
-    enriched = add_all_indicators(df)
-    latest = score_latest(enriched)
-
-    print("\nLatest Candidate Decision")
-    print("-------------------------")
-    print(f"Engine     : {latest['engine_version']}")
-    print(f"Close      : {latest['close']:.2f}")
-    print(f"Score      : {latest['score']}/100")
-    print(f"Grade      : {latest['grade']}")
-    print(f"Action     : {latest['action']}")
-    print(f"Confidence : {latest['confidence']:.2f}")
-    print(f"Risk Level : {latest['risk_level']}")
-    if latest["risk_flags"]:
-        print("Risk Flags :")
-        for flag in latest["risk_flags"]:
-            print(f"- {flag}")
-    print("Reasons    :")
-    for reason in latest["reasons"]:
-        print(f"- {reason}")
-
-    sizing = PositionSizingEngine().recommend(
-        PositionSizingInput(
-            ticker=ticker,
-            price=float(latest["close"]),
-            grade=str(latest["grade"]),
-            confidence=float(latest["confidence"]),
-            risk_level=str(latest["risk_level"]),
-            atr=_latest_atr_like_value(enriched),
-            market_regime=market_regime,
-            account=AccountState(
-                account_balance=account_balance,
-                cash=cash if cash is not None else account_balance,
-            ),
-        )
-    )
-
-    print("\nPosition Sizing Recommendation")
-    print("------------------------------")
-    print(f"Engine      : {sizing.engine_version}")
-    print(f"Weight      : {sizing.recommended_weight:.2%}")
-    print(f"Buy Amount  : {sizing.buy_amount:,.0f}")
-    print(f"Shares      : {sizing.shares:,}")
-    print(f"Max Loss    : {sizing.max_loss:,.0f}")
-    print(f"Risk Score  : {sizing.risk_score}/100")
-    print(f"Cash Limited: {sizing.cash_limited}")
-    print("Reasons     :")
-    for reason in sizing.reasons:
-        print(f"- {reason}")
-
-    entry = EntryTimingEngine().evaluate(
-        enriched,
-        candidate=latest,
-        position=sizing.to_dict(),
-        market_regime=market_regime,
-    )
-
-    print("\nEntry Timing Decision")
-    print("---------------------")
-    print(f"Engine     : {entry.engine_version}")
-    print(f"Score      : {entry.entry_score}/100")
-    print(f"Action     : {entry.action}")
-    print(f"Order Type : {entry.order_type}")
-    print(f"Entry Price: {entry.entry_price:,.2f}")
-    print(f"Limit Price: {entry.limit_price:,.2f}")
-    print(f"Risk Level : {entry.risk_level}")
-    if entry.risk_flags:
-        print("Risk Flags :")
-        for flag in entry.risk_flags:
-            print(f"- {flag}")
-    print("Reasons    :")
-    for reason in entry.reasons:
-        print(f"- {reason}")
-
+    current_position = None
     if entry_price is not None and holding_shares is not None:
-        exit_decision = ExitDecisionEngine().evaluate(
-            enriched,
-            position=PositionState(
-                ticker=ticker,
-                entry_price=entry_price,
-                shares=holding_shares,
-                current_price=float(latest["close"]),
-                highest_price=highest_price,
-                holding_days=holding_days,
-                stop_loss_price=stop_loss_price,
-            ),
-            candidate=latest,
-        )
+        current_position = {
+            "entry_price": entry_price,
+            "shares": holding_shares,
+            "highest_price": highest_price,
+            "holding_days": holding_days,
+            "stop_loss_price": stop_loss_price,
+        }
 
-        print("\nExit Decision")
-        print("-------------")
-        print(f"Engine          : {exit_decision.engine_version}")
-        print(f"Sell Score      : {exit_decision.sell_score}/100")
-        print(f"Action          : {exit_decision.action}")
-        print(f"Sell Ratio      : {exit_decision.sell_ratio:.2%}")
-        print(f"Sell Shares     : {exit_decision.sell_shares:,}")
-        print(f"Remaining Shares: {exit_decision.remaining_shares:,}")
-        print(f"Current Price   : {exit_decision.current_price:,.2f}")
-        print(f"PnL             : {exit_decision.pnl_pct:.2%}")
-        print(f"Risk Level      : {exit_decision.risk_level}")
-        if exit_decision.risk_flags:
-            print("Risk Flags      :")
-            for flag in exit_decision.risk_flags:
-                print(f"- {flag}")
-        print("Reasons         :")
-        for reason in exit_decision.reasons:
-            print(f"- {reason}")
+    context = DecisionContext(
+        market=market,
+        ticker=ticker,
+        market_data=df,
+        account_balance=account_balance,
+        cash=cash if cash is not None else account_balance,
+        market_regime=market_regime,
+        vix=vix,
+        equity_peak=equity_peak or account_balance,
+        daily_pnl=daily_pnl,
+        portfolio_heat=portfolio_heat,
+        current_position=current_position,
+    )
+    result = ADEPipeline().run(context)
+    decisions = result.decisions
+
+    _print_candidate(decisions["candidate"])
+    _print_risk(decisions["risk"])
+    _print_position(decisions["position"])
+    _print_entry(decisions["entry"])
+    if "exit" in decisions:
+        _print_exit(decisions["exit"])
+    _print_list("Pipeline Errors", result.errors)
 
     bt = run_backtest(df, min_score=70)
     summary = summarize_backtest(bt)
@@ -180,7 +176,7 @@ def run_single_analysis(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run ADE v1.0 single ticker analysis")
+    parser = argparse.ArgumentParser(description="Run ADE v1.0 integrated single ticker analysis")
     parser.add_argument("--market", choices=["kr", "us"], default="kr")
     parser.add_argument("--ticker", default=None)
     parser.add_argument("--start", default="20200101")
@@ -188,6 +184,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--account-balance", type=float, default=100_000_000)
     parser.add_argument("--cash", type=float, default=None)
     parser.add_argument("--market-regime", choices=["BULL", "SIDEWAY", "BEAR"], default="SIDEWAY")
+    parser.add_argument("--vix", type=float, default=None)
+    parser.add_argument("--equity-peak", type=float, default=None)
+    parser.add_argument("--daily-pnl", type=float, default=0.0)
+    parser.add_argument("--portfolio-heat", type=float, default=0.0)
     parser.add_argument("--entry-price", type=float, default=None)
     parser.add_argument("--holding-shares", type=int, default=None)
     parser.add_argument("--highest-price", type=float, default=None)
@@ -207,6 +207,10 @@ def main() -> None:
         account_balance=args.account_balance,
         cash=args.cash,
         market_regime=args.market_regime,
+        vix=args.vix,
+        equity_peak=args.equity_peak,
+        daily_pnl=args.daily_pnl,
+        portfolio_heat=args.portfolio_heat,
         entry_price=args.entry_price,
         holding_shares=args.holding_shares,
         highest_price=args.highest_price,

@@ -1,0 +1,1 @@
+"""Core ADE integration package."""

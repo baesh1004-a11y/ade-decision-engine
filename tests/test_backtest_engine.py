@@ -1,6 +1,7 @@
 import pandas as pd
 
 from backtest.execution import ExecutionCostModel
+from backtest.metrics import MetricsEngine
 from backtest.replay import ReplayEngine
 from backtest.simulator import BacktestConfig, BacktestSimulator
 
@@ -61,6 +62,25 @@ def test_execution_cost_model_applies_buy_and_sell_costs():
     assert buy.gross_value == 1000.0
     assert buy.total_cost > buy.gross_value
     assert sell.net_value < sell.gross_value
+
+
+def test_metrics_engine_summarizes_backtest_result():
+    summary = MetricsEngine().summarize(
+        {
+            "total_return": 0.12,
+            "max_drawdown": -0.05,
+            "trades": [
+                {"gross_return": 0.10},
+                {"gross_return": -0.04},
+                {"gross_return": 0.06},
+            ],
+        }
+    )
+
+    assert summary.trade_count == 3
+    assert summary.win_rate == 0.6667
+    assert summary.profit_factor > 1
+    assert summary.expectancy > 0
 
 
 def test_invalid_replay_rows_raise_value_error():

@@ -50,6 +50,9 @@ def test_pipeline_runs_core_decision_chain():
     assert "risk" in result.decisions
     assert "position" in result.decisions
     assert "entry" in result.decisions
+    assert "explanation" in result.decisions
+    assert result.decisions["explanation"]["engine_version"] == "explainable-ai-v1.0.0"
+    assert result.decisions["explanation"]["ticker"] == "NVDA"
     assert "probability_adjustment" in result.decisions["candidate"]
     assert result.decisions["risk"]["trade_allowed"] is True
     assert result.errors == []
@@ -82,6 +85,7 @@ def test_pipeline_applies_latest_calibration_table():
     assert result.decisions["probability"]["calibration"]["applied"] is True
     assert "raw_upside_probability" in result.decisions["probability"]
     assert result.decisions["candidate"]["probability_adjustment"]["calibration_applied"] is True
+    assert result.decisions["explanation"]["metadata"]["evidence_count"] > 0
     repo.close()
 
 
@@ -138,6 +142,7 @@ def test_pipeline_runs_optional_exit_portfolio_learning():
     assert "exit" in result.decisions
     assert "portfolio" in result.decisions
     assert "learning" in result.decisions
+    assert "explanation" in result.decisions
     assert result.errors == []
 
 
@@ -158,3 +163,4 @@ def test_context_serializes_pipeline_result():
     assert "probability" in result["decisions"]
     assert "candidate" in result["decisions"]
     assert "risk" in result["decisions"]
+    assert "explanation" in result["decisions"]

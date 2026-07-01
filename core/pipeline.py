@@ -58,7 +58,17 @@ class ADEPipeline:
         if pattern_context:
             context.add_decision("pattern_context", pattern_context)
             context.add_decision("pattern", pattern_context.get("pattern", {}))
-            context.add_decision("pattern_memory", {"records": self.memory_repository.count(), "backend": "sqlite"})
+            context.add_decision(
+                "pattern_memory",
+                {
+                    "records": self.memory_repository.count(
+                        market=context.market,
+                        ticker=context.ticker,
+                        window=self.memory_window,
+                    ),
+                    "backend": "sqlite",
+                },
+            )
             probability = self.probability_engine.evaluate(pattern_context).to_dict()
             context.add_decision("probability", probability)
 
@@ -144,7 +154,12 @@ class ADEPipeline:
 
     def _evaluate_memory_pattern_context(self, enriched, context: DecisionContext) -> dict[str, Any] | None:
         try:
-            if self.auto_build_memory and self.memory_repository.count() == 0:
+            scoped_count = self.memory_repository.count(
+                market=context.market,
+                ticker=context.ticker,
+                window=self.memory_window,
+            )
+            if self.auto_build_memory and scoped_count == 0:
                 records = self.memory_builder.build_records(enriched, market=context.market, ticker=context.ticker)
                 self.memory_repository.bulk_upsert(records)
             memory_match = self.memory_matching_engine.evaluate(enriched, market=context.market, ticker=context.ticker).to_dict()

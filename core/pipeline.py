@@ -3,32 +3,27 @@ from __future__ import annotations
 from typing import Any
 
 from calibration.persistence import CalibrationRepository
-from calibration.updater import ProbabilityUpdater
 from core.context import DecisionContext
-from explain.engine import ExplainableAIEngine
+from core.registry import EngineRegistry, build_default_registry
 from indicators.pipeline import add_all_indicators
 from learning_v2.persistence import LearningV2Repository
-from pattern.context import PatternContextEngine
-from pattern.memory import PatternMemoryBuilder, PatternMemoryRepository
-from pattern.memory_matching import PatternMemoryMatchingEngine
+from pattern.memory import PatternMemoryRepository
 from strategy.candidate import score_latest
-from strategy.entry import EntryTimingEngine
-from strategy.exit import ExitDecisionEngine, PositionState
-from strategy.learning import LearningEngine
-from strategy.portfolio import Holding, PortfolioManagerEngine, PortfolioState
-from strategy.position_sizing import AccountState, PositionSizingInput, PositionSizingEngine
-from strategy.probability import ProbabilityEngine
-from strategy.risk import RiskEngine, RiskInput
+from strategy.exit import PositionState
+from strategy.portfolio import Holding, PortfolioState
+from strategy.position_sizing import AccountState, PositionSizingInput
+from strategy.risk import RiskInput
 
 
 class ADEPipeline:
-    """Integrated ADE pipeline with memory, calibration, explainability, and adaptive weights."""
+    """Integrated ADE pipeline with registry-based dependency injection."""
 
     def __init__(
         self,
         memory_repository: PatternMemoryRepository | None = None,
         calibration_repository: CalibrationRepository | None = None,
         learning_v2_repository: LearningV2Repository | None = None,
+        registry: EngineRegistry | None = None,
         use_calibration: bool = True,
         use_explainability: bool = True,
         use_adaptive_weights: bool = True,
@@ -37,9 +32,17 @@ class ADEPipeline:
         memory_top_k: int = 10,
         horizons: tuple[int, ...] = (5, 10, 20, 40),
     ) -> None:
-        self.memory_repository = memory_repository or PatternMemoryRepository()
-        self.calibration_repository = calibration_repository
-        self.learning_v2_repository = learning_v2_repository
+        self.registry = registry or build_default_registry(
+            memory_repository=memory_repository,
+            calibration_repository=calibration_repository,
+            learning_v2_repository=learning_v2_repository,
+            memory_window=memory_window,
+            memory_top_k=memory_top_k,
+            horizons=horizons,
+        )
+        self.memory_repository = self.registry.memory_repository
+        self.calibration_repository = self.registry.calibration_repository
+        self.learning_v2_repository = self.registry.learning_v2_repository
         self.use_calibration = use_calibration
         self.use_explainability = use_explainability
         self.use_adaptive_weights = use_adaptive_weights
@@ -47,23 +50,19 @@ class ADEPipeline:
         self.memory_window = memory_window
         self.memory_top_k = memory_top_k
         self.horizons = horizons
-        self.memory_builder = PatternMemoryBuilder(window=memory_window, horizons=horizons)
-        self.memory_matching_engine = PatternMemoryMatchingEngine(
-            self.memory_repository,
-            window=memory_window,
-            top_k=memory_top_k,
-            horizons=horizons,
-        )
-        self.pattern_context_engine = PatternContextEngine(window=memory_window, top_k=memory_top_k, horizons=horizons)
-        self.probability_engine = ProbabilityEngine(horizon_days=20)
-        self.probability_updater = ProbabilityUpdater()
-        self.explain_engine = ExplainableAIEngine()
-        self.risk_engine = RiskEngine()
-        self.position_engine = PositionSizingEngine()
-        self.entry_engine = EntryTimingEngine()
-        self.exit_engine = ExitDecisionEngine()
-        self.portfolio_engine = PortfolioManagerEngine()
-        self.learning_engine = LearningEngine()
+
+        self.memory_builder = self.registry.memory_builder
+        self.memory_matching_engine = self.registry.memory_matching_engine
+        self.pattern_context_engine = self.registry.pattern_context_engine
+        self.probability_engine = self.registry.probability_engine
+        self.probability_updater = self.registry.probability_updater
+        self.explain_engine = self.registry.explain_engine
+        self.risk_engine = self.registry.risk_engine
+        self.position_engine = self.registry.position_engine
+        self.entry_engine = self.registry.entry_engine
+        self.exit_engine = self.registry.exit_engine
+        self.portfolio_engine = self.registry.portfolio_engine
+        self.learning_engine = self.registry.learning_engine
 
     def run(self, context: DecisionContext) -> DecisionContext:
         enriched = add_all_indicators(context.market_data)
@@ -90,6 +89,7 @@ class ADEPipeline:
             context.add_decision("probability", probability)
 
         latest = score_latest(enriched)
+        latest["score_trace"] = {"raw_score": latest.get("score", 0)}
         if probability:
             latest = self._apply_probability_to_candidate(latest, probability)
         elif pattern_context:
@@ -230,6 +230,14 @@ class ADEPipeline:
             weighted["score"] = max(0, min(100, adjusted_score))
             weighted["grade"] = self._grade(weighted["score"])
             weighted["action"] = self._candidate_action(weighted["score"], weighted.get("risk_level", "LOW"))
+            weighted.setdefault("score_trace", {})
+            weighted["score_trace"].update(
+                {
+                    "adaptive_base_score": base_score,
+                    "adaptive_avg_weight": round(avg_weight, 4),
+                    "adaptive_score": weighted["score"],
+                }
+            )
             weighted["adaptive_learning"] = {
                 "applied": True,
                 "base_score": base_score,
@@ -303,6 +311,14 @@ class ADEPipeline:
         adjusted["action"] = self._candidate_action(adjusted["score"], adjusted.get("risk_level", "LOW"))
         adjusted["risk_flags"] = flags
         adjusted["reasons"] = reasons
+        adjusted.setdefault("score_trace", {})
+        adjusted["score_trace"].update(
+            {
+                "probability_base_score": score,
+                "probability_score_delta": adjustment,
+                "probability_score": adjusted["score"],
+            }
+        )
         adjusted["probability_adjustment"] = {
             "score_delta": adjustment,
             "confidence_delta": round(confidence_delta, 4),

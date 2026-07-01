@@ -1,5 +1,8 @@
 import pandas as pd
 
+from calibration.calibrator import ProbabilityCalibrator
+from calibration.models import ProbabilityObservation
+from calibration.persistence import CalibrationRepository
 from core.context import DecisionContext
 from core.pipeline import ADEPipeline
 
@@ -42,6 +45,7 @@ def test_pipeline_runs_core_decision_chain():
     assert "pattern" in result.decisions
     assert result.decisions["pattern"]["engine_version"] == "pattern-memory-matching-v1.0.0"
     assert "probability" in result.decisions
+    assert result.decisions["probability"]["calibration"]["applied"] is False
     assert "candidate" in result.decisions
     assert "risk" in result.decisions
     assert "position" in result.decisions
@@ -49,6 +53,36 @@ def test_pipeline_runs_core_decision_chain():
     assert "probability_adjustment" in result.decisions["candidate"]
     assert result.decisions["risk"]["trade_allowed"] is True
     assert result.errors == []
+
+
+def test_pipeline_applies_latest_calibration_table():
+    repo = CalibrationRepository()
+    observations = [
+        ProbabilityObservation("NVDA", "2024-01-01", "20d", 0.8, 0),
+        ProbabilityObservation("NVDA", "2024-01-02", "20d", 0.82, 0),
+        ProbabilityObservation("NVDA", "2024-01-03", "20d", 0.75, 1),
+        ProbabilityObservation("NVDA", "2024-01-04", "20d", 0.65, 1),
+    ]
+    table = ProbabilityCalibrator(bin_size=0.2).fit(observations).to_dict()
+    repo.save_calibration_table(table)
+
+    context = DecisionContext(
+        market="us",
+        ticker="NVDA",
+        market_data=_market_data(),
+        account_balance=100_000_000,
+        cash=50_000_000,
+        equity_peak=100_000_000,
+        market_regime="BULL",
+        vix=18,
+    )
+
+    result = ADEPipeline(calibration_repository=repo).run(context)
+
+    assert result.decisions["probability"]["calibration"]["applied"] is True
+    assert "raw_upside_probability" in result.decisions["probability"]
+    assert result.decisions["candidate"]["probability_adjustment"]["calibration_applied"] is True
+    repo.close()
 
 
 def test_pipeline_risk_limits_position_size():

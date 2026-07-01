@@ -166,6 +166,21 @@ CREATE TABLE IF NOT EXISTS risk_decisions (
     UNIQUE (trade_date, engine_version)
 );
 
+CREATE TABLE IF NOT EXISTS learning_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    sample_count INTEGER NOT NULL,
+    learning_score INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    recommendations TEXT NOT NULL,
+    weak_rules TEXT NOT NULL,
+    strong_rules TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (trade_date, engine_version)
+);
+
 CREATE TABLE IF NOT EXISTS backtest_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -220,3 +235,6 @@ ON portfolio_decisions (trade_date, portfolio_score, action);
 
 CREATE INDEX IF NOT EXISTS idx_risk_decisions_lookup
 ON risk_decisions (trade_date, risk_score, risk_level, action);
+
+CREATE INDEX IF NOT EXISTS idx_learning_decisions_lookup
+ON learning_decisions (trade_date, learning_score, action);

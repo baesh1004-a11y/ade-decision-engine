@@ -127,6 +127,27 @@ CREATE TABLE IF NOT EXISTS exit_decisions (
     UNIQUE (market, ticker, trade_date, engine_version)
 );
 
+CREATE TABLE IF NOT EXISTS portfolio_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    portfolio_score INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    total_value REAL NOT NULL,
+    cash_weight REAL NOT NULL,
+    target_cash_weight REAL NOT NULL,
+    position_count INTEGER NOT NULL,
+    max_position_weight REAL NOT NULL,
+    max_sector_weight REAL NOT NULL,
+    risk_flags TEXT NOT NULL,
+    recommendations TEXT NOT NULL,
+    sector_weights TEXT NOT NULL,
+    market_weights TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (trade_date, engine_version)
+);
+
 CREATE TABLE IF NOT EXISTS backtest_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -175,3 +196,6 @@ ON entry_decisions (market, ticker, trade_date, entry_score, action);
 
 CREATE INDEX IF NOT EXISTS idx_exit_decisions_lookup
 ON exit_decisions (market, ticker, trade_date, sell_score, action);
+
+CREATE INDEX IF NOT EXISTS idx_portfolio_decisions_lookup
+ON portfolio_decisions (trade_date, portfolio_score, action);

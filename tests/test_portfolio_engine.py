@@ -14,7 +14,7 @@ def test_balanced_portfolio_holds():
             Holding("NVDA", "US", "SEMICONDUCTOR", 1, 20_000_000),
             Holding("AAPL", "US", "TECH", 1, 20_000_000),
             Holding("JPM", "US", "FINANCIAL", 1, 20_000_000),
-            Holding("KO", "US", "CONSUMER", 1, 20_000_000),
+            Holding("005930", "KR", "ELECTRONICS", 1, 20_000_000),
         ],
     )
 

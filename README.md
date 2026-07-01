@@ -1,37 +1,125 @@
 # ADE: AI Decision Engine
 
-ADE는 한국/미국 주식 데이터를 수집하고, 기술지표와 과거 유사 차트 분석을 통해 매수·매도 의사결정을 보조하는 Python 기반 투자 분석 엔진입니다.
+ADE는 한국/미국 주식 데이터를 기반으로 후보 선정, 포지션 크기, 진입 타이밍, 청산, 포트폴리오, 리스크, 학습 피드백까지 연결하는 Python 기반 AI 투자 의사결정 엔진입니다.
 
-## 핵심 목표
-
-1. 한국/미국 OHLCV 데이터 수집
-2. STO(5,3,3), STO(10,6,6), STO(20,12,12) 계산
-3. 이동평균, 거래량 배수, 장대양봉 중심값 계산
-4. 현재 차트를 벡터화하여 과거 유사 차트와 비교
-5. 과거 유사 사례 이후 수익률을 기반으로 상승/횡보/하락 확률 계산
-6. 매수 가능 가격, 추가매수 가격, 손절가, 목표가 산출
+이 프로젝트는 매수·매도 추천을 보장하는 자동매매 시스템이 아니라, 의사결정을 구조화하고 검증하기 위한 투자 분석 엔진입니다.
 
 ## 현재 버전
 
-- v0.1.0: 프로젝트 초기 구조 및 핵심 모듈 작성 중
+```text
+ADE v1.0 Integrated Decision Engine
+```
+
+## v1.0 엔진 구성
+
+```text
+Market Data
+    ↓
+Indicator Pipeline
+    ↓
+Candidate Decision Engine
+    ↓
+Risk Engine
+    ↓
+Position Sizing Engine
+    ↓
+Entry Timing Engine
+    ↓
+Exit Decision Engine
+    ↓
+Portfolio Manager Engine
+    ↓
+Learning Engine
+```
+
+## 핵심 엔진
+
+| Engine | 역할 |
+|---|---|
+| Candidate | 후보 종목 판단 |
+| Risk | 계좌 위험 판단 및 거래 제한 |
+| Position Sizing | 매수 비중과 수량 산출 |
+| Entry Timing | 진입 시점 판단 |
+| Exit Decision | 익절, 손절, 트레일링, 시간청산 판단 |
+| Portfolio Manager | 계좌 전체 비중, 섹터, 현금, 리밸런싱 판단 |
+| Learning | 룰별 성과 학습 및 보수적 조정 권고 |
+
+## 통합 파이프라인
+
+v1.0부터는 `DecisionContext` 기반 통합 파이프라인을 제공합니다.
+
+```python
+from core.context import DecisionContext
+from core.pipeline import ADEPipeline
+
+context = DecisionContext(
+    market="us",
+    ticker="NVDA",
+    market_data=df,
+    account_balance=100_000_000,
+    cash=50_000_000,
+    equity_peak=105_000_000,
+    market_regime="SIDEWAY",
+)
+
+result = ADEPipeline().run(context)
+print(result.to_dict())
+```
 
 ## 실행
 
 ```bash
 pip install -r requirements.txt
 python main.py
+python main.py --market us --ticker NVDA
+```
+
+보유 포지션 청산 판단까지 포함하려면:
+
+```bash
+python main.py --market us --ticker NVDA \
+  --entry-price 100 \
+  --holding-shares 100 \
+  --highest-price 120 \
+  --holding-days 20 \
+  --stop-loss-price 95
+```
+
+## 테스트
+
+```bash
+pytest
+pytest tests/test_ade_pipeline.py
+pytest tests/test_risk_engine.py
+pytest tests/test_learning_engine.py
 ```
 
 ## 프로젝트 구조
 
 ```text
-collector/      데이터 수집
+collector/      한국/미국 데이터 수집
+core/           DecisionContext 및 통합 파이프라인
 indicators/     기술지표 계산
 pattern/        차트 벡터화 및 유사도 계산
-strategy/       후보 종목 및 매매 판단
-tests/          테스트 코드
+strategy/       7개 의사결정 엔진
+database/       SQLite 우선 DB 스키마
+docs/           엔진별 설계 문서
+tests/          단위 및 통합 테스트
+```
+
+## 주요 문서
+
+```text
+docs/ade_v1_integrated_pipeline.md
+docs/candidate_decision_engine_v0_2.md
+docs/position_sizing_engine_v1_0.md
+docs/entry_timing_engine_v1_0.md
+docs/exit_decision_engine_v1_0.md
+docs/portfolio_manager_engine_v1_0.md
+docs/risk_engine_v1_0.md
+docs/learning_engine_v1_0.md
 ```
 
 ## 주의
 
-이 프로젝트는 투자 판단 보조 도구이며, 매수/매도 추천을 보장하지 않습니다.
+이 프로젝트는 투자 판단 보조 도구이며, 수익률이나 매수·매도 결과를 보장하지 않습니다. 실제 투자에는 별도의 검증, 리스크 관리, 세무·법률 검토가 필요합니다.

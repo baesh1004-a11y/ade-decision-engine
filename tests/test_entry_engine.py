@@ -186,6 +186,27 @@ def test_bearish_candle_blocks_immediate_entry():
     assert "Strong bearish candle blocks immediate entry" in decision.risk_flags
 
 
+def test_standalone_entry_evaluation_without_candidate_or_position():
+    df = _rows(
+        Close=113.0,
+        High=114.0,
+        MA20=110.0,
+        MA60=105.0,
+        MA120=100.0,
+        VOL20_RATIO=2.2,
+        STO533_K=45.0,
+        STO533_D=40.0,
+        MACD=0.3,
+        MACD_SIGNAL=0.2,
+        RSI=58.0,
+    )
+
+    decision = EntryTimingEngine().evaluate(df, market_regime="BULL")
+
+    assert decision.action in {"BUY_NOW", "WAIT", "WATCH"}
+    assert decision.action != "CANCEL"
+
+
 def test_evaluate_entry_backward_compatible_dict():
     df = _rows(VOL20_RATIO=2.2, MACD=0.3, MACD_SIGNAL=0.2)
 

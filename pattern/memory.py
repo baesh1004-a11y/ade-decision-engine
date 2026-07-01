@@ -9,7 +9,7 @@ from typing import Any, Iterable
 import numpy as np
 import pandas as pd
 
-from pattern.vector import PatternVector, PatternVectorizer
+from pattern.vector import PatternVectorizer
 
 
 MEMORY_VERSION = "pattern-memory-v1.0.0"
@@ -46,11 +46,7 @@ class PatternMemoryMatch:
 
 
 class PatternMemoryRepository:
-    """SQLite-backed pattern memory for deterministic local vector search.
-
-    v1.0 stores pattern vectors as JSON and performs brute-force cosine search.
-    This keeps the interface stable before migrating to FAISS/Qdrant in v2.0.
-    """
+    """SQLite-backed pattern memory for deterministic local vector search."""
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
         self.db_path = str(db_path)
@@ -82,6 +78,12 @@ class PatternMemoryRepository:
             """
             CREATE INDEX IF NOT EXISTS idx_pattern_memory_lookup
             ON pattern_memory (market, ticker, trade_date, memory_version, vector_version, window)
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pattern_memory_search_scope
+            ON pattern_memory (market, ticker, window)
             """
         )
         self.conn.commit()
@@ -122,8 +124,22 @@ class PatternMemoryRepository:
             count += 1
         return count
 
-    def count(self) -> int:
-        row = self.conn.execute("SELECT COUNT(*) AS cnt FROM pattern_memory").fetchone()
+    def count(self, market: str | None = None, ticker: str | None = None, window: int | None = None) -> int:
+        where = ["1=1"]
+        params: list[Any] = []
+        if market:
+            where.append("market = ?")
+            params.append(market)
+        if ticker:
+            where.append("ticker = ?")
+            params.append(ticker)
+        if window:
+            where.append("window = ?")
+            params.append(window)
+        row = self.conn.execute(
+            f"SELECT COUNT(*) AS cnt FROM pattern_memory WHERE {' AND '.join(where)}",
+            params,
+        ).fetchone()
         return int(row["cnt"])
 
     def search(

@@ -24,6 +24,7 @@ calibration/collector.py
 calibration/calibrator.py
 calibration/updater.py
 calibration/persistence.py
+core/pipeline.py
 ```
 
 ## Flow
@@ -39,9 +40,51 @@ ProbabilityCalibrator
     ↓
 CalibrationTable
     ↓
+CalibrationRepository
+    ↓
+ADEPipeline
+    ↓
 ProbabilityUpdater
     ↓
 Calibrated Probability
+    ↓
+Candidate Score
+```
+
+## Pipeline Integration
+
+`ADEPipeline` now accepts:
+
+```python
+ADEPipeline(
+    calibration_repository=repo,
+    use_calibration=True,
+)
+```
+
+When a latest calibration table exists for the Probability horizon, the pipeline applies it before Candidate scoring.
+
+```text
+Pattern Context
+    ↓
+Probability Engine
+    ↓
+Latest Calibration Table
+    ↓
+Probability Updater
+    ↓
+Candidate Engine
+```
+
+If no calibration repository or table exists, the pipeline continues safely and marks:
+
+```json
+{
+  "calibration": {
+    "applied": false,
+    "reason": "No calibration table available"
+  }
+}
 ```
 
 ## Bin-Based Calibration
@@ -63,11 +106,16 @@ Then future probabilities in that bin can be adjusted toward the observed freque
 ```python
 from calibration.collector import CalibrationCollector
 from calibration.calibrator import ProbabilityCalibrator
-from calibration.updater import ProbabilityUpdater
+from calibration.persistence import CalibrationRepository
+from core.pipeline import ADEPipeline
 
 observations = CalibrationCollector().collect_from_backtest(backtest_result.to_dict())
 table = ProbabilityCalibrator(bin_size=0.1).fit(observations)
-updated = ProbabilityUpdater().apply(probability_decision, table.to_dict())
+repo = CalibrationRepository("ade.db")
+repo.save_calibration_table(table)
+
+pipeline = ADEPipeline(calibration_repository=repo)
+result = pipeline.run(context)
 ```
 
 ## Persistence
@@ -113,10 +161,23 @@ reasons
 }
 ```
 
+Candidate output adds:
+
+```json
+{
+  "probability_adjustment": {
+    "upside_probability": 0.62,
+    "raw_upside_probability": 0.85,
+    "calibration_applied": true
+  }
+}
+```
+
 ## Tests
 
 ```bash
 pytest tests/test_probability_calibration.py
+pytest tests/test_ade_pipeline.py
 ```
 
 ## Current Limitations
@@ -128,9 +189,18 @@ Fixed bins
 No isotonic regression yet
 No Platt scaling yet
 No Bayesian uncertainty yet
-No automatic live pipeline injection yet
+Calibration table must be generated from backtest results first
 ```
 
 ## Next Step
 
-The next step is to connect the latest calibration table into `ADEPipeline`, so Probability Engine output is automatically calibrated before it adjusts Candidate score.
+The next step is Explainable AI Engine.
+
+It will transform ADE decisions into human-readable explanations:
+
+```text
+Why BUY?
+Why WATCH?
+Why AVOID?
+What evidence changed after calibration?
+```

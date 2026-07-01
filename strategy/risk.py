@@ -176,7 +176,7 @@ class RiskEngine:
             return "PAUSE_TRADING"
         if level == "HIGH":
             return "REDUCE_RISK"
-        if level == "MEDIUM":
+        if level == "MEDIUM" or "Portfolio heat limit breached" in flags:
             return "LIMIT_NEW_TRADES"
         return "ALLOW_TRADING"
 
@@ -185,7 +185,7 @@ class RiskEngine:
             return 0.0
         if level == "HIGH":
             return 0.03
-        if level == "MEDIUM":
+        if level == "MEDIUM" or "Portfolio heat limit breached" in flags:
             return 0.06
         if "Bear market regime" in flags:
             return 0.05
@@ -197,7 +197,7 @@ class RiskEngine:
             return max(base, 0.70)
         if level == "HIGH":
             return max(base, 0.50)
-        if level == "MEDIUM":
+        if level == "MEDIUM" or "Portfolio heat limit breached" in flags:
             return max(base, 0.30)
         return base
 

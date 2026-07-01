@@ -12,6 +12,7 @@ from collector.usa import USACollector
 from indicators.pipeline import add_all_indicators
 from strategy.candidate import score_latest
 from strategy.entry import EntryTimingEngine
+from strategy.exit import ExitDecisionEngine, PositionState
 from strategy.position_sizing import AccountState, PositionSizingInput, PositionSizingEngine
 
 
@@ -32,7 +33,7 @@ def _latest_atr_like_value(enriched) -> float | None:
     """Return an ATR-like value when the indicator pipeline has one.
 
     The current indicator pipeline may not always include ATR. This helper keeps
-    the CLI backward compatible and lets the PSE run with volatility adjustment
+    the CLI backward compatible and lets the PSE/EDE run with volatility adjustment
     when an ATR column is available later.
     """
     for column in ["ATR", "ATR14", "atr", "atr14"]:
@@ -51,8 +52,13 @@ def run_single_analysis(
     account_balance: float,
     cash: float | None,
     market_regime: str,
+    entry_price: float | None,
+    holding_shares: int | None,
+    highest_price: float | None,
+    holding_days: int,
+    stop_loss_price: float | None,
 ) -> None:
-    """Run collection, indicators, scoring, sizing, entry timing, and backtest summary."""
+    """Run collection, indicators, scoring, sizing, entry timing, exit, and backtest summary."""
     print("=" * 60)
     print("ADE (AI Decision Engine)")
     print("=" * 60)
@@ -134,6 +140,40 @@ def run_single_analysis(
     for reason in entry.reasons:
         print(f"- {reason}")
 
+    if entry_price is not None and holding_shares is not None:
+        exit_decision = ExitDecisionEngine().evaluate(
+            enriched,
+            position=PositionState(
+                ticker=ticker,
+                entry_price=entry_price,
+                shares=holding_shares,
+                current_price=float(latest["close"]),
+                highest_price=highest_price,
+                holding_days=holding_days,
+                stop_loss_price=stop_loss_price,
+            ),
+            candidate=latest,
+        )
+
+        print("\nExit Decision")
+        print("-------------")
+        print(f"Engine          : {exit_decision.engine_version}")
+        print(f"Sell Score      : {exit_decision.sell_score}/100")
+        print(f"Action          : {exit_decision.action}")
+        print(f"Sell Ratio      : {exit_decision.sell_ratio:.2%}")
+        print(f"Sell Shares     : {exit_decision.sell_shares:,}")
+        print(f"Remaining Shares: {exit_decision.remaining_shares:,}")
+        print(f"Current Price   : {exit_decision.current_price:,.2f}")
+        print(f"PnL             : {exit_decision.pnl_pct:.2%}")
+        print(f"Risk Level      : {exit_decision.risk_level}")
+        if exit_decision.risk_flags:
+            print("Risk Flags      :")
+            for flag in exit_decision.risk_flags:
+                print(f"- {flag}")
+        print("Reasons         :")
+        for reason in exit_decision.reasons:
+            print(f"- {reason}")
+
     bt = run_backtest(df, min_score=70)
     summary = summarize_backtest(bt)
     print("\n" + format_summary(summary))
@@ -148,6 +188,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--account-balance", type=float, default=100_000_000)
     parser.add_argument("--cash", type=float, default=None)
     parser.add_argument("--market-regime", choices=["BULL", "SIDEWAY", "BEAR"], default="SIDEWAY")
+    parser.add_argument("--entry-price", type=float, default=None)
+    parser.add_argument("--holding-shares", type=int, default=None)
+    parser.add_argument("--highest-price", type=float, default=None)
+    parser.add_argument("--holding-days", type=int, default=0)
+    parser.add_argument("--stop-loss-price", type=float, default=None)
     return parser.parse_args()
 
 
@@ -162,6 +207,11 @@ def main() -> None:
         account_balance=args.account_balance,
         cash=args.cash,
         market_regime=args.market_regime,
+        entry_price=args.entry_price,
+        holding_shares=args.holding_shares,
+        highest_price=args.highest_price,
+        holding_days=args.holding_days,
+        stop_loss_price=args.stop_loss_price,
     )
 
 

@@ -52,7 +52,7 @@ class LearningEngine:
 
     This engine performs conservative rule-level feedback analysis. It does not
     auto-change production rules. It recommends whether a rule should be kept,
-    boosted, reduced, reviewed, or disabled after enough samples.
+    boosted, reduced, or reviewed after enough samples.
     """
 
     def __init__(
@@ -78,7 +78,7 @@ class LearningEngine:
             grouped.setdefault((sample.engine, sample.rule), []).append(sample)
 
         results = [self._evaluate_rule(engine, rule, rule_samples) for (engine, rule), rule_samples in grouped.items()]
-        weak_rules = [f"{r.engine}:{r.rule}" for r in results if r.recommendation in {"REDUCE_WEIGHT", "DISABLE_RULE"}]
+        weak_rules = [f"{r.engine}:{r.rule}" for r in results if r.recommendation in {"REDUCE_WEIGHT", "REVIEW_OFF"}]
         strong_rules = [f"{r.engine}:{r.rule}" for r in results if r.recommendation == "BOOST_WEIGHT"]
         score = self._learning_score(results)
         action = self._action(score, weak_rules, strong_rules)
@@ -139,7 +139,7 @@ class LearningEngine:
             recommendation = "BOOST_WEIGHT"
             reason = "Rule has strong win rate and non-negative alpha"
         elif win_rate < self.weak_win_rate and avg_return < 0:
-            recommendation = "DISABLE_RULE"
+            recommendation = "REVIEW_OFF"
             reason = "Rule has weak win rate and negative average return"
         elif avg_alpha < -0.01:
             recommendation = "REDUCE_WEIGHT"
@@ -169,7 +169,7 @@ class LearningEngine:
                 score -= 2
             elif result.recommendation == "REDUCE_WEIGHT":
                 score -= 10
-            elif result.recommendation == "DISABLE_RULE":
+            elif result.recommendation == "REVIEW_OFF":
                 score -= 18
         return max(0, min(100, score))
 

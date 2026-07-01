@@ -11,6 +11,7 @@ from collector.korea import KoreaCollector
 from collector.usa import USACollector
 from indicators.pipeline import add_all_indicators
 from strategy.candidate import score_latest
+from strategy.entry import EntryTimingEngine
 from strategy.position_sizing import AccountState, PositionSizingInput, PositionSizingEngine
 
 
@@ -51,7 +52,7 @@ def run_single_analysis(
     cash: float | None,
     market_regime: str,
 ) -> None:
-    """Run collection, indicators, scoring, sizing, and backtest summary."""
+    """Run collection, indicators, scoring, sizing, entry timing, and backtest summary."""
     print("=" * 60)
     print("ADE (AI Decision Engine)")
     print("=" * 60)
@@ -107,6 +108,30 @@ def run_single_analysis(
     print(f"Cash Limited: {sizing.cash_limited}")
     print("Reasons     :")
     for reason in sizing.reasons:
+        print(f"- {reason}")
+
+    entry = EntryTimingEngine().evaluate(
+        enriched,
+        candidate=latest,
+        position=sizing.to_dict(),
+        market_regime=market_regime,
+    )
+
+    print("\nEntry Timing Decision")
+    print("---------------------")
+    print(f"Engine     : {entry.engine_version}")
+    print(f"Score      : {entry.entry_score}/100")
+    print(f"Action     : {entry.action}")
+    print(f"Order Type : {entry.order_type}")
+    print(f"Entry Price: {entry.entry_price:,.2f}")
+    print(f"Limit Price: {entry.limit_price:,.2f}")
+    print(f"Risk Level : {entry.risk_level}")
+    if entry.risk_flags:
+        print("Risk Flags :")
+        for flag in entry.risk_flags:
+            print(f"- {flag}")
+    print("Reasons    :")
+    for reason in entry.reasons:
         print(f"- {reason}")
 
     bt = run_backtest(df, min_score=70)

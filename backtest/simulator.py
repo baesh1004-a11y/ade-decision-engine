@@ -5,6 +5,7 @@ from typing import Any
 
 import pandas as pd
 
+from backtest.execution import ExecutionCostModel
 from backtest.models import BacktestPosition, BacktestResult, DailyEquity, TradeRecord
 from backtest.replay import ReplayEngine
 from core.context import DecisionContext
@@ -21,10 +22,13 @@ class BacktestConfig:
     max_holding_days: int = 20
     buy_score_threshold: int = 70
     buy_weight: float = 0.10
+    commission_rate: float = 0.00015
+    slippage_rate: float = 0.0005
+    tax_rate: float = 0.0
 
 
 class BacktestSimulator:
-    """ADE Backtesting Engine v1.0: replay + basic long-only simulation."""
+    """ADE Backtesting Engine v1.1: replay + cost-aware long-only simulation."""
 
     def __init__(self, config: BacktestConfig) -> None:
         if config.initial_cash <= 0:
@@ -33,6 +37,11 @@ class BacktestSimulator:
             raise ValueError("buy_weight must be between 0 and 1")
         self.config = config
         self.replay = ReplayEngine(min_history=config.min_history)
+        self.execution = ExecutionCostModel(
+            commission_rate=config.commission_rate,
+            slippage_rate=config.slippage_rate,
+            tax_rate=config.tax_rate,
+        )
         self.memory_repository = PatternMemoryRepository()
         self.pipeline = ADEPipeline(memory_repository=self.memory_repository, auto_build_memory=True)
 
@@ -62,24 +71,26 @@ class BacktestSimulator:
             exit_decision = result.decisions.get("exit", {})
 
             if position is None and self._should_buy(candidate, entry):
-                buy_amount = min(cash, self.config.initial_cash * self.config.buy_weight)
-                shares = int(buy_amount // close)
+                buy_budget = min(cash, self.config.initial_cash * self.config.buy_weight)
+                shares = int(buy_budget // close)
                 if shares > 0:
-                    value = shares * close
-                    cash -= value
-                    position = BacktestPosition(
-                        ticker=self.config.ticker,
-                        entry_date=frame.trade_date,
-                        entry_price=close,
-                        shares=shares,
-                        entry_value=value,
-                        highest_price=close,
-                    )
+                    buy_exec = self.execution.apply_buy(close, shares)
+                    if buy_exec.total_cost <= cash:
+                        cash -= buy_exec.total_cost
+                        position = BacktestPosition(
+                            ticker=self.config.ticker,
+                            entry_date=frame.trade_date,
+                            entry_price=close,
+                            shares=shares,
+                            entry_value=buy_exec.total_cost,
+                            highest_price=close,
+                        )
             elif position is not None:
                 position.holding_days += 1
                 position.highest_price = max(position.highest_price, close)
                 if self._should_exit(position, exit_decision):
-                    cash += position.shares * close
+                    sell_exec = self.execution.apply_sell(close, position.shares)
+                    cash += sell_exec.net_value
                     trades.append(
                         TradeRecord(
                             ticker=self.config.ticker,
@@ -91,7 +102,11 @@ class BacktestSimulator:
                             gross_return=(close - position.entry_price) / position.entry_price,
                             holding_days=position.holding_days,
                             reason=str(exit_decision.get("action", "TIME_EXIT")),
-                            metadata={"candidate": candidate, "exit": exit_decision},
+                            metadata={
+                                "candidate": candidate,
+                                "exit": exit_decision,
+                                "sell_execution": sell_exec.to_dict(),
+                            },
                         )
                     )
                     position = None
@@ -123,7 +138,7 @@ class BacktestSimulator:
             win_rate=round(len(wins) / len(trades), 4) if trades else 0.0,
             trades=[trade.to_dict() for trade in trades],
             daily_equity=[item.to_dict() for item in daily],
-            reasons=["Backtest v1.0 uses long-only fixed-weight simulation"],
+            reasons=["Backtest v1.1 uses long-only fixed-weight simulation with execution costs"],
         )
 
     def _position_value(self, position: BacktestPosition | None, close: float) -> float:

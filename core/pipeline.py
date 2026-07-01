@@ -5,6 +5,7 @@ from typing import Any
 from calibration.persistence import CalibrationRepository
 from calibration.updater import ProbabilityUpdater
 from core.context import DecisionContext
+from explain.engine import ExplainableAIEngine
 from indicators.pipeline import add_all_indicators
 from pattern.context import PatternContextEngine
 from pattern.memory import PatternMemoryBuilder, PatternMemoryRepository
@@ -20,13 +21,14 @@ from strategy.risk import RiskEngine, RiskInput
 
 
 class ADEPipeline:
-    """Integrated ADE pipeline with memory-first and calibrated probability architecture."""
+    """Integrated ADE pipeline with memory, calibration, and explainability."""
 
     def __init__(
         self,
         memory_repository: PatternMemoryRepository | None = None,
         calibration_repository: CalibrationRepository | None = None,
         use_calibration: bool = True,
+        use_explainability: bool = True,
         auto_build_memory: bool = True,
         memory_window: int = 20,
         memory_top_k: int = 10,
@@ -35,6 +37,7 @@ class ADEPipeline:
         self.memory_repository = memory_repository or PatternMemoryRepository()
         self.calibration_repository = calibration_repository
         self.use_calibration = use_calibration
+        self.use_explainability = use_explainability
         self.auto_build_memory = auto_build_memory
         self.memory_window = memory_window
         self.memory_top_k = memory_top_k
@@ -49,6 +52,7 @@ class ADEPipeline:
         self.pattern_context_engine = PatternContextEngine(window=memory_window, top_k=memory_top_k, horizons=horizons)
         self.probability_engine = ProbabilityEngine(horizon_days=20)
         self.probability_updater = ProbabilityUpdater()
+        self.explain_engine = ExplainableAIEngine()
         self.risk_engine = RiskEngine()
         self.position_engine = PositionSizingEngine()
         self.entry_engine = EntryTimingEngine()
@@ -158,6 +162,9 @@ class ADEPipeline:
             except Exception as exc:
                 context.add_error(f"learning: {exc}")
 
+        if self.use_explainability:
+            self._add_explanation(context)
+
         return context
 
     def _evaluate_memory_pattern_context(self, enriched, context: DecisionContext) -> dict[str, Any] | None:
@@ -199,6 +206,13 @@ class ADEPipeline:
             probability = dict(probability)
             probability["calibration"] = {"applied": False, "reason": str(exc)}
             return probability
+
+    def _add_explanation(self, context: DecisionContext) -> None:
+        try:
+            explanation = self.explain_engine.explain(context.ticker, context.decisions).to_dict()
+            context.add_decision("explanation", explanation)
+        except Exception as exc:
+            context.add_error(f"explanation: {exc}")
 
     def _apply_probability_to_candidate(self, candidate: dict[str, Any], probability: dict[str, Any]) -> dict[str, Any]:
         adjusted = dict(candidate)

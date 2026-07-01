@@ -81,6 +81,29 @@ CREATE TABLE IF NOT EXISTS position_recommendations (
     UNIQUE (market, ticker, trade_date, engine_version)
 );
 
+CREATE TABLE IF NOT EXISTS entry_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    candidate_decision_id INTEGER,
+    position_recommendation_id INTEGER,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    entry_score INTEGER NOT NULL,
+    action TEXT NOT NULL,
+    order_type TEXT NOT NULL,
+    entry_price REAL NOT NULL,
+    limit_price REAL NOT NULL,
+    risk_level TEXT NOT NULL,
+    risk_flags TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    signal_hits TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (candidate_decision_id) REFERENCES candidate_decisions(id),
+    FOREIGN KEY (position_recommendation_id) REFERENCES position_recommendations(id),
+    UNIQUE (market, ticker, trade_date, engine_version)
+);
+
 CREATE TABLE IF NOT EXISTS backtest_runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -123,3 +146,6 @@ ON candidate_decisions (market, ticker, trade_date, score, grade);
 
 CREATE INDEX IF NOT EXISTS idx_position_recommendations_lookup
 ON position_recommendations (market, ticker, trade_date, recommended_weight, risk_score);
+
+CREATE INDEX IF NOT EXISTS idx_entry_decisions_lookup
+ON entry_decisions (market, ticker, trade_date, entry_score, action);

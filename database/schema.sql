@@ -70,6 +70,25 @@ CREATE TABLE IF NOT EXISTS pattern_match_decisions (
     UNIQUE (market, ticker, trade_date, engine_version, window, top_k)
 );
 
+CREATE TABLE IF NOT EXISTS pattern_context_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    pattern_similarity REAL NOT NULL,
+    context_similarity REAL NOT NULL,
+    combined_similarity REAL NOT NULL,
+    expected_returns TEXT NOT NULL,
+    win_rates TEXT NOT NULL,
+    risk_flags TEXT NOT NULL,
+    current_context TEXT NOT NULL,
+    pattern_json TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (market, ticker, trade_date, engine_version)
+);
+
 CREATE TABLE IF NOT EXISTS candidate_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -256,6 +275,9 @@ ON pattern_vectors (market, ticker, trade_date, vector_version, window);
 
 CREATE INDEX IF NOT EXISTS idx_pattern_match_decisions_lookup
 ON pattern_match_decisions (market, ticker, trade_date, avg_similarity, match_count);
+
+CREATE INDEX IF NOT EXISTS idx_pattern_context_decisions_lookup
+ON pattern_context_decisions (market, ticker, trade_date, combined_similarity);
 
 CREATE INDEX IF NOT EXISTS idx_candidate_decisions_lookup
 ON candidate_decisions (market, ticker, trade_date, score, grade);

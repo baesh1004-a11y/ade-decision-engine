@@ -45,6 +45,8 @@ class EntryTimingEngine:
     this public decision payload.
     """
 
+    REQUIRED_COLUMNS = {"High", "Low", "Close"}
+
     def evaluate(
         self,
         df: pd.DataFrame,
@@ -58,6 +60,8 @@ class EntryTimingEngine:
             raise ValueError("Entry timing requires at least 20 rows")
 
         normalized = self._normalize_columns(df)
+        self._validate_required_columns(normalized)
+
         row = normalized.iloc[-1]
         prev = normalized.iloc[-2]
         recent = normalized.tail(20)
@@ -98,7 +102,7 @@ class EntryTimingEngine:
         if str(market_regime).upper() == "BEAR":
             flags.append("Bear market entry discount required")
 
-        trend_ok = close > ma20 > ma60 > 0 or close > ma20 > 0 and ma60 >= ma120 > 0
+        trend_ok = (close > ma20 > ma60 > 0) or (close > ma20 > 0 and ma60 >= ma120 > 0)
         long_trend_ok = close >= ma120 > 0
         if trend_ok:
             hits.append(EntrySignal("trend_alignment", 20, "Price is aligned with short/mid trend"))
@@ -115,7 +119,7 @@ class EntryTimingEngine:
             hits.append(EntrySignal("price_breakout", 10, "Price is testing a 20-day breakout level"))
 
         near_ma20 = ma20 > 0 and abs(close - ma20) / ma20 <= 0.03
-        pulled_back = ma20 > 0 and recent["Close"].iloc[:-1].max() > ma20 * 1.03
+        pulled_back = ma20 > 0 and float(recent["Close"].iloc[:-1].max()) > ma20 * 1.03
         stochastic_turn = sto_k > sto_d and prev_sto_k <= prev_sto_d
         if near_ma20 and pulled_back and is_bullish:
             hits.append(EntrySignal("pullback_support", 20, "Pullback to MA20 support shows bullish reaction"))
@@ -139,7 +143,7 @@ class EntryTimingEngine:
             flags.append("Strong bearish candle blocks immediate entry")
         if close < ma120 and ma120 > 0:
             flags.append("Price is below MA120")
-        if close < low or close <= 0:
+        if high < low or close < low or close <= 0:
             flags.append("Invalid price state")
 
         score = min(100, sum(hit.points for hit in hits))
@@ -181,6 +185,11 @@ class EntryTimingEngine:
             if src in normalized.columns and dst not in normalized.columns:
                 normalized[dst] = normalized[src]
         return normalized
+
+    def _validate_required_columns(self, df: pd.DataFrame) -> None:
+        missing = sorted(self.REQUIRED_COLUMNS - set(df.columns))
+        if missing:
+            raise ValueError(f"Entry timing requires columns: {', '.join(missing)}")
 
     def _safe_float(self, row: pd.Series, key: str, default: float = 0.0) -> float:
         value = row.get(key, default)

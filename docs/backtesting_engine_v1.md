@@ -51,6 +51,17 @@ Total return
 Max drawdown
 ```
 
+### v1.3 Persistence Engine
+
+Adds SQLite persistence for:
+
+```text
+backtest_runs_v2
+backtest_trades
+backtest_daily_equity
+backtest_performance_summary
+```
+
 ## Core Files
 
 ```text
@@ -59,6 +70,8 @@ backtest/models.py
 backtest/execution.py
 backtest/simulator.py
 backtest/metrics.py
+backtest/persistence.py
+database/migrations/002_add_backtest_persistence.sql
 tests/test_backtest_engine.py
 ```
 
@@ -67,6 +80,7 @@ tests/test_backtest_engine.py
 ```python
 from backtest.simulator import BacktestConfig, BacktestSimulator
 from backtest.metrics import MetricsEngine
+from backtest.persistence import BacktestRepository
 
 config = BacktestConfig(
     market="us",
@@ -83,6 +97,7 @@ config = BacktestConfig(
 
 result = BacktestSimulator(config).run(df)
 summary = MetricsEngine().summarize(result.to_dict())
+run_id = BacktestRepository("ade.db").save_result(result)
 ```
 
 ## Output
@@ -103,6 +118,17 @@ trades
 daily_equity
 ```
 
+## Persistence Output
+
+`BacktestRepository.fetch_run(run_id)` returns:
+
+```text
+run
+trades
+daily_equity
+summary
+```
+
 ## Current Limitations
 
 v1 is intentionally simple:
@@ -117,17 +143,6 @@ No broker order book model
 ```
 
 ## Next Stages
-
-### v1.3 Persistence
-
-Store:
-
-```text
-backtest_runs
-trade_history
-daily_equity
-performance_summary
-```
 
 ### v1.4 Report Engine
 

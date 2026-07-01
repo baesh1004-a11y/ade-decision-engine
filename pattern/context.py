@@ -1,15 +1,36 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
 
-from pattern.matching import PatternMatchDecision, PatternMatchingEngine
+from pattern.matching import PatternMatchingEngine
 
 
 ENGINE_VERSION = "pattern-context-v1.0.0"
+
+
+class PatternEvidence(Protocol):
+    avg_similarity: float
+    expected_returns: dict[str, float]
+    win_rates: dict[str, float]
+    risk_flags: list[str]
+
+    def to_dict(self) -> dict[str, Any]: ...
+
+
+@dataclass(frozen=True)
+class PatternEvidenceAdapter:
+    avg_similarity: float
+    expected_returns: dict[str, float]
+    win_rates: dict[str, float]
+    risk_flags: list[str]
+    payload: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.payload
 
 
 @dataclass(frozen=True)
@@ -43,11 +64,7 @@ class PatternContextDecision:
 
 
 class PatternContextEngine:
-    """Combine chart-pattern similarity with market context similarity.
-
-    v1.0 does not require macro databases. It derives context from available
-    OHLCV/indicator columns plus optional VIX and market_regime inputs.
-    """
+    """Combine chart-pattern evidence with market context similarity."""
 
     def __init__(self, window: int = 20, top_k: int = 10, horizons: tuple[int, ...] = (5, 10, 20, 40)) -> None:
         self.pattern_engine = PatternMatchingEngine(window=window, top_k=top_k, horizons=horizons)
@@ -63,26 +80,54 @@ class PatternContextEngine:
         vix: float | None = None,
     ) -> PatternContextDecision:
         pattern = self.pattern_engine.evaluate(df, ticker=ticker)
+        return self.evaluate_from_pattern(
+            df=df,
+            pattern=pattern,
+            ticker=ticker,
+            market_regime=market_regime,
+            vix=vix,
+        )
+
+    def evaluate_from_pattern(
+        self,
+        df: pd.DataFrame,
+        pattern: PatternEvidence | dict[str, Any],
+        ticker: str = "UNKNOWN",
+        market_regime: str = "SIDEWAY",
+        vix: float | None = None,
+    ) -> PatternContextDecision:
+        evidence = self._normalize_pattern(pattern)
         current_context = self._current_context(df, market_regime=market_regime, vix=vix)
-        context_similarity = self._estimate_context_similarity(pattern, current_context)
-        combined_similarity = self._combined_similarity(pattern.avg_similarity, context_similarity)
-        expected = self._adjust_expected_returns(pattern.expected_returns, context_similarity)
-        flags = self._risk_flags(pattern, context_similarity, combined_similarity, expected)
-        reasons = self._reasons(pattern, current_context, context_similarity, combined_similarity, expected, flags)
+        context_similarity = self._estimate_context_similarity(evidence, current_context)
+        combined_similarity = self._combined_similarity(evidence.avg_similarity, context_similarity)
+        expected = self._adjust_expected_returns(evidence.expected_returns, context_similarity)
+        flags = self._risk_flags(evidence, context_similarity, combined_similarity, expected)
+        reasons = self._reasons(evidence, current_context, context_similarity, combined_similarity, expected, flags)
 
         return PatternContextDecision(
             engine_version=ENGINE_VERSION,
             ticker=ticker,
-            pattern_similarity=pattern.avg_similarity,
+            pattern_similarity=round(evidence.avg_similarity, 4),
             context_similarity=round(context_similarity, 4),
             combined_similarity=round(combined_similarity, 4),
             expected_returns={k: round(v, 4) for k, v in expected.items()},
-            win_rates=pattern.win_rates,
+            win_rates=evidence.win_rates,
             risk_flags=flags,
             reasons=reasons,
-            pattern=pattern.to_dict(),
+            pattern=evidence.to_dict(),
             current_context=current_context.to_dict(),
         )
+
+    def _normalize_pattern(self, pattern: PatternEvidence | dict[str, Any]) -> PatternEvidence:
+        if isinstance(pattern, dict):
+            return PatternEvidenceAdapter(
+                avg_similarity=float(pattern.get("avg_similarity", pattern.get("pattern_similarity", 0.0))),
+                expected_returns=dict(pattern.get("expected_returns", {})),
+                win_rates=dict(pattern.get("win_rates", {})),
+                risk_flags=list(pattern.get("risk_flags", [])),
+                payload=pattern,
+            )
+        return pattern
 
     def _current_context(self, df: pd.DataFrame, market_regime: str, vix: float | None) -> MarketContext:
         row = df.iloc[-1]
@@ -112,7 +157,7 @@ class PatternContextEngine:
             vix_score=round(vix_score, 4),
         )
 
-    def _estimate_context_similarity(self, pattern: PatternMatchDecision, context: MarketContext) -> float:
+    def _estimate_context_similarity(self, pattern: PatternEvidence, context: MarketContext) -> float:
         base = 0.75
         if context.market_regime == "BULL":
             base += 0.08
@@ -124,9 +169,11 @@ class PatternContextEngine:
         base -= max(0.0, context.volatility_score - 0.7) * 0.15
         base -= max(0.0, context.vix_score - 0.7) * 0.20
 
-        if "Low pattern similarity" in pattern.risk_flags:
+        low_similarity_flags = {"Low pattern similarity", "Low memory pattern similarity"}
+        negative_flags = {"Negative 20-day expected return", "Negative memory-based 20-day expected return"}
+        if any(flag in low_similarity_flags for flag in pattern.risk_flags):
             base -= 0.10
-        if "Negative 20-day expected return" in pattern.risk_flags:
+        if any(flag in negative_flags for flag in pattern.risk_flags):
             base -= 0.10
 
         return max(0.0, min(1.0, base))
@@ -140,7 +187,7 @@ class PatternContextEngine:
 
     def _risk_flags(
         self,
-        pattern: PatternMatchDecision,
+        pattern: PatternEvidence,
         context_similarity: float,
         combined_similarity: float,
         expected: dict[str, float],
@@ -156,7 +203,7 @@ class PatternContextEngine:
 
     def _reasons(
         self,
-        pattern: PatternMatchDecision,
+        pattern: PatternEvidence,
         context: MarketContext,
         context_similarity: float,
         combined_similarity: float,

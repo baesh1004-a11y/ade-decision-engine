@@ -89,6 +89,26 @@ CREATE TABLE IF NOT EXISTS pattern_context_decisions (
     UNIQUE (market, ticker, trade_date, engine_version)
 );
 
+CREATE TABLE IF NOT EXISTS probability_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    market TEXT NOT NULL,
+    ticker TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    engine_version TEXT NOT NULL,
+    horizon TEXT NOT NULL,
+    upside_probability REAL NOT NULL,
+    downside_probability REAL NOT NULL,
+    expected_return REAL NOT NULL,
+    expected_mdd REAL NOT NULL,
+    risk_reward REAL NOT NULL,
+    confidence REAL NOT NULL,
+    recommendation TEXT NOT NULL,
+    risk_flags TEXT NOT NULL,
+    reasons TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (market, ticker, trade_date, engine_version, horizon)
+);
+
 CREATE TABLE IF NOT EXISTS candidate_decisions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     market TEXT NOT NULL,
@@ -278,6 +298,9 @@ ON pattern_match_decisions (market, ticker, trade_date, avg_similarity, match_co
 
 CREATE INDEX IF NOT EXISTS idx_pattern_context_decisions_lookup
 ON pattern_context_decisions (market, ticker, trade_date, combined_similarity);
+
+CREATE INDEX IF NOT EXISTS idx_probability_decisions_lookup
+ON probability_decisions (market, ticker, trade_date, upside_probability, recommendation);
 
 CREATE INDEX IF NOT EXISTS idx_candidate_decisions_lookup
 ON candidate_decisions (market, ticker, trade_date, score, grade);

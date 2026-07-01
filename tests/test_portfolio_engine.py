@@ -11,9 +11,10 @@ def test_balanced_portfolio_holds():
         cash=20_000_000,
         market_regime="SIDEWAY",
         holdings=[
-            Holding("NVDA", "US", "SEMICONDUCTOR", 100, 100_000),
-            Holding("AAPL", "US", "TECH", 100, 100_000),
-            Holding("005930", "KR", "SEMICONDUCTOR", 100, 100_000),
+            Holding("NVDA", "US", "SEMICONDUCTOR", 1, 20_000_000),
+            Holding("AAPL", "US", "TECH", 1, 20_000_000),
+            Holding("JPM", "US", "FINANCIAL", 1, 20_000_000),
+            Holding("KO", "US", "CONSUMER", 1, 20_000_000),
         ],
     )
 

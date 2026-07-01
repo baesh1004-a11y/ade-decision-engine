@@ -11,6 +11,7 @@ from strategy.exit import ExitDecisionEngine, PositionState
 from strategy.learning import LearningEngine
 from strategy.portfolio import Holding, PortfolioManagerEngine, PortfolioState
 from strategy.position_sizing import AccountState, PositionSizingInput, PositionSizingEngine
+from strategy.probability import ProbabilityEngine
 from strategy.risk import RiskEngine, RiskInput
 
 
@@ -19,6 +20,7 @@ class ADEPipeline:
 
     def __init__(self) -> None:
         self.pattern_context_engine = PatternContextEngine(window=20, top_k=10, horizons=(5, 10, 20, 40))
+        self.probability_engine = ProbabilityEngine(horizon_days=20)
         self.risk_engine = RiskEngine()
         self.position_engine = PositionSizingEngine()
         self.entry_engine = EntryTimingEngine()
@@ -31,12 +33,17 @@ class ADEPipeline:
         context.market_data = enriched
 
         pattern_context = self._evaluate_pattern_context(enriched, context)
+        probability: dict[str, Any] | None = None
         if pattern_context:
             context.add_decision("pattern_context", pattern_context)
             context.add_decision("pattern", pattern_context.get("pattern", {}))
+            probability = self.probability_engine.evaluate(pattern_context).to_dict()
+            context.add_decision("probability", probability)
 
         latest = score_latest(enriched)
-        if pattern_context:
+        if probability:
+            latest = self._apply_probability_to_candidate(latest, probability)
+        elif pattern_context:
             latest = self._apply_pattern_context_to_candidate(latest, pattern_context)
         context.add_decision("candidate", latest)
 
@@ -62,21 +69,13 @@ class ADEPipeline:
                 risk_level=str(latest["risk_level"]),
                 atr=self._latest_atr(enriched),
                 market_regime=context.market_regime,
-                account=AccountState(
-                    account_balance=context.account_balance,
-                    cash=context.cash,
-                ),
+                account=AccountState(account_balance=context.account_balance, cash=context.cash),
             )
         )
         sizing = self._apply_risk_cap(sizing.to_dict(), risk.to_dict(), context)
         context.add_decision("position", sizing)
 
-        entry = self.entry_engine.evaluate(
-            enriched,
-            candidate=latest,
-            position=sizing,
-            market_regime=context.market_regime,
-        )
+        entry = self.entry_engine.evaluate(enriched, candidate=latest, position=sizing, market_regime=context.market_regime)
         context.add_decision("entry", entry)
 
         if context.current_position:
@@ -133,39 +132,38 @@ class ADEPipeline:
             context.add_error(f"pattern_context: {exc}")
             return None
 
-    def _apply_pattern_context_to_candidate(self, candidate: dict[str, Any], pattern_context: dict[str, Any]) -> dict[str, Any]:
+    def _apply_probability_to_candidate(self, candidate: dict[str, Any], probability: dict[str, Any]) -> dict[str, Any]:
         adjusted = dict(candidate)
         score = int(adjusted.get("score", 0))
         confidence = float(adjusted.get("confidence", 0.0))
         reasons = list(adjusted.get("reasons", []))
         flags = list(adjusted.get("risk_flags", []))
 
-        expected_20d = float(pattern_context.get("expected_returns", {}).get("return_20d", 0.0))
-        win_rate_20d = float(pattern_context.get("win_rates", {}).get("win_rate_20d", 0.0))
-        combined_similarity = float(pattern_context.get("combined_similarity", 0.0))
-        context_similarity = float(pattern_context.get("context_similarity", 0.0))
-        pattern_flags = list(pattern_context.get("risk_flags", []))
+        upside = float(probability.get("upside_probability", 0.0))
+        expected_return = float(probability.get("expected_return", 0.0))
+        risk_reward = float(probability.get("risk_reward", 0.0))
+        prob_confidence = float(probability.get("confidence", 0.0))
+        recommendation = str(probability.get("recommendation", "WATCH"))
 
         adjustment = 0
         confidence_delta = 0.0
-        if combined_similarity >= 0.80 and context_similarity >= 0.70 and expected_20d >= 0.03 and win_rate_20d >= 0.60:
-            adjustment = 12
-            confidence_delta = 0.06
-            reasons.append("Pattern Context: similar chart and market context show strong 20-day evidence")
-        elif combined_similarity >= 0.72 and expected_20d > 0 and win_rate_20d >= 0.50:
-            adjustment = 6
-            confidence_delta = 0.03
-            reasons.append("Pattern Context: chart and context provide supportive evidence")
-        elif expected_20d < 0 or "Context-adjusted negative 20-day expected return" in pattern_flags:
-            adjustment = -12
-            confidence_delta = -0.06
-            flags.append("Pattern Context negative forward evidence")
-            reasons.append("Pattern Context: similar chart-context cases show weak forward return")
-        elif "Low combined pattern-context similarity" in pattern_flags or "Low context similarity" in pattern_flags:
-            adjustment = -6
-            confidence_delta = -0.03
-            flags.append("Pattern Context weak similarity")
-            reasons.append("Pattern Context: historical context evidence is weak")
+        if recommendation == "STRONG_BUY":
+            adjustment = 15
+            confidence_delta = 0.08
+            reasons.append("Probability Engine: strong upside probability and risk-reward")
+        elif recommendation == "BUY":
+            adjustment = 8
+            confidence_delta = 0.04
+            reasons.append("Probability Engine: supportive upside probability")
+        elif recommendation == "WATCH":
+            adjustment = 3
+            confidence_delta = 0.01
+            reasons.append("Probability Engine: positive but not decisive probability")
+        else:
+            adjustment = -15
+            confidence_delta = -0.08
+            flags.append("Probability Engine avoid signal")
+            reasons.append("Probability Engine: probability evidence is unfavorable")
 
         adjusted["score"] = max(0, min(100, score + adjustment))
         adjusted["confidence"] = round(max(0.0, min(1.0, confidence + confidence_delta)), 4)
@@ -173,14 +171,20 @@ class ADEPipeline:
         adjusted["action"] = self._candidate_action(adjusted["score"], adjusted.get("risk_level", "LOW"))
         adjusted["risk_flags"] = flags
         adjusted["reasons"] = reasons
-        adjusted["pattern_context_adjustment"] = {
+        adjusted["probability_adjustment"] = {
             "score_delta": adjustment,
             "confidence_delta": round(confidence_delta, 4),
-            "expected_20d": round(expected_20d, 4),
-            "win_rate_20d": round(win_rate_20d, 4),
-            "combined_similarity": round(combined_similarity, 4),
-            "context_similarity": round(context_similarity, 4),
+            "upside_probability": round(upside, 4),
+            "expected_return": round(expected_return, 4),
+            "risk_reward": round(risk_reward, 4),
+            "probability_confidence": round(prob_confidence, 4),
+            "recommendation": recommendation,
         }
+        return adjusted
+
+    def _apply_pattern_context_to_candidate(self, candidate: dict[str, Any], pattern_context: dict[str, Any]) -> dict[str, Any]:
+        adjusted = dict(candidate)
+        adjusted["pattern_context_adjustment"] = {"score_delta": 0, "note": "Pattern Context available but Probability Engine not available"}
         return adjusted
 
     def _grade(self, score: int) -> str:

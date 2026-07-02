@@ -268,9 +268,21 @@ class ExitDecisionEngine:
         hits: list[ExitSignal],
     ) -> tuple[str, float]:
         hit_names = {hit.name for hit in hits}
-        if risk_level == "HIGH" or sell_score >= 85:
-            return "SELL_ALL", 1.0
+        force_full_exit = {
+            "stop_loss_5",
+            "manual_stop",
+            "atr_stop",
+            "trailing_stop",
+            "percent_trailing_stop",
+            "gap_down",
+            "below_ma120",
+            "candidate_high_risk",
+        }
         if "profit_20" in hit_names:
+            return "SELL_ALL", 1.0
+        if risk_level == "HIGH" and hit_names.intersection(force_full_exit):
+            return "SELL_ALL", 1.0
+        if sell_score >= 85 and "time_exit_30" not in hit_names:
             return "SELL_ALL", 1.0
         if sell_score >= 65:
             return "SELL_50", 0.5

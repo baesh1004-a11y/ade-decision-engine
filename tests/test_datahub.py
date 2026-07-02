@@ -9,11 +9,12 @@ from datahub.service import DataHub
 
 def _market_data(rows: int = 120) -> pd.DataFrame:
     data = []
+    start = pd.Timestamp("2024-01-01")
     for i in range(rows):
         close = 100 + i * 0.4
         data.append(
             {
-                "Date": f"2024-01-{(i % 28) + 1:02d}",
+                "Date": (start + pd.Timedelta(days=i)).strftime("%Y-%m-%d"),
                 "Open": close - 0.2,
                 "High": close + 1.0,
                 "Low": close - 1.0,

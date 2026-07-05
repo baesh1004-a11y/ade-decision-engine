@@ -1,7 +1,7 @@
 pandas
 numpy
 pykrx
-yfinance
+finance-datareader
 ta
 fastapi
 uvicorn

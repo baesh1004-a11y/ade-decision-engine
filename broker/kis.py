@@ -21,6 +21,7 @@ class KISBrokerAdapter:
     - OAuth token issuance
     - domestic stock cash/position normalization skeleton
     - guarded paper/live order entry interface
+    - KIS API rate-limit guard and retry handling
 
     Secrets must be injected from environment variables or a secret manager.
     Never hard-code APP_KEY, APP_SECRET, account number, or token in GitHub.
@@ -29,12 +30,20 @@ class KISBrokerAdapter:
     PAPER_BASE_URL = "https://openapivts.koreainvestment.com:29443"
     LIVE_BASE_URL = "https://openapi.koreainvestment.com:9443"
 
+    MIN_REQUEST_INTERVAL_SECONDS = 0.75
+    MAX_RETRIES = 3
+    BALANCE_CACHE_SECONDS = 2.0
+    RATE_LIMIT_CODES = {"EGW00201"}
+
     def __init__(self, config: BrokerConfig, session: requests.Session | None = None) -> None:
         self.config = config
         self.session = session or requests.Session()
         self.base_url = config.base_url or (self.LIVE_BASE_URL if config.is_live else self.PAPER_BASE_URL)
         self._access_token: str | None = None
         self._access_token_expires_at = 0.0
+        self._last_request_at = 0.0
+        self._last_balance_payload: dict[str, Any] | None = None
+        self._last_balance_at = 0.0
 
     def get_cash(self) -> float:
         payload = self._request_domestic_balance()
@@ -117,6 +126,10 @@ class KISBrokerAdapter:
         )
 
     def _request_domestic_balance(self) -> dict[str, Any]:
+        now = time.time()
+        if self._last_balance_payload is not None and now - self._last_balance_at < self.BALANCE_CACHE_SECONDS:
+            return self._last_balance_payload
+
         params = {
             "CANO": self.config.account_no,
             "ACNT_PRDT_CD": self.config.account_product_code,
@@ -131,7 +144,10 @@ class KISBrokerAdapter:
             "CTX_AREA_NK100": "",
         }
         tr_id = "VTTC8434R" if not self.config.is_live else "TTTC8434R"
-        return self._get("/uapi/domestic-stock/v1/trading/inquire-balance", tr_id=tr_id, params=params)
+        payload = self._get("/uapi/domestic-stock/v1/trading/inquire-balance", tr_id=tr_id, params=params)
+        self._last_balance_payload = payload
+        self._last_balance_at = time.time()
+        return payload
 
     def _headers(self, tr_id: str | None = None) -> dict[str, str]:
         headers = {
@@ -152,12 +168,12 @@ class KISBrokerAdapter:
             "appkey": self.config.app_key,
             "appsecret": self.config.app_secret,
         }
-        response = self.session.post(
-            f"{self.base_url}/oauth2/tokenP",
+        response = self._send_with_retry(
+            "POST",
+            "/oauth2/tokenP",
             json=body,
-            timeout=self.config.timeout_seconds,
+            include_auth_headers=False,
         )
-        self._raise_for_response(response)
         payload = response.json()
         token = payload.get("access_token")
         if not token:
@@ -168,28 +184,80 @@ class KISBrokerAdapter:
         return self._access_token
 
     def _get(self, path: str, tr_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = self.session.get(
-            f"{self.base_url}{path}",
+        response = self._send_with_retry(
+            "GET",
+            path,
             headers=self._headers(tr_id),
             params=params,
-            timeout=self.config.timeout_seconds,
         )
-        self._raise_for_response(response)
         payload = response.json()
         self._raise_for_kis_error(payload)
         return payload
 
     def _post(self, path: str, tr_id: str, json: dict[str, Any]) -> dict[str, Any]:
-        response = self.session.post(
-            f"{self.base_url}{path}",
+        response = self._send_with_retry(
+            "POST",
+            path,
             headers=self._headers(tr_id),
             json=json,
-            timeout=self.config.timeout_seconds,
         )
-        self._raise_for_response(response)
         payload = response.json()
         self._raise_for_kis_error(payload)
         return payload
+
+    def _send_with_retry(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str] | None = None,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+        include_auth_headers: bool = True,
+    ) -> requests.Response:
+        url = f"{self.base_url}{path}"
+        last_response: requests.Response | None = None
+
+        for attempt in range(self.MAX_RETRIES + 1):
+            self._throttle()
+            response = self.session.request(
+                method,
+                url,
+                headers=headers,
+                params=params,
+                json=json,
+                timeout=self.config.timeout_seconds,
+            )
+            last_response = response
+
+            if not self._is_retryable_response(response):
+                self._raise_for_response(response)
+                return response
+
+            wait_seconds = min(4.0, 0.8 * (2**attempt))
+            time.sleep(wait_seconds)
+
+        assert last_response is not None
+        self._raise_for_response(last_response)
+        return last_response
+
+    def _throttle(self) -> None:
+        elapsed = time.time() - self._last_request_at
+        if elapsed < self.MIN_REQUEST_INTERVAL_SECONDS:
+            time.sleep(self.MIN_REQUEST_INTERVAL_SECONDS - elapsed)
+        self._last_request_at = time.time()
+
+    def _is_retryable_response(self, response: requests.Response) -> bool:
+        if response.status_code in {429, 500, 502, 503, 504}:
+            try:
+                payload = response.json()
+            except ValueError:
+                return response.status_code in {429, 502, 503, 504}
+            if payload.get("msg_cd") in self.RATE_LIMIT_CODES:
+                return True
+            if "초당 거래건수" in str(payload.get("msg1", "")):
+                return True
+        return False
 
     @staticmethod
     def _raise_for_response(response: requests.Response) -> None:

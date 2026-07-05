@@ -3,8 +3,17 @@ from __future__ import annotations
 from universe.models import UniverseBuildResult, UniverseSymbol
 
 
+DEFAULT_UNIVERSE = [
+    UniverseSymbol("us", "NVDA", "NVIDIA", "Semiconductor", source="default"),
+    UniverseSymbol("us", "MSFT", "Microsoft", "Software", source="default"),
+    UniverseSymbol("us", "AAPL", "Apple", "Hardware", source="default"),
+    UniverseSymbol("kr", "005930", "Samsung Electronics", "Semiconductor", source="default"),
+    UniverseSymbol("kr", "000660", "SK Hynix", "Semiconductor", source="default"),
+]
+
+
 class DynamicUniverseManager:
-    """Builds a flexible recommendation universe from multiple sources."""
+    """Build and query the active recommendation universe."""
 
     def build(
         self,
@@ -12,7 +21,7 @@ class DynamicUniverseManager:
         include: list[UniverseSymbol] | None = None,
         exclude: list[UniverseSymbol] | None = None,
     ) -> UniverseBuildResult:
-        base = base or []
+        base = DEFAULT_UNIVERSE if base is None else base
         include = include or []
         exclude = exclude or []
 
@@ -31,3 +40,10 @@ class DynamicUniverseManager:
             final_count=len(final),
             symbols=final,
         )
+
+    def active(self, market: str | None = None) -> list[UniverseSymbol]:
+        symbols = self.build().symbols
+        if market is None:
+            return symbols
+        market = market.lower()
+        return [item for item in symbols if item.market.lower() == market]

@@ -13,6 +13,11 @@ class PriceRepository:
     """SQLite repository for normalized OHLCV price data."""
 
     def __init__(self, db_path: str | Path = ":memory:") -> None:
+        if str(db_path) != ":memory:":
+            path = Path(db_path)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            db_path = path
+
         self.conn = sqlite3.connect(str(db_path))
         self.conn.row_factory = sqlite3.Row
         self.initialize()

@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import os
 import time
 from typing import Any
 
 import requests
 
 from broker.base import BrokerConfig, BrokerError, BrokerOrder, BrokerPosition, OrderResult
+
+try:  # python-dotenv is optional for tests and production secret managers.
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover
+    load_dotenv = None
 
 
 class KISBrokerAdapter:
@@ -203,3 +209,66 @@ class KISBrokerAdapter:
             return float(str(value).replace(",", ""))
         except (TypeError, ValueError):
             return 0.0
+
+
+def load_kis_env() -> None:
+    """Load .env when python-dotenv is available.
+
+    The function is intentionally safe when python-dotenv is not installed so
+    production deployments can rely on native environment variables or secret
+    managers without importing dotenv.
+    """
+
+    if load_dotenv is not None:
+        load_dotenv()
+
+
+def kis_config_from_env(prefix: str = "KIS") -> BrokerConfig:
+    """Build BrokerConfig from environment variables.
+
+    Required variables:
+    - KIS_APP_KEY
+    - KIS_APP_SECRET
+    - KIS_ACCOUNT or KIS_ACCOUNT_NO
+    - KIS_PRODUCT_CODE or KIS_ACCOUNT_PRODUCT_CODE
+
+    Optional variables:
+    - KIS_ENV=paper|live
+    - KIS_BASE_URL
+    - KIS_TIMEOUT_SECONDS
+    """
+
+    load_kis_env()
+    app_key = os.getenv(f"{prefix}_APP_KEY")
+    app_secret = os.getenv(f"{prefix}_APP_SECRET")
+    account_no = os.getenv(f"{prefix}_ACCOUNT") or os.getenv(f"{prefix}_ACCOUNT_NO")
+    product_code = os.getenv(f"{prefix}_PRODUCT_CODE") or os.getenv(f"{prefix}_ACCOUNT_PRODUCT_CODE") or "01"
+    environment = os.getenv(f"{prefix}_ENV", "paper")
+    base_url = os.getenv(f"{prefix}_BASE_URL")
+    timeout_seconds = int(os.getenv(f"{prefix}_TIMEOUT_SECONDS", "10"))
+
+    missing = []
+    if not app_key:
+        missing.append(f"{prefix}_APP_KEY")
+    if not app_secret:
+        missing.append(f"{prefix}_APP_SECRET")
+    if not account_no:
+        missing.append(f"{prefix}_ACCOUNT or {prefix}_ACCOUNT_NO")
+    if missing:
+        raise BrokerError("Missing KIS environment variables: " + ", ".join(missing))
+
+    return BrokerConfig(
+        app_key=app_key,
+        app_secret=app_secret,
+        account_no=account_no,
+        account_product_code=product_code,
+        environment=environment,
+        base_url=base_url,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def kis_broker_from_env(prefix: str = "KIS", session: requests.Session | None = None) -> KISBrokerAdapter:
+    """Create a KISBrokerAdapter from .env or process environment."""
+
+    return KISBrokerAdapter(config=kis_config_from_env(prefix=prefix), session=session)

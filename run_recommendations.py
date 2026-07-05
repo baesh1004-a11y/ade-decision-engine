@@ -1,9 +1,23 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pandas as pd
 
+from datahub.repository import PriceRepository
 from recommendation.engine import RecommendationEngine
 from recommendation.models import RecommendationInput
+
+
+DB_PATH = Path("datahub/market.db")
+
+SYMBOL_META = {
+    ("us", "NVDA"): ("NVIDIA", "Semiconductor"),
+    ("us", "MSFT"): ("Microsoft", "Software"),
+    ("us", "AAPL"): ("Apple", "Hardware"),
+    ("kr", "005930"): ("Samsung Electronics", "Semiconductor"),
+    ("kr", "000660"): ("SK Hynix", "Semiconductor"),
+}
 
 
 def make_market_data(rows: int = 140, start: float = 100.0, step: float = 0.5, volume_boost: float = 2.0) -> pd.DataFrame:
@@ -28,12 +42,44 @@ def build_sample_universe() -> list[RecommendationInput]:
     ]
 
 
+def build_datahub_universe() -> list[RecommendationInput]:
+    if not DB_PATH.exists():
+        return []
+
+    repository = PriceRepository(DB_PATH)
+    try:
+        universe: list[RecommendationInput] = []
+        for (market, ticker), (name, sector) in SYMBOL_META.items():
+            data = repository.fetch_dataframe(market=market, ticker=ticker, source="fdr")
+            if len(data) >= 30:
+                universe.append(
+                    RecommendationInput(
+                        market=market,
+                        ticker=ticker,
+                        name=name,
+                        market_data=data,
+                        sector=sector,
+                    )
+                )
+        return universe
+    finally:
+        repository.close()
+
+
 def print_report() -> None:
-    report = RecommendationEngine().rank(build_sample_universe(), top_n=5)
+    universe = build_datahub_universe()
+    source_label = "SQLite DataHub"
+    if not universe:
+        universe = build_sample_universe()
+        source_label = "sample data"
+
+    report = RecommendationEngine().rank(universe, top_n=5)
 
     print("\n==============================")
-    print("      ADE DAILY PICKS v1")
+    print("      ADE DAILY PICKS v2")
     print("==============================")
+    print(f"Source  : {source_label}")
+    print(f"Database: {DB_PATH}")
     print(f"Universe: {report.total_universe} symbols")
     print(f"Selected: Top {report.selected_count}\n")
 

@@ -1,26 +1,30 @@
 from __future__ import annotations
 
 from collector.base import CollectorRequest
-from collector.yahoo import YahooCollector
+from collector.fdr import FDRCollector
 
 
 DEFAULT_SYMBOLS = [
     ("us", "NVDA"),
     ("us", "MSFT"),
     ("us", "AAPL"),
+    ("kr", "005930"),
+    ("kr", "000660"),
 ]
 
 
 def main() -> None:
-    collector = YahooCollector()
+    collector = FDRCollector()
 
     print("\n==============================")
     print("     ADE DATA COLLECTION v1")
     print("==============================")
 
     for market, ticker in DEFAULT_SYMBOLS:
-        print(f"\nFetching {market.upper()}:{ticker} from Yahoo...")
-        result = collector.fetch(CollectorRequest(market=market, ticker=ticker, period="6mo", interval="1d"))
+        print(f"\nFetching {market.upper()}:{ticker} from FinanceDataReader...")
+        result = collector.fetch(
+            CollectorRequest(market=market, ticker=ticker, period="6mo", interval="1d")
+        )
         print(f"Source       : {result.source}")
         print(f"Rows         : {len(result.data)}")
         print(f"Quality      : {result.quality_score}/100")

@@ -7,6 +7,7 @@ from cache.vector_cache import VectorBuilder
 from datahub.repository import PriceRepository
 from environment.engine import EnvironmentEngine, EnvironmentSnapshot
 from pattern.cross_universe_replay import CrossUniverseReplayEngine
+from report.replay_chart_report import ReplayChartReportWriter
 from search.vector_index import VectorIndex
 
 
@@ -39,6 +40,7 @@ def main() -> None:
             top_n=args.top,
             min_similarity=args.min_similarity,
         )
+        report_path = ReplayChartReportWriter(repository).write(replay)
     finally:
         repository.close()
 
@@ -55,6 +57,7 @@ def main() -> None:
     print(f"Avg 60D Ret. : {replay.avg_return_60d}")
     print(f"Win Rate 20D : {replay.win_rate_20d}")
     print(f"Avg MDD 20D  : {replay.avg_drawdown_20d}")
+    print(f"Visual Report: {report_path}")
 
     print("\nCurrent State Labels")
     for label in replay.current_state.labels:

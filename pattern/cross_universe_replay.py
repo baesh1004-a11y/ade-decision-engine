@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from pathlib import Path
 
 import pandas as pd
 
 from datahub.repository import PriceRepository
 from pattern.replay_probability import PatternState, ReplayProbabilityEngine
+from pattern.shape_similarity import ShapeSimilarityEngine, ShapeSimilarityResult
 from universe.manager import DynamicUniverseManager
 
 
@@ -19,6 +19,9 @@ class CrossUniverseReplayCase:
     start_date: str
     end_date: str
     similarity: float
+    state_similarity: float
+    shape_similarity: float
+    shape_detail: ShapeSimilarityResult
     forward_return_20d: float | None
     forward_return_60d: float | None
     drawdown_20d: float | None
@@ -47,11 +50,7 @@ class CrossUniverseReplayResult:
 
 
 class CrossUniverseReplayEngine:
-    """Search similar ADE states across all stored universe symbols.
-
-    This implements the practical version of the user's process:
-    current target state -> all other stored symbols/windows -> matched cases -> forward returns.
-    """
+    """Search similar ADE states and actual chart shapes across all stored universe symbols."""
 
     def __init__(
         self,
@@ -67,6 +66,7 @@ class CrossUniverseReplayEngine:
         self.forward_60d = forward_60d
         self.step = step
         self.state_engine = ReplayProbabilityEngine(window=window, forward_20d=forward_20d, forward_60d=forward_60d)
+        self.shape_engine = ShapeSimilarityEngine()
 
     def search(
         self,
@@ -78,7 +78,9 @@ class CrossUniverseReplayEngine:
         min_similarity: float = 55.0,
     ) -> CrossUniverseReplayResult:
         target_data = self.repository.fetch_dataframe(target_market, target_ticker, source=source)
-        current_state = self.state_engine.extract_state(target_data.tail(self.window))
+        target_prepared = self.state_engine._prepare(target_data)
+        current_window = target_prepared.tail(self.window).reset_index(drop=True)
+        current_state = self.state_engine.extract_state(current_window)
         meta = {(s.market, s.ticker): s for s in DynamicUniverseManager().active()}
 
         cases: list[CrossUniverseReplayCase] = []
@@ -92,18 +94,25 @@ class CrossUniverseReplayEngine:
                 end = start + self.window
                 window_df = prepared.iloc[start:end].reset_index(drop=True)
                 state = self.state_engine.extract_state(window_df)
-                similarity = self.state_engine._state_similarity(current_state, state)
+                state_similarity = self.state_engine._state_similarity(current_state, state)
+                shape_detail = self.shape_engine.compare(current_window, window_df)
+                shape_similarity = shape_detail.total_shape_score
+                similarity = round(state_similarity * 0.45 + shape_similarity * 0.55, 1)
                 if similarity < min_similarity:
                     continue
+                symbol_meta = meta.get((symbol.market, symbol.ticker), symbol)
                 cases.append(
                     CrossUniverseReplayCase(
                         market=symbol.market,
                         ticker=symbol.ticker,
-                        name=meta.get((symbol.market, symbol.ticker), symbol).name,
-                        sector=meta.get((symbol.market, symbol.ticker), symbol).sector,
+                        name=symbol_meta.name,
+                        sector=symbol_meta.sector,
                         start_date=str(pd.Timestamp(prepared.iloc[start]["Date"]).date()),
                         end_date=str(pd.Timestamp(prepared.iloc[end - 1]["Date"]).date()),
-                        similarity=round(similarity, 1),
+                        similarity=similarity,
+                        state_similarity=round(state_similarity, 1),
+                        shape_similarity=round(shape_similarity, 1),
+                        shape_detail=shape_detail,
                         forward_return_20d=self.state_engine._future_return(prepared, end - 1, self.forward_20d),
                         forward_return_60d=self.state_engine._future_return(prepared, end - 1, self.forward_60d),
                         drawdown_20d=self.state_engine._future_drawdown(prepared, end - 1, self.forward_20d),
@@ -152,8 +161,9 @@ class CrossUniverseReplayEngine:
         win_rate_20d: float | None,
     ) -> int:
         similarity_score = sum(c.similarity for c in cases) / len(cases) if cases else 0
+        shape_score = sum(c.shape_similarity for c in cases) / len(cases) if cases else 0
         return_score = 50 if avg_return_20d is None else min(100, max(0, 50 + avg_return_20d * 5))
         win_score = 50 if win_rate_20d is None else win_rate_20d
         sample_score = min(100, len(cases) * 5)
-        score = state.state_score * 0.25 + similarity_score * 0.30 + return_score * 0.20 + win_score * 0.15 + sample_score * 0.10
+        score = state.state_score * 0.20 + similarity_score * 0.25 + shape_score * 0.20 + return_score * 0.20 + win_score * 0.10 + sample_score * 0.05
         return round(max(0, min(100, score)))

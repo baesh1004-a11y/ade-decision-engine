@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from data.providers import FDRProvider
 from universe.models import UniverseBuildResult, UniverseSymbol
 
 
@@ -13,7 +14,11 @@ DEFAULT_UNIVERSE = [
 
 
 class DynamicUniverseManager:
-    """Build and query the active recommendation universe."""
+    """Build and query the active recommendation universe.
+
+    KR universe is loaded from FDR KOSPI/KOSDAQ listings when available.
+    If FDR listing fails, it falls back to DEFAULT_UNIVERSE.
+    """
 
     def build(
         self,
@@ -21,7 +26,7 @@ class DynamicUniverseManager:
         include: list[UniverseSymbol] | None = None,
         exclude: list[UniverseSymbol] | None = None,
     ) -> UniverseBuildResult:
-        base = DEFAULT_UNIVERSE if base is None else base
+        base = self._default_base() if base is None else base
         include = include or []
         exclude = exclude or []
 
@@ -47,3 +52,22 @@ class DynamicUniverseManager:
             return symbols
         market = market.lower()
         return [item for item in symbols if item.market.lower() == market]
+
+    def _default_base(self) -> list[UniverseSymbol]:
+        try:
+            kr_symbols = [
+                UniverseSymbol(
+                    market=str(item["market"]),
+                    ticker=str(item["ticker"]),
+                    name=item.get("name"),
+                    sector=item.get("sector"),
+                    source=str(item.get("source") or "FDR"),
+                )
+                for item in FDRProvider().list_kr_symbols()
+            ]
+            us_symbols = [s for s in DEFAULT_UNIVERSE if s.market == "us"]
+            if kr_symbols:
+                return kr_symbols + us_symbols
+        except Exception:
+            pass
+        return DEFAULT_UNIVERSE

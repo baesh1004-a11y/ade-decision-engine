@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from centerline.engine import CenterlineEngine
 from datahub.repository import PriceRepository
 from pattern.replay_probability import ReplayProbabilityEngine
 from universe.manager import DynamicUniverseManager
@@ -24,22 +25,20 @@ class CandidateScore:
     volume_ratio_20d: float
     volume_ratio_120d: float
     state_score: int
+    centerline_score: int
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
 class CandidateScanner:
-    """Find actionable ADE candidates before replay analysis.
+    """Find actionable ADE candidates before replay analysis."""
 
-    v1 implements the user's process:
-    capital inflow -> long bullish bar -> STO stack -> MA alignment -> long-base breakout.
-    """
-
-    def __init__(self, repository: PriceRepository, lookback: int = 180) -> None:
+    def __init__(self, repository: PriceRepository, lookback: int = 260) -> None:
         self.repository = repository
         self.lookback = lookback
         self.state_engine = ReplayProbabilityEngine(window=120)
+        self.centerline_engine = CenterlineEngine()
 
     def scan(self, source: str = "fdr", min_score: int = 55, top_n: int = 50) -> list[CandidateScore]:
         candidates: list[CandidateScore] = []
@@ -84,51 +83,56 @@ class CandidateScanner:
         base_range = (rolling_high_120 - rolling_low_120) / rolling_low_120 if rolling_low_120 else 9.9
         breakout = latest_close >= rolling_high_120 * 0.95
         state = self.state_engine.extract_state(df.tail(120))
+        centerline = self.centerline_engine.snapshot(df)
 
         points = 0
         reasons: list[str] = []
 
         if volume_ratio_120d >= 10:
-            points += 25
+            points += 20
             reasons.append("거래대금/거래량 120일 평균 대비 10배 이상")
         elif volume_ratio_20d >= 3:
-            points += 18
+            points += 15
             reasons.append("거래량 20일 평균 대비 3배 이상")
         elif volume_ratio_20d >= 1.5:
-            points += 10
+            points += 8
             reasons.append("거래량 증가")
 
         if latest_return >= 0.08 and body_ratio >= 0.55:
-            points += 18
+            points += 15
             reasons.append("장대양봉 출현")
         elif latest_return >= 0.03 and body_ratio >= 0.35:
-            points += 10
+            points += 8
             reasons.append("양봉 상승 전환")
 
         if state.sto_stack_score >= 85:
-            points += 15
+            points += 12
             reasons.append("STO 3층 구조")
         elif state.sto_stack_score >= 60:
-            points += 8
+            points += 6
             reasons.append("STO 상승 배열")
 
         if latest_close > ma5 > ma20 > ma60:
-            points += 15
+            points += 12
             reasons.append("5MA > 20MA > 60MA 정배열")
         elif latest_close > ma20 > ma60:
-            points += 9
+            points += 7
             reasons.append("중기 이평 우상향")
 
         if breakout and volume_ratio_20d >= 1.3:
-            points += 15
+            points += 12
             reasons.append("120일 박스권 상단 돌파 + 거래량 동반")
         elif breakout:
-            points += 10
+            points += 8
             reasons.append("120일 고점권 접근")
 
         if base_range <= 0.8 and latest_close > ma60:
-            points += 12
+            points += 8
             reasons.append("장기 바닥권 이후 회복")
+
+        centerline_bonus = round(centerline.centerline_score * 0.21)
+        points += centerline_bonus
+        reasons.extend(centerline.labels[:4])
 
         points = min(100, points)
         action = "REPLAY_ANALYSIS" if points >= 70 else "WATCH" if points >= 55 else "EXCLUDE"
@@ -145,6 +149,7 @@ class CandidateScanner:
             volume_ratio_20d=round(volume_ratio_20d, 2),
             volume_ratio_120d=round(volume_ratio_120d, 2),
             state_score=state.state_score,
+            centerline_score=centerline.centerline_score,
         )
 
 

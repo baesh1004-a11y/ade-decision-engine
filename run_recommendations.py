@@ -7,6 +7,7 @@ from features.engine import FeatureEngine
 from portfolio.engine import PortfolioEngine
 from recommendation.engine import RecommendationEngine
 from recommendation.models import RecommendationInput
+from report.recommendation_report import RecommendationReportWriter
 from universe.manager import DynamicUniverseManager
 
 
@@ -33,15 +34,23 @@ def build_universe(repository: PriceRepository) -> list[RecommendationInput]:
     return inputs
 
 
+def _find_input(universe: list[RecommendationInput], market: str, ticker: str) -> RecommendationInput | None:
+    for item in universe:
+        if item.market == market and item.ticker == ticker:
+            return item
+    return None
+
+
 def print_report() -> None:
     repository = PriceRepository(DB_PATH)
+    writer = RecommendationReportWriter()
     try:
         universe = build_universe(repository)
         report = RecommendationEngine().rank(universe, top_n=5)
         portfolio = PortfolioEngine().allocate(report.recommendations, max_positions=5)
 
         print("\n==============================")
-        print("      ADE DAILY PICKS v3")
+        print("      ADE DAILY PICKS v4")
         print("==============================")
         print("Source  : SQLite DataHub")
         print(f"Database: {DB_PATH}")
@@ -50,6 +59,11 @@ def print_report() -> None:
 
         for rank, item in enumerate(report.recommendations, start=1):
             stars = "★" * max(1, min(5, item.final_score // 20))
+            source_input = _find_input(universe, item.market, item.ticker)
+            report_path = "-"
+            if source_input is not None:
+                report_path = str(writer.write(item, source_input.market_data))
+
             print(f"{rank}. {item.ticker} | {item.name or ''}")
             print(f"   Market     : {item.market.upper()}")
             print(f"   Sector     : {item.sector or '-'}")
@@ -57,6 +71,7 @@ def print_report() -> None:
             print(f"   Grade      : {item.grade} {stars}")
             print(f"   Action     : {item.action}")
             print(f"   Confidence : {item.confidence:.2f}")
+            print(f"   Chart Report: {report_path}")
             print("   Reasons")
             for reason in item.reasons[:5]:
                 print(f"    - {reason}")

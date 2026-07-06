@@ -14,6 +14,13 @@
 - Risk Engine specification.
 - Decision Engine Core specification.
 
+### Updated
+
+- Separated design, implementation, test, and execution status in `ROADMAP.md`.
+- Documented the current Candidate Decision Engine as the existing Signal role.
+- Added the migration plan from `strategy/candidate.py` to Signal Engine v1.0.
+- Clarified that existing implementation must be smoke-tested before structural refactoring.
+
 ### Notes
 
 - This version records architecture and reference design.
@@ -22,7 +29,7 @@
 
 ### Next
 
-- Order Engine v1.
-- Execution Monitor v1.
-- Backtest Engine v1.
-- Report Engine v1.
+- Inspect `main.py`, `core/`, `strategy/`, `indicators/`, `pattern/`, and `tests/`.
+- Run a basic pipeline smoke test.
+- Reconcile existing Risk implementation with the new Risk Engine design.
+- Design Order Engine v1.

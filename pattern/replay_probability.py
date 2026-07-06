@@ -4,6 +4,8 @@ from dataclasses import asdict, dataclass
 
 import pandas as pd
 
+from centerline.engine import CenterlineEngine
+
 
 @dataclass(frozen=True)
 class PatternState:
@@ -13,6 +15,7 @@ class PatternState:
     volume_surge_score: int
     long_base_score: int
     breakout_score: int
+    centerline_score: int
     state_score: int
     labels: list[str]
 
@@ -51,21 +54,13 @@ class ReplayProbabilityResult:
 
 
 class ReplayProbabilityEngine:
-    """ADE 6-step replay probability engine.
-
-    This is based on the user's trading process:
-    1) candidate filter: large capital inflow / long-base breakout
-    2) current state analysis: STO stack, MA alignment, weekly position, volume flow
-    3) historical state search across prior windows
-    4) post-event replay: future return / drawdown
-    5) environment synchronization score
-    6) final A/B/C/D entry value decision
-    """
+    """ADE 6-step replay probability engine with yearly centerline state."""
 
     def __init__(self, window: int = 120, forward_20d: int = 20, forward_60d: int = 60) -> None:
         self.window = window
         self.forward_20d = forward_20d
         self.forward_60d = forward_60d
+        self.centerline_engine = CenterlineEngine()
 
     def evaluate(self, data: pd.DataFrame, environment_score: int = 70, top_n: int = 5) -> ReplayProbabilityResult:
         df = self._prepare(data)
@@ -151,13 +146,17 @@ class ReplayProbabilityEngine:
         long_base_score = 100 if len(df) >= 100 and low_range <= 0.8 and latest_close >= ma60 else 70 if latest_close >= ma60 else 35
         breakout_score = 100 if latest_close >= rolling_high * 0.95 and volume_ratio_20 >= 1.5 else 70 if latest_close > ma20 and volume_ratio_20 >= 1.1 else 35
 
+        centerline = self.centerline_engine.snapshot(df)
+        centerline_score = centerline.centerline_score
+
         state_score = round(
-            sto_stack_score * 0.18
-            + ma_alignment_score * 0.20
-            + weekly_position_score * 0.14
-            + volume_surge_score * 0.22
-            + long_base_score * 0.13
-            + breakout_score * 0.13
+            sto_stack_score * 0.15
+            + ma_alignment_score * 0.17
+            + weekly_position_score * 0.12
+            + volume_surge_score * 0.18
+            + long_base_score * 0.10
+            + breakout_score * 0.10
+            + centerline_score * 0.18
         )
         labels = []
         if volume_ratio_120 >= 10:
@@ -170,6 +169,7 @@ class ReplayProbabilityEngine:
             labels.append("장기 바닥권 이후 돌파")
         if breakout_score >= 85:
             labels.append("돌파 + 거래량 동반")
+        labels.extend(centerline.labels[:4])
 
         return PatternState(
             sto_stack_score=sto_stack_score,
@@ -178,6 +178,7 @@ class ReplayProbabilityEngine:
             volume_surge_score=volume_surge_score,
             long_base_score=long_base_score,
             breakout_score=breakout_score,
+            centerline_score=centerline_score,
             state_score=state_score,
             labels=labels,
         )
@@ -210,6 +211,7 @@ class ReplayProbabilityEngine:
             "volume_surge_score",
             "long_base_score",
             "breakout_score",
+            "centerline_score",
         ]
         diffs = [abs(getattr(a, f) - getattr(b, f)) for f in fields]
         return max(0.0, 100.0 - sum(diffs) / len(diffs))

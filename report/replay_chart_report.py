@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from datahub.provenance import DataProvenanceStore
 from datahub.repository import PriceRepository
 from pattern.cross_universe_replay import CrossUniverseReplayResult
 
@@ -24,6 +25,7 @@ class ReplayChartReportWriter:
         current = self.repository.fetch_dataframe(result.target_market, result.target_ticker, source="fdr")
         best = result.cases[0] if result.cases else None
         past = self.repository.fetch_dataframe(best.market, best.ticker, source="fdr") if best else pd.DataFrame()
+        provenance = self._provenance_html()
         return f"""<!doctype html><html><head><meta charset='utf-8'><title>ADE Replay</title>
 <style>
 body{{font-family:Arial;background:#f4f7fb;color:#111827;margin:32px}}
@@ -36,6 +38,7 @@ table{{width:100%;border-collapse:collapse}}td,th{{padding:9px;border-bottom:1px
 </style></head><body>
 <div class='card'><span class='badge'>ADE Visual Replay Report</span><h1>{result.target_market.upper()}:{result.target_ticker}</h1>
 <div class='grid'><div><small>Replay Probability</small><div class='metric'>{result.replay_probability}%</div></div><div><small>Grade / Action</small><div class='metric'>{result.grade} / {result.action}</div></div><div><small>Avg 20D Return</small><div class='metric'>{self._fmt(result.avg_return_20d)}</div></div><div><small>20D Win Rate</small><div class='metric'>{self._fmt(result.win_rate_20d)}</div></div></div></div>
+<div class='card'><h2>Data Provenance</h2>{provenance}</div>
 <div class='grid'><div class='card'><h2>1. Current Chart</h2>{self._price_chart(current)}</div><div class='card'><h2>2. Best Historical Match</h2>{self._best_header(best)}{self._past_chart(past, best)}</div></div>
 <div class='card'><h2>3. Current vs Past Overlay</h2>{self._overlay_chart(current, past, best)}</div>
 <div class='grid'><div class='card'><h2>4. RSI Compare</h2>{self._rsi_compare(current, past, best)}</div><div class='card'><h2>5. Volume Flow Compare</h2>{self._volume_compare(current, past, best)}</div></div>
@@ -46,6 +49,22 @@ table{{width:100%;border-collapse:collapse}}td,th{{padding:9px;border-bottom:1px
     @staticmethod
     def _fmt(value: float | int | None) -> str:
         return "N/A" if value is None else f"{value}%"
+
+    def _provenance_html(self) -> str:
+        store = DataProvenanceStore("datahub/market.db")
+        try:
+            s = store.summary()
+        finally:
+            store.close()
+        return f"""
+<div class='grid'>
+<div><small>Historical OHLCV</small><div class='metric'>{s.historical_source}</div></div>
+<div><small>Realtime / Account</small><div class='metric'>{s.realtime_source}</div></div>
+<div><small>Replay Database</small><div class='metric'>{s.database_source}</div></div>
+<div><small>Data Quality</small><div class='metric'>{s.quality_label}</div></div>
+</div>
+<p class='small'>Updated: {s.last_updated} · Stored symbols: {s.total_symbols} · Stored rows: {s.total_rows}</p>
+"""
 
     @staticmethod
     def _prepare(df: pd.DataFrame) -> pd.DataFrame:

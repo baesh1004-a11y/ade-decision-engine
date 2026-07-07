@@ -62,7 +62,7 @@ class ReplayEventDBBuilder:
         state = self.state_engine.extract(state_window)
         center = self.centerline_engine.snapshot(state_window)
         end_index, end_reason = self.analyzer.end_index(df, event_index)
-        event_id = f"{self.ade_version}:{event.market}:{event.ticker}:{event.event_date}"
+        event_id = f"{event.market.upper()}:{event.ticker}:{event.event_date}"
         replay_event = ReplayEvent(
             event_id=event_id,
             ade_version=self.ade_version,

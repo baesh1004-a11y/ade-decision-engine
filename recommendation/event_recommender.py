@@ -84,8 +84,8 @@ class RecentMoneyEventRecommender:
         lookback_months: int = 6,
         top_n: int = 20,
         weekly_pool_n: int = 100,
-        min_weekly_similarity: float = 70.0,
-        min_sto_similarity: float = 70.0,
+        min_weekly_similarity: float = 85.0,
+        min_sto_similarity: float = 85.0,
         replay_top_n: int = 5,
     ) -> list[EventRecommendation]:
         candidates = self._recent_event_candidates(candidate_years)
@@ -107,8 +107,6 @@ class RecentMoneyEventRecommender:
                 replay_timeline = self._event_forward_window_days(event, days=max(260, lookback_months * 22 + 132))
                 if replay_timeline.empty:
                     continue
-                # Fast pre-filter: compare current window to the first replay segment.
-                # Detailed position is decided later by SlidingReplayWindowMatcher.
                 first_segment = replay_timeline.head(max(40, lookback_months * 22)).reset_index(drop=True)
                 if first_segment.empty:
                     continue
@@ -123,7 +121,10 @@ class RecentMoneyEventRecommender:
                 sliding = self.sliding_matcher.find_best(current_window, replay_timeline, future_min_weeks=4)
                 if sliding is None:
                     continue
-                if sliding.weekly_similarity < min_weekly_similarity or sliding.sto_similarity < min_sto_similarity:
+                if (
+                    sliding.weekly_similarity < min_weekly_similarity
+                    or sliding.sto_similarity < min_sto_similarity
+                ):
                     continue
                 replay_matches.append(
                     ReplayMatch(

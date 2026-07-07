@@ -8,8 +8,8 @@ from pathlib import Path
 import pandas as pd
 
 from datahub.repository import PriceRepository
-from sto.layer_engine import STO3LayerEngine
-from weekly.pattern import WeeklyPatternEngine
+from sto.structure_similarity import STOStructureSimilarityEngine
+from weekly.shape_similarity import WeeklyShapeSimilarityEngine
 
 
 @dataclass(frozen=True)
@@ -36,11 +36,8 @@ class EventRecommendation:
 class RecentMoneyEventRecommender:
     """ADE v3 recommendation rule.
 
-    1. Store money events for 10y in Replay DB.
-    2. Candidate universe = tickers with money event within recent 1~2y.
-    3. Compare candidate's latest 6-month weekly chart with past event's 6-month weekly flow.
-    4. Compare candidate's current STO 3-layer with past event flow-end STO 3-layer.
-    5. Recommend only when both weekly and STO are similar.
+    Candidate = recent money event stock.
+    Match = 6-month weekly chart shape AND current STO 3-layer structure.
     """
 
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
@@ -48,8 +45,8 @@ class RecentMoneyEventRecommender:
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
         self.price_repo = PriceRepository(self.db_path)
-        self.weekly_engine = WeeklyPatternEngine()
-        self.sto_engine = STO3LayerEngine()
+        self.weekly_shape_engine = WeeklyShapeSimilarityEngine(weeks=26)
+        self.sto_structure_engine = STOStructureSimilarityEngine()
 
     def close(self) -> None:
         self.price_repo.close()
@@ -73,8 +70,8 @@ class RecentMoneyEventRecommender:
             current_window = current_data.tail(max(40, lookback_months * 22)).reset_index(drop=True)
             if current_window.empty:
                 continue
-            current_weekly = self.weekly_engine.extract(current_window)
-            current_sto = self.sto_engine.extract(current_data)
+            current_weekly_shape = self.weekly_shape_engine.extract(current_window)
+            current_sto_structure = self.sto_structure_engine.extract(current_data)
 
             weekly_hits: list[tuple[float, sqlite3.Row, pd.DataFrame]] = []
             for event in historical_events:
@@ -83,15 +80,16 @@ class RecentMoneyEventRecommender:
                 event_window = self._event_forward_window(event, lookback_months)
                 if event_window.empty:
                     continue
-                weekly_similarity = self.weekly_engine.similarity(current_weekly, self.weekly_engine.extract(event_window))
+                event_weekly_shape = self.weekly_shape_engine.extract(event_window)
+                weekly_similarity = self.weekly_shape_engine.similarity(current_weekly_shape, event_weekly_shape)
                 if weekly_similarity >= min_weekly_similarity:
                     weekly_hits.append((weekly_similarity, event, event_window))
 
             weekly_hits = sorted(weekly_hits, key=lambda item: item[0], reverse=True)[:weekly_pool_n]
             best: EventRecommendation | None = None
             for weekly_similarity, event, event_window in weekly_hits:
-                event_sto = self.sto_engine.extract(event_window)
-                sto_similarity = self.sto_engine.similarity(current_sto, event_sto)
+                event_sto_structure = self.sto_structure_engine.extract(event_window)
+                sto_similarity = self.sto_structure_engine.similarity(current_sto_structure, event_sto_structure)
                 if sto_similarity < min_sto_similarity:
                     continue
                 final_similarity = min(weekly_similarity, sto_similarity)
@@ -111,8 +109,9 @@ class RecentMoneyEventRecommender:
                     decision=self._decision(final_similarity, event["max_return"], event["max_drawdown"]),
                     reasons=[
                         f"최근 {candidate_years}년 내 대금 이벤트 발생: {candidate['event_date']}",
-                        f"최근 {lookback_months}개월 주봉 유사도 {weekly_similarity:.2f}%",
-                        f"현재 STO 3계층 유사도 {sto_similarity:.2f}%",
+                        f"최근 {lookback_months}개월 주봉 차트형태 유사도 {weekly_similarity:.2f}%",
+                        f"현재 STO 3계층 구조 유사도 {sto_similarity:.2f}%",
+                        f"현재 STO 구조: {current_sto_structure.arrangement}",
                         f"과거 매칭 이벤트 이후 최대수익 {event['max_return']}%, 최대낙폭 {event['max_drawdown']}%",
                     ],
                 )

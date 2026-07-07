@@ -13,6 +13,23 @@ from weekly.shape_similarity import WeeklyShapeSimilarityEngine
 
 
 @dataclass(frozen=True)
+class ReplayMatch:
+    event_id: str
+    event_date: str
+    market: str
+    ticker: str
+    name: str | None
+    weekly_similarity: float
+    sto_similarity: float
+    final_similarity: float
+    max_return: float | None
+    max_drawdown: float | None
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
 class EventRecommendation:
     market: str
     ticker: str
@@ -28,16 +45,18 @@ class EventRecommendation:
     matched_max_drawdown: float | None
     decision: str
     reasons: list[str]
+    replay_matches: list[ReplayMatch]
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
 
 class RecentMoneyEventRecommender:
-    """ADE v3 recommendation rule.
+    """ADE v4 recommendation rule.
 
     Candidate = recent money event stock.
-    Match = 6-month weekly chart shape AND current STO 3-layer structure.
+    Match = top replay events from all 10y replay DB.
+    The report shows Top5 replay matches, not only one matched replay.
     """
 
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
@@ -60,6 +79,7 @@ class RecentMoneyEventRecommender:
         weekly_pool_n: int = 100,
         min_weekly_similarity: float = 70.0,
         min_sto_similarity: float = 70.0,
+        replay_top_n: int = 5,
     ) -> list[EventRecommendation]:
         candidates = self._recent_event_candidates(candidate_years)
         historical_events = self._historical_events()
@@ -86,39 +106,58 @@ class RecentMoneyEventRecommender:
                     weekly_hits.append((weekly_similarity, event, event_window))
 
             weekly_hits = sorted(weekly_hits, key=lambda item: item[0], reverse=True)[:weekly_pool_n]
-            best: EventRecommendation | None = None
+            replay_matches: list[ReplayMatch] = []
             for weekly_similarity, event, event_window in weekly_hits:
                 event_sto_structure = self.sto_structure_engine.extract(event_window)
                 sto_similarity = self.sto_structure_engine.similarity(current_sto_structure, event_sto_structure)
                 if sto_similarity < min_sto_similarity:
                     continue
                 final_similarity = min(weekly_similarity, sto_similarity)
-                rec = EventRecommendation(
-                    market=str(candidate["market"]),
-                    ticker=str(candidate["ticker"]),
-                    name=candidate["name"],
-                    recent_event_date=str(candidate["event_date"]),
-                    recent_money_ratio=float(candidate["money_ratio_120d"]),
-                    matched_event_id=str(event["event_id"]),
-                    matched_event_date=str(event["event_date"]),
-                    weekly_similarity=round(weekly_similarity, 2),
-                    sto_similarity=round(sto_similarity, 2),
-                    final_similarity=round(final_similarity, 2),
-                    matched_max_return=event["max_return"],
-                    matched_max_drawdown=event["max_drawdown"],
-                    decision=self._decision(final_similarity, event["max_return"], event["max_drawdown"]),
-                    reasons=[
-                        f"최근 {candidate_years}년 내 대금 이벤트 발생: {candidate['event_date']}",
-                        f"최근 {lookback_months}개월 주봉 차트형태 유사도 {weekly_similarity:.2f}%",
-                        f"현재 STO 3계층 구조 유사도 {sto_similarity:.2f}%",
-                        f"현재 STO 구조: {current_sto_structure.arrangement}",
-                        f"과거 매칭 이벤트 이후 최대수익 {event['max_return']}%, 최대낙폭 {event['max_drawdown']}%",
-                    ],
+                replay_matches.append(
+                    ReplayMatch(
+                        event_id=str(event["event_id"]),
+                        event_date=str(event["event_date"]),
+                        market=str(event["market"]),
+                        ticker=str(event["ticker"]),
+                        name=event["name"],
+                        weekly_similarity=round(weekly_similarity, 2),
+                        sto_similarity=round(sto_similarity, 2),
+                        final_similarity=round(final_similarity, 2),
+                        max_return=event["max_return"],
+                        max_drawdown=event["max_drawdown"],
+                    )
                 )
-                if best is None or rec.final_similarity > best.final_similarity:
-                    best = rec
-            if best is not None:
-                recommendations.append(best)
+
+            replay_matches = sorted(replay_matches, key=lambda x: x.final_similarity, reverse=True)[:replay_top_n]
+            if not replay_matches:
+                continue
+
+            best = replay_matches[0]
+            rec = EventRecommendation(
+                market=str(candidate["market"]),
+                ticker=str(candidate["ticker"]),
+                name=candidate["name"],
+                recent_event_date=str(candidate["event_date"]),
+                recent_money_ratio=float(candidate["money_ratio_120d"]),
+                matched_event_id=best.event_id,
+                matched_event_date=best.event_date,
+                weekly_similarity=best.weekly_similarity,
+                sto_similarity=best.sto_similarity,
+                final_similarity=best.final_similarity,
+                matched_max_return=best.max_return,
+                matched_max_drawdown=best.max_drawdown,
+                decision=self._decision(best.final_similarity, best.max_return, best.max_drawdown),
+                reasons=[
+                    f"최근 {candidate_years}년 내 대금 이벤트 발생: {candidate['event_date']}",
+                    f"Replay DB 전체에서 Top {len(replay_matches)} 유사 이벤트 검색",
+                    f"Top1 주봉 차트형태 유사도 {best.weekly_similarity:.2f}%",
+                    f"Top1 STO 3계층 구조 유사도 {best.sto_similarity:.2f}%",
+                    f"현재 STO 구조: {current_sto_structure.arrangement}",
+                    f"Top1 매칭 이벤트 이후 최대수익 {best.max_return}%, 최대낙폭 {best.max_drawdown}%",
+                ],
+                replay_matches=replay_matches,
+            )
+            recommendations.append(rec)
 
         return sorted(recommendations, key=lambda item: (item.final_similarity, item.matched_max_return or -999), reverse=True)[:top_n]
 

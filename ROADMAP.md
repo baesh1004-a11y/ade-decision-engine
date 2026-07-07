@@ -29,7 +29,7 @@
 | 6 | Signal Engine | 완료 | Candidate 구현 존재 | 기존 테스트 확인 필요 | 미확인 | `strategy/candidate.py`에서 초기 신호 역할 수행 |
 | 7 | Risk Engine | 완료 | 기존 구현 존재 | 기존 테스트 존재 | 미확인 | 새 설계와 현 구현 정합성 점검 필요 |
 | 8 | Decision Engine Core | 완료 | 미확인 | 미확인 | 미확인 | BUY/HOLD/REDUCE/SELL/REJECT/NO_ACTION 설계 |
-| 9 | Order Engine | 예정 | 미구현 | 미구현 | 미확인 | 주문 생성/검증/전송 |
+| 9 | Order Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 주문 생성/검증/전송 준비, 실계좌 주문 기본 차단 |
 | 10 | Execution Monitor | 예정 | 미구현 | 미구현 | 미확인 | 체결/미체결/실패 추적 |
 | 11 | Backtest Engine | 예정 | 미확인 | 미확인 | 미확인 | 과거 데이터 기반 전략 검증 |
 | 12 | Report Engine | 예정 | 미확인 | 미확인 | 미확인 | 일별 판단/성과/리스크 리포트 |
@@ -37,7 +37,7 @@
 ## 설계 진행률
 
 ```text
-[███████░░░] 약 70%
+[████████░░] 약 80%
 ```
 
 ## 현재 우선순위
@@ -46,15 +46,15 @@
 2. 현재 구현 알고리즘을 코드 기준으로 문서화
 3. Candidate → Signal 전환은 병행 구조로 점진 적용
 4. Risk/Decision 설계와 기존 구현의 정합성 검증
-5. 이후 Order Engine 설계 진행
+5. Order Engine은 실계좌 주문 차단 원칙을 유지한 상태로 구현 준비
 
 ## 다음 작업
 
 1. `main.py`, `core/`, `strategy/`, `indicators/`, `pattern/`, `tests/` 기준 구현 점검
 2. 기본 파이프라인 스모크 테스트
 3. 구현 상태표 갱신
-4. Order Engine v1 설계
-5. Execution Monitor v1 설계
+4. Execution Monitor v1 설계
+5. Backtest Engine v1 설계
 
 ## 운영 원칙
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from datahub.repository import PriceRepository
+from similarity.sliding_replay_matcher import SlidingReplayWindowMatcher
 from sto.structure_similarity import STOStructureSimilarityEngine
 from weekly.shape_similarity import WeeklyShapeSimilarityEngine
 
@@ -24,6 +25,10 @@ class ReplayMatch:
     final_similarity: float
     max_return: float | None
     max_drawdown: float | None
+    equivalent_week_index: int
+    future_start_week_index: int
+    weeks_compared: int
+    future_weeks_available: int
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -52,11 +57,12 @@ class EventRecommendation:
 
 
 class RecentMoneyEventRecommender:
-    """ADE v4 recommendation rule.
+    """ADE v4 recommendation rule with sliding replay matching.
 
     Candidate = recent money event stock.
     Match = top replay events from all 10y replay DB.
-    The report shows Top5 replay matches, not only one matched replay.
+    Each replay is searched with a sliding weekly window to find the point most
+    similar to the current NOW, then the future path after that point is shown.
     """
 
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
@@ -66,6 +72,7 @@ class RecentMoneyEventRecommender:
         self.price_repo = PriceRepository(self.db_path)
         self.weekly_shape_engine = WeeklyShapeSimilarityEngine(weeks=26)
         self.sto_structure_engine = STOStructureSimilarityEngine()
+        self.sliding_matcher = SlidingReplayWindowMatcher(min_weeks=10, max_weeks=26)
 
     def close(self) -> None:
         self.price_repo.close()
@@ -97,22 +104,27 @@ class RecentMoneyEventRecommender:
             for event in historical_events:
                 if event["event_id"] == candidate["event_id"]:
                     continue
-                event_window = self._event_forward_window(event, lookback_months)
-                if event_window.empty:
+                replay_timeline = self._event_forward_window_days(event, days=max(260, lookback_months * 22 + 132))
+                if replay_timeline.empty:
                     continue
-                event_weekly_shape = self.weekly_shape_engine.extract(event_window)
+                # Fast pre-filter: compare current window to the first replay segment.
+                # Detailed position is decided later by SlidingReplayWindowMatcher.
+                first_segment = replay_timeline.head(max(40, lookback_months * 22)).reset_index(drop=True)
+                if first_segment.empty:
+                    continue
+                event_weekly_shape = self.weekly_shape_engine.extract(first_segment)
                 weekly_similarity = self.weekly_shape_engine.similarity(current_weekly_shape, event_weekly_shape)
                 if weekly_similarity >= min_weekly_similarity:
-                    weekly_hits.append((weekly_similarity, event, event_window))
+                    weekly_hits.append((weekly_similarity, event, replay_timeline))
 
             weekly_hits = sorted(weekly_hits, key=lambda item: item[0], reverse=True)[:weekly_pool_n]
             replay_matches: list[ReplayMatch] = []
-            for weekly_similarity, event, event_window in weekly_hits:
-                event_sto_structure = self.sto_structure_engine.extract(event_window)
-                sto_similarity = self.sto_structure_engine.similarity(current_sto_structure, event_sto_structure)
-                if sto_similarity < min_sto_similarity:
+            for _prefilter_score, event, replay_timeline in weekly_hits:
+                sliding = self.sliding_matcher.find_best(current_window, replay_timeline, future_min_weeks=4)
+                if sliding is None:
                     continue
-                final_similarity = min(weekly_similarity, sto_similarity)
+                if sliding.weekly_similarity < min_weekly_similarity or sliding.sto_similarity < min_sto_similarity:
+                    continue
                 replay_matches.append(
                     ReplayMatch(
                         event_id=str(event["event_id"]),
@@ -120,11 +132,15 @@ class RecentMoneyEventRecommender:
                         market=str(event["market"]),
                         ticker=str(event["ticker"]),
                         name=event["name"],
-                        weekly_similarity=round(weekly_similarity, 2),
-                        sto_similarity=round(sto_similarity, 2),
-                        final_similarity=round(final_similarity, 2),
+                        weekly_similarity=sliding.weekly_similarity,
+                        sto_similarity=sliding.sto_similarity,
+                        final_similarity=sliding.final_similarity,
                         max_return=event["max_return"],
                         max_drawdown=event["max_drawdown"],
+                        equivalent_week_index=sliding.end_week_index,
+                        future_start_week_index=sliding.future_start_week_index,
+                        weeks_compared=sliding.weeks_compared,
+                        future_weeks_available=sliding.future_weeks_available,
                     )
                 )
 
@@ -150,6 +166,8 @@ class RecentMoneyEventRecommender:
                 reasons=[
                     f"최근 {candidate_years}년 내 대금 이벤트 발생: {candidate['event_date']}",
                     f"Replay DB 전체에서 Top {len(replay_matches)} 유사 이벤트 검색",
+                    f"슬라이딩 매칭: Top1 Replay의 {best.equivalent_week_index}번째 주봉이 현재 NOW와 가장 유사",
+                    f"비교 구간 {best.weeks_compared}주, 이후 확인 가능 구간 {best.future_weeks_available}주",
                     f"Top1 주봉 차트형태 유사도 {best.weekly_similarity:.2f}%",
                     f"Top1 STO 3계층 구조 유사도 {best.sto_similarity:.2f}%",
                     f"현재 STO 구조: {current_sto_structure.arrangement}",
@@ -184,7 +202,7 @@ class RecentMoneyEventRecommender:
     def _historical_events(self) -> list[sqlite3.Row]:
         return self.conn.execute("SELECT * FROM replay_events ORDER BY event_date").fetchall()
 
-    def _event_forward_window(self, event: sqlite3.Row, months: int) -> pd.DataFrame:
+    def _event_forward_window_days(self, event: sqlite3.Row, days: int) -> pd.DataFrame:
         data = self.price_repo.fetch_dataframe(event["market"], event["ticker"], source="fdr")
         if data.empty or "Date" not in data.columns:
             return pd.DataFrame()
@@ -195,8 +213,11 @@ class RecentMoneyEventRecommender:
         if matches.empty:
             return pd.DataFrame()
         start = int(matches.index[0])
-        end = min(len(df), start + max(40, months * 22))
+        end = min(len(df), start + max(60, days))
         return df.iloc[start:end].reset_index(drop=True)
+
+    def _event_forward_window(self, event: sqlite3.Row, months: int) -> pd.DataFrame:
+        return self._event_forward_window_days(event, days=max(40, months * 22))
 
     @staticmethod
     def _decision(similarity: float, max_return: float | None, max_drawdown: float | None) -> str:

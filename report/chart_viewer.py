@@ -13,7 +13,8 @@ class RecommendationChartViewer:
     """Create HTS-style timeline comparison charts for recommendation reports.
 
     Left side  : current chart ending at NOW.
-    Right side : replay chart with the equivalent NOW point marked, plus the future path after that point.
+    Right side : replay chart with the sliding-matched equivalent NOW point marked,
+                 plus the future path after that point.
     """
 
     def __init__(self, db_path: str | Path = "datahub/market.db", output_dir: str | Path = "output/charts") -> None:
@@ -25,7 +26,9 @@ class RecommendationChartViewer:
         self.price_repo.close()
 
     def render(self, item: Any, rank: int, lookback_months: int = 6) -> str | None:
-        return self.render_match(item, getattr(item, "matched_event_id"), rank, 1, lookback_months)
+        matches = list(getattr(item, "replay_matches", []) or [])
+        equivalent_week_index = getattr(matches[0], "equivalent_week_index", None) if matches else None
+        return self.render_match(item, getattr(item, "matched_event_id"), rank, 1, lookback_months, equivalent_week_index)
 
     def render_replay_match(self, item: Any, match: Any, rank: int, match_rank: int, lookback_months: int = 6) -> str | None:
         proxy = SimpleNamespace(
@@ -33,9 +36,24 @@ class RecommendationChartViewer:
             ticker=getattr(item, "ticker"),
             matched_event_id=getattr(match, "event_id"),
         )
-        return self.render_match(proxy, getattr(match, "event_id"), rank, match_rank, lookback_months)
+        return self.render_match(
+            proxy,
+            getattr(match, "event_id"),
+            rank,
+            match_rank,
+            lookback_months,
+            getattr(match, "equivalent_week_index", None),
+        )
 
-    def render_match(self, item: Any, matched_event_id: str, rank: int, match_rank: int, lookback_months: int = 6) -> str | None:
+    def render_match(
+        self,
+        item: Any,
+        matched_event_id: str,
+        rank: int,
+        match_rank: int,
+        lookback_months: int = 6,
+        equivalent_week_index: int | None = None,
+    ) -> str | None:
         try:
             import matplotlib
 
@@ -53,18 +71,23 @@ class RecommendationChartViewer:
             replay_daily = self.price_repo.fetch_dataframe(matched_market, matched_ticker, source="fdr")
 
             compare_days = max(60, lookback_months * 22)
-            future_months = 6
-            future_days = future_months * 22
+            future_days = 132
+            if equivalent_week_index is not None:
+                replay_days = max(compare_days + future_days, (int(equivalent_week_index) + 30) * 5)
+            else:
+                replay_days = compare_days + future_days
 
             current_window = current_daily.tail(compare_days).reset_index(drop=True)
-            replay_window = self._event_forward_window(replay_daily, matched_date, compare_days + future_days)
+            replay_window = self._event_forward_window(replay_daily, matched_date, replay_days)
             if current_window.empty or replay_window.empty:
                 return None
 
             current_weekly = self._to_weekly(current_window).tail(26).reset_index(drop=True)
             replay_weekly_full = self._to_weekly(replay_window).reset_index(drop=True)
             compare_weeks = len(current_weekly)
-            now_index = min(compare_weeks - 1, len(replay_weekly_full) - 1)
+            fallback_index = min(compare_weeks - 1, len(replay_weekly_full) - 1)
+            now_index = int(equivalent_week_index) if equivalent_week_index is not None else fallback_index
+            now_index = max(0, min(now_index, len(replay_weekly_full) - 1))
             if len(current_weekly) < 5 or len(replay_weekly_full) < max(5, now_index + 1):
                 return None
 
@@ -77,15 +100,15 @@ class RecommendationChartViewer:
             )
             fig.patch.set_facecolor("#f5f8fc")
             fig.suptitle(
-                f"ADE Timeline Viewer #{rank}-{match_rank}  |  {market.upper()}:{ticker} NOW  →  {matched_event_id} equivalent point + future",
+                f"ADE Sliding Timeline #{rank}-{match_rank}  |  {market.upper()}:{ticker} NOW  →  {matched_event_id} week #{now_index}",
                 fontsize=14,
                 fontweight="bold",
                 x=0.02,
                 ha="left",
             )
 
-            self._plot_price_panel(axes[0][0], current_weekly, "현재 6개월 주봉 · NOW 위치", Rectangle, marker_index=len(current_weekly) - 1, marker_label="NOW")
-            self._plot_price_panel(axes[0][1], replay_weekly_full, "Replay 전체 · ●가 현재와 같은 시점, 오른쪽은 이후 실제 흐름", Rectangle, marker_index=now_index, marker_label="SAME AS NOW")
+            self._plot_price_panel(axes[0][0], current_weekly, "현재 6개월 주봉 · 마지막 봉 = NOW", Rectangle, marker_index=len(current_weekly) - 1, marker_label="NOW")
+            self._plot_price_panel(axes[0][1], replay_weekly_full, f"Replay 전체 · 슬라이딩 매칭 위치 = {now_index}주", Rectangle, marker_index=now_index, marker_label="SAME AS NOW")
 
             for row, period, title in [(1, 5, "STO 5"), (2, 14, "STO 14"), (3, 34, "STO 34")]:
                 self._plot_sto_panel(axes[row][0], current_weekly, period, f"현재 {title}", marker_index=len(current_weekly) - 1)
@@ -94,7 +117,7 @@ class RecommendationChartViewer:
             self._plot_volume_panel(axes[4][0], current_weekly, "현재 거래량", marker_index=len(current_weekly) - 1)
             self._plot_volume_panel(axes[4][1], replay_weekly_full, "Replay 거래량", marker_index=now_index)
             self._plot_future_return_panel(axes[5][0], current_weekly, "현재: 미래는 아직 없음", marker_index=len(current_weekly) - 1)
-            self._plot_future_return_panel(axes[5][1], replay_weekly_full, "Replay: 동일시점 이후 실제 수익률", marker_index=now_index)
+            self._plot_future_return_panel(axes[5][1], replay_weekly_full, "Replay: SAME AS NOW 이후 실제 수익률", marker_index=now_index)
 
             for ax_row in axes:
                 for ax in ax_row:
@@ -104,7 +127,7 @@ class RecommendationChartViewer:
                         spine.set_alpha(0.18)
 
             fig.tight_layout(rect=[0, 0, 1, 0.965])
-            file_name = f"recommendation_{rank:02d}_top{match_rank}_{market}_{ticker}_{matched_ticker}_{matched_date}_timeline.png".replace(":", "_")
+            file_name = f"recommendation_{rank:02d}_top{match_rank}_{market}_{ticker}_{matched_ticker}_{matched_date}_sliding_w{now_index}.png".replace(":", "_")
             out = self.output_dir / file_name
             fig.savefig(out, dpi=150, bbox_inches="tight")
             plt.close(fig)

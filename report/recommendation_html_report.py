@@ -19,12 +19,19 @@ def render_recommendation_html(
     path.parent.mkdir(parents=True, exist_ok=True)
 
     chart_viewer = RecommendationChartViewer(output_dir=path.parent / "charts")
-    chart_paths: dict[int, str] = {}
+    chart_paths: dict[tuple[int, int], str] = {}
     try:
         for idx, item in enumerate(rows, start=1):
-            chart_path = chart_viewer.render(item, idx, lookback_months=lookback_months)
-            if chart_path:
-                chart_paths[idx] = os.path.relpath(chart_path, start=path.parent).replace("\\", "/")
+            matches = list(getattr(item, "replay_matches", []) or [])
+            if not matches:
+                chart_path = chart_viewer.render(item, idx, lookback_months=lookback_months)
+                if chart_path:
+                    chart_paths[(idx, 1)] = os.path.relpath(chart_path, start=path.parent).replace("\\", "/")
+                continue
+            for match_rank, match in enumerate(matches[:5], start=1):
+                chart_path = chart_viewer.render_replay_match(item, match, idx, match_rank, lookback_months=lookback_months)
+                if chart_path:
+                    chart_paths[(idx, match_rank)] = os.path.relpath(chart_path, start=path.parent).replace("\\", "/")
     finally:
         chart_viewer.close()
 
@@ -41,10 +48,8 @@ def render_recommendation_html(
         max_return = _num(getattr(item, "matched_max_return", 0))
         mdd = _num(getattr(item, "matched_max_drawdown", 0))
         recent_event = html.escape(str(getattr(item, "recent_event_date", "")))
-        matched_event = html.escape(str(getattr(item, "matched_event_id", "")))
-        matched_date = html.escape(str(getattr(item, "matched_event_date", "")))
         money = _num(getattr(item, "recent_money_ratio", 0))
-        chart_img = f'<div class="chart-box"><img src="{html.escape(chart_paths[idx])}" alt="ADE chart comparison #{idx}" /></div>' if idx in chart_paths else '<div class="chart-missing">Chart image could not be generated. Check matplotlib installation and price data.</div>'
+        matches = list(getattr(item, "replay_matches", []) or [])
 
         table_rows.append(
             f"""
@@ -62,6 +67,46 @@ def render_recommendation_html(
             """
         )
 
+        replay_rows = []
+        chart_sections = []
+        for match_rank, match in enumerate(matches[:5], start=1):
+            m_event_id = html.escape(str(getattr(match, "event_id", "")))
+            m_name = html.escape(str(getattr(match, "name", "") or getattr(match, "ticker", "")))
+            m_market = html.escape(str(getattr(match, "market", "")).upper())
+            m_ticker = html.escape(str(getattr(match, "ticker", "")))
+            m_weekly = _num(getattr(match, "weekly_similarity", 0))
+            m_sto = _num(getattr(match, "sto_similarity", 0))
+            m_final = _num(getattr(match, "final_similarity", 0))
+            m_return = _num(getattr(match, "max_return", 0))
+            m_mdd = _num(getattr(match, "max_drawdown", 0))
+            replay_rows.append(
+                f"""
+                <tr>
+                  <td class="rank">Top {match_rank}</td>
+                  <td><b>{m_name}</b><span>{m_market}:{m_ticker}</span></td>
+                  <td>{m_event_id}</td>
+                  <td>{_bar(m_final)}</td>
+                  <td>{_bar(m_weekly)}</td>
+                  <td>{_bar(m_sto)}</td>
+                  <td class="pos">{m_return:.2f}%</td>
+                  <td class="neg">{m_mdd:.2f}%</td>
+                </tr>
+                """
+            )
+            img = chart_paths.get((idx, match_rank))
+            chart_img = f'<div class="chart-box"><img src="{html.escape(img)}" alt="ADE Top{match_rank} chart comparison" /></div>' if img else '<div class="chart-missing">Chart image could not be generated.</div>'
+            chart_sections.append(
+                f"""
+                <details class="replay-detail" {'open' if match_rank == 1 else ''}>
+                  <summary>Top {match_rank} Replay · {m_name} · {m_event_id} · Final {m_final:.2f}%</summary>
+                  {chart_img}
+                </details>
+                """
+            )
+
+        if not replay_rows:
+            replay_rows.append('<tr><td colspan="8">No replay matches</td></tr>')
+
         reason_items = "".join(f"<li>{html.escape(str(reason))}</li>" for reason in getattr(item, "reasons", []))
         cards.append(
             f"""
@@ -77,14 +122,20 @@ def render_recommendation_html(
                 <div class="metric"><label>Final similarity</label>{_bar(final)}</div>
                 <div class="metric"><label>Weekly shape</label>{_bar(weekly)}</div>
                 <div class="metric"><label>STO structure</label>{_bar(sto)}</div>
-                <div class="metric"><label>Replay max return</label><strong class="pos">{max_return:.2f}%</strong></div>
-                <div class="metric"><label>Replay MDD</label><strong class="neg">{mdd:.2f}%</strong></div>
+                <div class="metric"><label>Top1 max return</label><strong class="pos">{max_return:.2f}%</strong></div>
+                <div class="metric"><label>Top1 MDD</label><strong class="neg">{mdd:.2f}%</strong></div>
                 <div class="metric"><label>Recent money event</label><strong>{recent_event}</strong><small>{money:.2f}x</small></div>
               </div>
               <div class="replay">
-                <b>Matched replay</b> {matched_event} <span>{matched_date}</span>
+                <b>Top5 Replay Matches</b> · 같은 종목일 필요 없음 · Replay DB 전체에서 주봉 Shape와 STO 구조가 모두 유사한 과거 이벤트
               </div>
-              {chart_img}
+              <div class="mini-table">
+                <table>
+                  <thead><tr><th>Rank</th><th>Replay stock</th><th>Event</th><th>Final</th><th>Weekly</th><th>STO</th><th>Max return</th><th>MDD</th></tr></thead>
+                  <tbody>{''.join(replay_rows)}</tbody>
+                </table>
+              </div>
+              {''.join(chart_sections)}
               <ul>{reason_items}</ul>
             </section>
             """
@@ -112,7 +163,7 @@ table {{ width:100%; border-collapse:collapse; }}
 th {{ text-align:left; font-size:12px; color:var(--muted); text-transform:uppercase; padding:16px; border-bottom:1px solid var(--line); }}
 td {{ padding:16px; border-bottom:1px solid #edf2f8; vertical-align:middle; }}
 td span, small {{ display:block; color:var(--muted); font-size:12px; margin-top:4px; }}
-.rank {{ font-weight:800; color:var(--blue); }}
+.rank {{ font-weight:800; color:var(--blue); white-space:nowrap; }}
 .badge {{ display:inline-flex; align-items:center; padding:7px 10px; border-radius:999px; font-weight:800; font-size:12px; background:#edf5ff; color:var(--blue); }}
 .badge.RECOMMEND {{ background:#e8fff7; color:var(--green); }}
 .badge.WATCH {{ background:#fff7e6; color:#b7791f; }}
@@ -134,7 +185,11 @@ h2 {{ margin:4px 0 0; font-size:24px; }}
 .metric strong {{ font-size:22px; }}
 .replay {{ padding:14px; background:#f8fbff; border-radius:16px; margin:10px 0 14px; color:var(--muted); }}
 .replay b {{ color:var(--ink); }}
-.chart-box {{ background:#fff; border:1px solid #e8eef7; border-radius:20px; padding:12px; margin:14px 0 16px; overflow:auto; }}
+.mini-table {{ overflow:auto; border:1px solid #e8eef7; border-radius:18px; background:#fff; margin-bottom:14px; }}
+.mini-table th, .mini-table td {{ padding:12px; }}
+.replay-detail {{ margin:12px 0; border:1px solid #e8eef7; background:#fff; border-radius:18px; overflow:hidden; }}
+.replay-detail summary {{ cursor:pointer; padding:14px 16px; font-weight:800; color:#1f3b64; background:#f8fbff; }}
+.chart-box {{ background:#fff; border-top:1px solid #e8eef7; padding:12px; overflow:auto; }}
 .chart-box img {{ width:100%; min-width:1050px; display:block; border-radius:14px; }}
 .chart-missing {{ padding:24px; border:1px dashed #ccd7e5; border-radius:18px; color:var(--muted); margin:14px 0; }}
 ul {{ margin:0; padding-left:20px; color:#344054; }}
@@ -147,7 +202,7 @@ li {{ margin:6px 0; }}
   <div class="hero">
     <div>
       <h1>ADE Recommendation Report</h1>
-      <div class="sub">좌측은 현재 6개월 주봉, 우측은 매칭된 Replay 이후 6개월 흐름입니다. 가격은 Normalize되어 모양 중심으로 비교됩니다.</div>
+      <div class="sub">각 추천종목마다 Replay DB 전체에서 찾은 Top5 유사 이벤트를 보여줍니다. 좌측은 현재 6개월 주봉, 우측은 Replay 이후 6개월 흐름입니다.</div>
     </div>
     <div class="pill">Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
   </div>
@@ -155,7 +210,7 @@ li {{ margin:6px 0; }}
   <div class="panel">
     <table>
       <thead>
-        <tr><th>Rank</th><th>Stock</th><th>Decision</th><th>Final</th><th>Weekly</th><th>STO</th><th>Max return</th><th>MDD</th><th>Recent event</th></tr>
+        <tr><th>Rank</th><th>Stock</th><th>Decision</th><th>Top1 Final</th><th>Top1 Weekly</th><th>Top1 STO</th><th>Top1 Max return</th><th>Top1 MDD</th><th>Recent event</th></tr>
       </thead>
       <tbody>{''.join(table_rows) or '<tr><td colspan="9">No recommendations</td></tr>'}</tbody>
     </table>

@@ -4,24 +4,24 @@ import pandas as pd
 
 
 class ReplayEventAnalyzer:
-    """Analyze flow after a money event."""
+    """Analyze flow after a money event.
 
-    def __init__(self, max_flow_days: int = 240, drawdown_limit_pct: float = -25.0) -> None:
+    ADE compares the chart after a money explosion. A later money event is part of
+    the replay flow, so it should not cut the flow short. The first stable rule is:
+    - follow the event for max_flow_days,
+    - stop early only when a deep drawdown invalidates the pattern.
+    """
+
+    def __init__(self, max_flow_days: int = 240, drawdown_limit_pct: float = -35.0) -> None:
         self.max_flow_days = max_flow_days
         self.drawdown_limit_pct = drawdown_limit_pct
 
     def end_index(self, df: pd.DataFrame, event_index: int) -> tuple[int, str]:
         close = df["Close"]
-        volume = df["Volume"]
-        amount = close * volume
-        amt120 = amount.rolling(120, min_periods=20).mean()
         entry = float(close.iloc[event_index])
         last_index = min(len(df) - 1, event_index + self.max_flow_days)
         for i in range(event_index + 1, last_index + 1):
-            ratio120 = float(amount.iloc[i] / amt120.iloc[i]) if amt120.iloc[i] else 1.0
             low_return = (float(df.iloc[i]["Low"]) / entry - 1) * 100 if entry > 0 else 0
-            if ratio120 >= 10:
-                return i, "NEXT_MONEY_EVENT"
             if low_return <= self.drawdown_limit_pct:
                 return i, "DEEP_DRAWDOWN"
         return last_index, "MAX_FLOW_WINDOW"

@@ -1,15 +1,32 @@
 from __future__ import annotations
 
 import html
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+from report.chart_viewer import RecommendationChartViewer
 
-def render_recommendation_html(recommendations: Iterable[object], output_path: str | Path = "output/recommendation_report.html") -> Path:
+
+def render_recommendation_html(
+    recommendations: Iterable[object],
+    output_path: str | Path = "output/recommendation_report.html",
+    lookback_months: int = 6,
+) -> Path:
     rows = list(recommendations)
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    chart_viewer = RecommendationChartViewer(output_dir=path.parent / "charts")
+    chart_paths: dict[int, str] = {}
+    try:
+        for idx, item in enumerate(rows, start=1):
+            chart_path = chart_viewer.render(item, idx, lookback_months=lookback_months)
+            if chart_path:
+                chart_paths[idx] = os.path.relpath(chart_path, start=path.parent).replace("\\", "/")
+    finally:
+        chart_viewer.close()
 
     table_rows = []
     cards = []
@@ -27,6 +44,7 @@ def render_recommendation_html(recommendations: Iterable[object], output_path: s
         matched_event = html.escape(str(getattr(item, "matched_event_id", "")))
         matched_date = html.escape(str(getattr(item, "matched_event_date", "")))
         money = _num(getattr(item, "recent_money_ratio", 0))
+        chart_img = f'<div class="chart-box"><img src="{html.escape(chart_paths[idx])}" alt="ADE chart comparison #{idx}" /></div>' if idx in chart_paths else '<div class="chart-missing">Chart image could not be generated. Check matplotlib installation and price data.</div>'
 
         table_rows.append(
             f"""
@@ -66,6 +84,7 @@ def render_recommendation_html(recommendations: Iterable[object], output_path: s
               <div class="replay">
                 <b>Matched replay</b> {matched_event} <span>{matched_date}</span>
               </div>
+              {chart_img}
               <ul>{reason_items}</ul>
             </section>
             """
@@ -82,7 +101,7 @@ def render_recommendation_html(recommendations: Iterable[object], output_path: s
 :root {{ --bg:#f5f8fc; --card:#ffffffcc; --ink:#162033; --muted:#6b778c; --blue:#2f80ed; --green:#10a37f; --red:#d64545; --line:#dbe5f2; }}
 * {{ box-sizing:border-box; }}
 body {{ margin:0; font-family:Segoe UI, Apple SD Gothic Neo, Malgun Gothic, Arial, sans-serif; background:linear-gradient(135deg,#eef6ff,#f8fbff); color:var(--ink); }}
-.wrap {{ max-width:1280px; margin:0 auto; padding:34px; }}
+.wrap {{ max-width:1500px; margin:0 auto; padding:34px; }}
 .hero {{ display:flex; justify-content:space-between; align-items:flex-end; gap:20px; margin-bottom:24px; }}
 h1 {{ margin:0; font-size:34px; letter-spacing:-.04em; }}
 .sub {{ color:var(--muted); margin-top:8px; }}
@@ -104,20 +123,23 @@ td span, small {{ display:block; color:var(--muted); font-size:12px; margin-top:
 .fill {{ height:100%; background:linear-gradient(90deg,#7cc4ff,#2f80ed); border-radius:999px; }}
 .pos {{ color:var(--green); font-weight:800; }}
 .neg {{ color:var(--red); font-weight:800; }}
-.cards {{ display:grid; grid-template-columns:1fr; gap:18px; }}
+.cards {{ display:grid; grid-template-columns:1fr; gap:22px; }}
 .card {{ padding:22px; }}
 .card-head {{ display:flex; justify-content:space-between; align-items:center; gap:20px; margin-bottom:18px; }}
 .eyebrow {{ color:var(--blue); font-size:12px; font-weight:800; text-transform:uppercase; }}
 h2 {{ margin:4px 0 0; font-size:24px; }}
-.grid {{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:16px; }}
+.grid {{ display:grid; grid-template-columns:repeat(6,1fr); gap:14px; margin-bottom:16px; }}
 .metric {{ background:#f8fbff; border:1px solid #e8eef7; border-radius:18px; padding:14px; }}
 .metric label {{ display:block; color:var(--muted); font-size:12px; margin-bottom:8px; }}
 .metric strong {{ font-size:22px; }}
 .replay {{ padding:14px; background:#f8fbff; border-radius:16px; margin:10px 0 14px; color:var(--muted); }}
 .replay b {{ color:var(--ink); }}
+.chart-box {{ background:#fff; border:1px solid #e8eef7; border-radius:20px; padding:12px; margin:14px 0 16px; overflow:auto; }}
+.chart-box img {{ width:100%; min-width:1050px; display:block; border-radius:14px; }}
+.chart-missing {{ padding:24px; border:1px dashed #ccd7e5; border-radius:18px; color:var(--muted); margin:14px 0; }}
 ul {{ margin:0; padding-left:20px; color:#344054; }}
 li {{ margin:6px 0; }}
-@media (max-width:900px) {{ .grid {{ grid-template-columns:1fr; }} .hero {{ display:block; }} .panel {{ overflow-x:auto; }} }}
+@media (max-width:1100px) {{ .grid {{ grid-template-columns:repeat(2,1fr); }} .hero {{ display:block; }} .panel {{ overflow-x:auto; }} }}
 </style>
 </head>
 <body>
@@ -125,7 +147,7 @@ li {{ margin:6px 0; }}
   <div class="hero">
     <div>
       <h1>ADE Recommendation Report</h1>
-      <div class="sub">최근 대금 이벤트 후보에서 6개월 주봉 Shape와 현재 STO 3계층 구조가 모두 유사한 종목</div>
+      <div class="sub">좌측은 현재 6개월 주봉, 우측은 매칭된 Replay 이후 6개월 흐름입니다. 가격은 Normalize되어 모양 중심으로 비교됩니다.</div>
     </div>
     <div class="pill">Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
   </div>

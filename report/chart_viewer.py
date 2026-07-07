@@ -10,7 +10,11 @@ from datahub.repository import PriceRepository
 
 
 class RecommendationChartViewer:
-    """Create HTS-style left/right comparison charts for recommendation reports."""
+    """Create HTS-style timeline comparison charts for recommendation reports.
+
+    Left side  : current chart ending at NOW.
+    Right side : replay chart with the equivalent NOW point marked, plus the future path after that point.
+    """
 
     def __init__(self, db_path: str | Path = "datahub/market.db", output_dir: str | Path = "output/charts") -> None:
         self.price_repo = PriceRepository(db_path)
@@ -47,41 +51,50 @@ class RecommendationChartViewer:
             matched_market, matched_ticker, matched_date = self._parse_event_id(str(matched_event_id))
             current_daily = self.price_repo.fetch_dataframe(market, ticker, source="fdr")
             replay_daily = self.price_repo.fetch_dataframe(matched_market, matched_ticker, source="fdr")
-            current_window = current_daily.tail(max(60, lookback_months * 22)).reset_index(drop=True)
-            replay_window = self._event_forward_window(replay_daily, matched_date, lookback_months)
+
+            compare_days = max(60, lookback_months * 22)
+            future_months = 6
+            future_days = future_months * 22
+
+            current_window = current_daily.tail(compare_days).reset_index(drop=True)
+            replay_window = self._event_forward_window(replay_daily, matched_date, compare_days + future_days)
             if current_window.empty or replay_window.empty:
                 return None
 
             current_weekly = self._to_weekly(current_window).tail(26).reset_index(drop=True)
-            replay_weekly = self._to_weekly(replay_window).tail(26).reset_index(drop=True)
-            if len(current_weekly) < 5 or len(replay_weekly) < 5:
+            replay_weekly_full = self._to_weekly(replay_window).reset_index(drop=True)
+            compare_weeks = len(current_weekly)
+            now_index = min(compare_weeks - 1, len(replay_weekly_full) - 1)
+            if len(current_weekly) < 5 or len(replay_weekly_full) < max(5, now_index + 1):
                 return None
 
             fig, axes = plt.subplots(
-                5,
+                6,
                 2,
-                figsize=(15.5, 9.5),
-                gridspec_kw={"height_ratios": [3.3, 1.1, 1.1, 1.1, 1.0]},
+                figsize=(16, 11.3),
+                gridspec_kw={"height_ratios": [3.5, 1.1, 1.1, 1.1, 1.0, 1.25]},
                 sharex="col",
             )
             fig.patch.set_facecolor("#f5f8fc")
             fig.suptitle(
-                f"ADE Chart Viewer #{rank}-{match_rank}  |  {market.upper()}:{ticker}  vs  {matched_event_id}",
-                fontsize=15,
+                f"ADE Timeline Viewer #{rank}-{match_rank}  |  {market.upper()}:{ticker} NOW  →  {matched_event_id} equivalent point + future",
+                fontsize=14,
                 fontweight="bold",
                 x=0.02,
                 ha="left",
             )
 
-            self._plot_price_panel(axes[0][0], current_weekly, "현재 6개월 주봉", Rectangle)
-            self._plot_price_panel(axes[0][1], replay_weekly, "Replay 이후 6개월 주봉", Rectangle)
+            self._plot_price_panel(axes[0][0], current_weekly, "현재 6개월 주봉 · NOW 위치", Rectangle, marker_index=len(current_weekly) - 1, marker_label="NOW")
+            self._plot_price_panel(axes[0][1], replay_weekly_full, "Replay 전체 · ●가 현재와 같은 시점, 오른쪽은 이후 실제 흐름", Rectangle, marker_index=now_index, marker_label="SAME AS NOW")
 
             for row, period, title in [(1, 5, "STO 5"), (2, 14, "STO 14"), (3, 34, "STO 34")]:
-                self._plot_sto_panel(axes[row][0], current_weekly, period, f"현재 {title}")
-                self._plot_sto_panel(axes[row][1], replay_weekly, period, f"Replay {title}")
+                self._plot_sto_panel(axes[row][0], current_weekly, period, f"현재 {title}", marker_index=len(current_weekly) - 1)
+                self._plot_sto_panel(axes[row][1], replay_weekly_full, period, f"Replay {title}", marker_index=now_index)
 
-            self._plot_volume_panel(axes[4][0], current_weekly, "현재 거래량")
-            self._plot_volume_panel(axes[4][1], replay_weekly, "Replay 거래량")
+            self._plot_volume_panel(axes[4][0], current_weekly, "현재 거래량", marker_index=len(current_weekly) - 1)
+            self._plot_volume_panel(axes[4][1], replay_weekly_full, "Replay 거래량", marker_index=now_index)
+            self._plot_future_return_panel(axes[5][0], current_weekly, "현재: 미래는 아직 없음", marker_index=len(current_weekly) - 1)
+            self._plot_future_return_panel(axes[5][1], replay_weekly_full, "Replay: 동일시점 이후 실제 수익률", marker_index=now_index)
 
             for ax_row in axes:
                 for ax in ax_row:
@@ -91,7 +104,7 @@ class RecommendationChartViewer:
                         spine.set_alpha(0.18)
 
             fig.tight_layout(rect=[0, 0, 1, 0.965])
-            file_name = f"recommendation_{rank:02d}_top{match_rank}_{market}_{ticker}_{matched_ticker}_{matched_date}.png".replace(":", "_")
+            file_name = f"recommendation_{rank:02d}_top{match_rank}_{market}_{ticker}_{matched_ticker}_{matched_date}_timeline.png".replace(":", "_")
             out = self.output_dir / file_name
             fig.savefig(out, dpi=150, bbox_inches="tight")
             plt.close(fig)
@@ -107,7 +120,7 @@ class RecommendationChartViewer:
         raise ValueError(f"Invalid event id: {event_id}")
 
     @staticmethod
-    def _event_forward_window(data: pd.DataFrame, event_date: str, months: int) -> pd.DataFrame:
+    def _event_forward_window(data: pd.DataFrame, event_date: str, days: int) -> pd.DataFrame:
         if data.empty or "Date" not in data.columns:
             return pd.DataFrame()
         df = data.copy()
@@ -117,7 +130,7 @@ class RecommendationChartViewer:
         if matches.empty:
             return pd.DataFrame()
         start = int(matches.index[0])
-        end = min(len(df), start + max(60, months * 22))
+        end = min(len(df), start + max(60, days))
         return df.iloc[start:end].reset_index(drop=True)
 
     @staticmethod
@@ -139,7 +152,7 @@ class RecommendationChartViewer:
             out[col] = out[col].astype(float) / base * 100.0
         return out
 
-    def _plot_price_panel(self, ax: Any, weekly: pd.DataFrame, title: str, rectangle_cls: Any) -> None:
+    def _plot_price_panel(self, ax: Any, weekly: pd.DataFrame, title: str, rectangle_cls: Any, marker_index: int | None = None, marker_label: str = "NOW") -> None:
         w = self._norm_ohlc(weekly)
         x = list(range(len(w)))
         ma5 = w["Close"].rolling(5, min_periods=2).mean()
@@ -158,14 +171,14 @@ class RecommendationChartViewer:
         low, high = float(w["Low"].min()), float(w["High"].max())
         for ratio in [0, 0.236, 0.382, 0.5, 0.618, 0.764, 1.0]:
             y = high - (high - low) * ratio
-            ax.axhline(y, color="#8d3c75", linewidth=0.6, alpha=0.45)
-            ax.text(len(w) - 0.2, y, f"{ratio*100:.1f}%", fontsize=7, color="#8d3c75", va="center")
-        ax.set_title(title, loc="left", fontsize=11, fontweight="bold")
+            ax.axhline(y, color="#8d3c75", linewidth=0.6, alpha=0.42)
+        self._mark_equivalent_point(ax, w, marker_index, marker_label)
+        ax.set_title(title, loc="left", fontsize=10.5, fontweight="bold")
         ax.set_ylabel("Normalized")
         ax.legend(loc="upper left", fontsize=7, frameon=False, ncol=3)
         ax.set_xlim(-1, len(w))
 
-    def _plot_sto_panel(self, ax: Any, weekly: pd.DataFrame, period: int, title: str) -> None:
+    def _plot_sto_panel(self, ax: Any, weekly: pd.DataFrame, period: int, title: str, marker_index: int | None = None) -> None:
         sto = self._stochastic(weekly, period)
         signal = sto.rolling(3, min_periods=1).mean()
         x = list(range(len(sto)))
@@ -174,18 +187,61 @@ class RecommendationChartViewer:
         ax.fill_between(x, sto, signal, where=(sto >= signal), alpha=0.18, color="#ff4f88")
         ax.axhline(80, color="#c018c0", linewidth=0.8, alpha=0.7)
         ax.axhline(20, color="#c018c0", linewidth=0.8, alpha=0.7)
+        if marker_index is not None and 0 <= marker_index < len(sto):
+            ax.axvline(marker_index, color="#111827", linewidth=1.2, linestyle="--", alpha=0.75)
+            ax.scatter([marker_index], [float(sto.iloc[marker_index])], s=34, color="#111827", zorder=5)
         ax.set_ylim(0, 100)
         ax.set_title(title, loc="left", fontsize=9)
         ax.legend(loc="upper left", fontsize=7, frameon=False, ncol=2)
 
     @staticmethod
-    def _plot_volume_panel(ax: Any, weekly: pd.DataFrame, title: str) -> None:
+    def _plot_volume_panel(ax: Any, weekly: pd.DataFrame, title: str, marker_index: int | None = None) -> None:
         vol = weekly["Volume"].astype(float)
         norm = vol / max(float(vol.max()), 1.0) * 100.0
         colors = ["#e53935" if weekly["Close"].iloc[i] >= weekly["Open"].iloc[i] else "#1e5bff" for i in range(len(weekly))]
         ax.bar(range(len(weekly)), norm, color=colors, alpha=0.8, width=0.65)
+        if marker_index is not None and 0 <= marker_index < len(weekly):
+            ax.axvline(marker_index, color="#111827", linewidth=1.2, linestyle="--", alpha=0.75)
         ax.set_ylim(0, 110)
         ax.set_title(title, loc="left", fontsize=9)
+
+    @staticmethod
+    def _plot_future_return_panel(ax: Any, weekly: pd.DataFrame, title: str, marker_index: int | None = None) -> None:
+        close = weekly["Close"].astype(float).reset_index(drop=True)
+        if marker_index is None or marker_index < 0 or marker_index >= len(close):
+            marker_index = len(close) - 1
+        base = float(close.iloc[marker_index]) if float(close.iloc[marker_index]) != 0 else 1.0
+        returns = (close / base - 1.0) * 100.0
+        x = list(range(len(close)))
+        ax.plot(x, returns, linewidth=1.4, color="#10a37f")
+        ax.axhline(0, color="#111827", linewidth=0.8, alpha=0.55)
+        ax.axvline(marker_index, color="#111827", linewidth=1.2, linestyle="--", alpha=0.78)
+        ax.scatter([marker_index], [0], s=48, color="#111827", zorder=5)
+        if marker_index + 1 < len(close):
+            future = returns.iloc[marker_index:]
+            max_future = float(future.max())
+            min_future = float(future.min())
+            ax.text(marker_index + 0.3, max_future, f"future max {max_future:.1f}%", fontsize=8, color="#10a37f", va="bottom")
+            ax.text(marker_index + 0.3, min_future, f"future min {min_future:.1f}%", fontsize=8, color="#d64545", va="top")
+        ax.set_title(title, loc="left", fontsize=9, fontweight="bold")
+        ax.set_ylabel("Return %")
+
+    @staticmethod
+    def _mark_equivalent_point(ax: Any, w: pd.DataFrame, marker_index: int | None, marker_label: str) -> None:
+        if marker_index is None or not (0 <= marker_index < len(w)):
+            return
+        y = float(w["Close"].iloc[marker_index])
+        ax.axvline(marker_index, color="#111827", linewidth=1.35, linestyle="--", alpha=0.82)
+        ax.scatter([marker_index], [y], s=70, color="#111827", edgecolor="white", linewidth=1.2, zorder=6)
+        ax.annotate(
+            marker_label,
+            xy=(marker_index, y),
+            xytext=(marker_index + 0.4, y * 1.02),
+            fontsize=8,
+            fontweight="bold",
+            color="#111827",
+            arrowprops={"arrowstyle": "->", "linewidth": 0.8, "color": "#111827"},
+        )
 
     @staticmethod
     def _stochastic(df: pd.DataFrame, period: int) -> pd.Series:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
@@ -20,6 +21,17 @@ class RecommendationChartViewer:
         self.price_repo.close()
 
     def render(self, item: Any, rank: int, lookback_months: int = 6) -> str | None:
+        return self.render_match(item, getattr(item, "matched_event_id"), rank, 1, lookback_months)
+
+    def render_replay_match(self, item: Any, match: Any, rank: int, match_rank: int, lookback_months: int = 6) -> str | None:
+        proxy = SimpleNamespace(
+            market=getattr(item, "market"),
+            ticker=getattr(item, "ticker"),
+            matched_event_id=getattr(match, "event_id"),
+        )
+        return self.render_match(proxy, getattr(match, "event_id"), rank, match_rank, lookback_months)
+
+    def render_match(self, item: Any, matched_event_id: str, rank: int, match_rank: int, lookback_months: int = 6) -> str | None:
         try:
             import matplotlib
 
@@ -32,8 +44,7 @@ class RecommendationChartViewer:
         try:
             market = str(getattr(item, "market"))
             ticker = str(getattr(item, "ticker"))
-            matched_event_id = str(getattr(item, "matched_event_id"))
-            matched_market, matched_ticker, matched_date = self._parse_event_id(matched_event_id)
+            matched_market, matched_ticker, matched_date = self._parse_event_id(str(matched_event_id))
             current_daily = self.price_repo.fetch_dataframe(market, ticker, source="fdr")
             replay_daily = self.price_repo.fetch_dataframe(matched_market, matched_ticker, source="fdr")
             current_window = current_daily.tail(max(60, lookback_months * 22)).reset_index(drop=True)
@@ -55,7 +66,7 @@ class RecommendationChartViewer:
             )
             fig.patch.set_facecolor("#f5f8fc")
             fig.suptitle(
-                f"ADE Chart Viewer #{rank}  |  {market.upper()}:{ticker}  vs  {matched_event_id}",
+                f"ADE Chart Viewer #{rank}-{match_rank}  |  {market.upper()}:{ticker}  vs  {matched_event_id}",
                 fontsize=15,
                 fontweight="bold",
                 x=0.02,
@@ -80,7 +91,7 @@ class RecommendationChartViewer:
                         spine.set_alpha(0.18)
 
             fig.tight_layout(rect=[0, 0, 1, 0.965])
-            file_name = f"recommendation_{rank:02d}_{market}_{ticker}_{matched_ticker}_{matched_date}.png".replace(":", "_")
+            file_name = f"recommendation_{rank:02d}_top{match_rank}_{market}_{ticker}_{matched_ticker}_{matched_date}.png".replace(":", "_")
             out = self.output_dir / file_name
             fig.savefig(out, dpi=150, bbox_inches="tight")
             plt.close(fig)

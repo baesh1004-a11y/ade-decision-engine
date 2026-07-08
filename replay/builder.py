@@ -31,8 +31,20 @@ class ReplayEventDBBuilder:
         self.replay_repo.close()
 
     def build(self, market: str = "kr", limit: int = 0, clear: bool = False) -> tuple[int, int]:
+        migrated_checkpoints = 0
         if clear:
             self.replay_repo.clear(self.ade_version)
+        else:
+            migrated_checkpoints = self.replay_repo.bootstrap_checkpoints_from_existing_replay(
+                self.ade_version,
+                market=market,
+                source="fdr",
+            )
+            if migrated_checkpoints:
+                print(
+                    f"[MIGRATION] existing Replay DB reused; "
+                    f"created checkpoints={migrated_checkpoints}"
+                )
 
         symbols = DynamicUniverseManager().active(market)
         if limit > 0:
@@ -110,6 +122,7 @@ class ReplayEventDBBuilder:
 
         self.last_stats = {
             "symbols": len(symbols),
+            "migrated_checkpoints": migrated_checkpoints,
             "updated_symbols": updated_symbols,
             "skipped_up_to_date": skipped_up_to_date,
             "skipped_no_data": skipped_no_data,

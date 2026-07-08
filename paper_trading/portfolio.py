@@ -84,3 +84,28 @@ class PaperPortfolioRepository:
             count += 1
         self.conn.commit()
         return count
+
+    def open_position_keys(self) -> set[str]:
+        """Return market:ticker keys whose accepted net quantity is still positive."""
+        rows = self.conn.execute(
+            """
+            SELECT
+                LOWER(market) AS market,
+                ticker,
+                SUM(
+                    CASE
+                        WHEN UPPER(side)='BUY' THEN quantity
+                        WHEN UPPER(side)='SELL' THEN -quantity
+                        ELSE 0
+                    END
+                ) AS net_quantity
+            FROM paper_orders
+            WHERE accepted=1
+            GROUP BY LOWER(market), ticker
+            HAVING net_quantity > 0
+            """
+        ).fetchall()
+        return {f"{str(row['market']).lower()}:{row['ticker']}" for row in rows}
+
+    def is_held(self, market: str, ticker: str) -> bool:
+        return f"{market.lower()}:{ticker}" in self.open_position_keys()

@@ -24,6 +24,7 @@ class ReplayEventDBBuilder:
         self.state_engine = ADEStateEngine()
         self.centerline_engine = CenterlineEngine()
         self.analyzer = ReplayEventAnalyzer(max_flow_days=240)
+        self.last_stats: dict[str, int | str | None] = {}
 
     def close(self) -> None:
         self.price_repo.close()
@@ -32,19 +33,56 @@ class ReplayEventDBBuilder:
     def build(self, market: str = "kr", limit: int = 0, clear: bool = False) -> tuple[int, int]:
         if clear:
             self.replay_repo.clear(self.ade_version)
+
         symbols = DynamicUniverseManager().active(market)
         if limit > 0:
             symbols = symbols[:limit]
+
         total_events = 0
         total_flows = 0
+        updated_symbols = 0
+        skipped_up_to_date = 0
+        skipped_no_data = 0
+
         for idx, symbol in enumerate(symbols, start=1):
             data = self.price_repo.fetch_dataframe(symbol.market, symbol.ticker, source="fdr")
             df = self._prepare(data)
             if len(df) < 180:
-                print(f"[{idx}/{len(symbols)}] {symbol.market.upper()}:{symbol.ticker} SKIP")
+                skipped_no_data += 1
+                print(f"[{idx}/{len(symbols)}] {symbol.market.upper()}:{symbol.ticker} SKIP no-data")
                 continue
-            events = self.event_filter.historical_events(symbol.market, symbol.ticker, symbol.name, df)
-            for event in events:
+
+            latest_price_date = str(pd.Timestamp(df.iloc[-1]["Date"]).date())
+            last_processed_date = None if clear else self.replay_repo.get_last_processed_date(
+                self.ade_version,
+                symbol.market,
+                symbol.ticker,
+            )
+
+            if last_processed_date is not None and latest_price_date <= last_processed_date:
+                skipped_up_to_date += 1
+                print(
+                    f"[{idx}/{len(symbols)}] {symbol.market.upper()}:{symbol.ticker} "
+                    f"UP-TO-DATE last={last_processed_date}"
+                )
+                continue
+
+            scan_df = self._incremental_scan_window(df, last_processed_date)
+            detected_events = self.event_filter.historical_events(
+                symbol.market,
+                symbol.ticker,
+                symbol.name,
+                scan_df,
+            )
+            new_events = [
+                event
+                for event in detected_events
+                if last_processed_date is None or event.event_date > last_processed_date
+            ]
+
+            symbol_event_count = 0
+            symbol_flow_count = 0
+            for event in new_events:
                 event_index = self._index_by_date(df, event.event_date)
                 if event_index is None or event_index + 5 >= len(df):
                     continue
@@ -53,9 +91,46 @@ class ReplayEventDBBuilder:
                 self.replay_repo.replace_flow(replay_event.event_id, flows)
                 total_events += 1
                 total_flows += len(flows)
+                symbol_event_count += 1
+                symbol_flow_count += len(flows)
+
+            self.replay_repo.set_last_processed_date(
+                self.ade_version,
+                symbol.market,
+                symbol.ticker,
+                latest_price_date,
+            )
             self.replay_repo.commit()
-            print(f"[{idx}/{len(symbols)}] {symbol.market.upper()}:{symbol.ticker} events={len(events)}")
+            updated_symbols += 1
+            print(
+                f"[{idx}/{len(symbols)}] {symbol.market.upper()}:{symbol.ticker} "
+                f"from={last_processed_date or 'FULL'} to={latest_price_date} "
+                f"new_events={symbol_event_count} flows={symbol_flow_count}"
+            )
+
+        self.last_stats = {
+            "symbols": len(symbols),
+            "updated_symbols": updated_symbols,
+            "skipped_up_to_date": skipped_up_to_date,
+            "skipped_no_data": skipped_no_data,
+            "new_events": total_events,
+            "new_flows": total_flows,
+            "latest_checkpoint": self.replay_repo.latest_checkpoint(self.ade_version, market),
+            "checkpoint_symbols": self.replay_repo.checkpoint_count(self.ade_version, market),
+        }
         return total_events, total_flows
+
+    @staticmethod
+    def _incremental_scan_window(df: pd.DataFrame, last_processed_date: str | None) -> pd.DataFrame:
+        if last_processed_date is None:
+            return df
+        dates = pd.to_datetime(df["Date"])
+        matches = df.index[dates.dt.date.astype(str) <= last_processed_date].tolist()
+        if not matches:
+            return df
+        last_index = int(matches[-1])
+        start_index = max(0, last_index - 180)
+        return df.iloc[start_index:].reset_index(drop=True)
 
     def _make_event(self, name: str | None, event, df: pd.DataFrame, event_index: int) -> tuple[ReplayEvent, list[ReplayEventFlow]]:
         state_window = df.iloc[max(0, event_index - 119) : event_index + 1]
@@ -118,10 +193,11 @@ class ReplayEventDBBuilder:
     def _prepare(data: pd.DataFrame) -> pd.DataFrame:
         df = data.copy()
         if "Date" in df.columns:
+            df["Date"] = pd.to_datetime(df["Date"])
             df = df.sort_values("Date")
         for col in ["Open", "High", "Low", "Close", "Volume"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-        return df.dropna(subset=["Open", "High", "Low", "Close", "Volume"]).reset_index(drop=True)
+        return df.dropna(subset=["Date", "Open", "High", "Low", "Close", "Volume"]).reset_index(drop=True)
 
     @staticmethod
     def _index_by_date(df: pd.DataFrame, date_text: str) -> int | None:

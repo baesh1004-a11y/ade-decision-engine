@@ -19,6 +19,7 @@ from dashboard.paper_app import (
     _system_status,
     _top_movers,
 )
+from dashboard.sell_panel import render_sell_panel
 from recommendation.event_recommender import RecentMoneyEventRecommender
 from report.chart_viewer import RecommendationChartViewer
 
@@ -51,7 +52,7 @@ def _run(db_path: str = "datahub/market.db") -> None:
           <div>
             <div class="eyebrow">ADE v5 · INTEGRATED DECISION COCKPIT</div>
             <h1>AI Decision Engine</h1>
-            <p>추천 생성 · 추천 검증 리포트 · Replay 비교 · 모의투자 운용을 한 화면에서 확인합니다.</p>
+            <p>추천 생성 · 추천 검증 · 보유 판단 · 사용자 승인 모의매도를 한 화면에서 확인합니다.</p>
           </div>
           <div class="hero-status"><span class="pulse"></span>PAPER MODE</div>
         </div>
@@ -69,8 +70,8 @@ def _run(db_path: str = "datahub/market.db") -> None:
 
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["◈ Cockpit", "▣ Positions", "⌁ Replay Basis", "◎ Orders", "📑 추천 검증 리포트"]
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["◈ Cockpit", "▣ Positions", "⌁ Replay Basis", "◎ Orders", "📑 추천 검증 리포트", "🔻 매도 판단"]
     )
 
     with tab1:
@@ -106,7 +107,10 @@ def _run(db_path: str = "datahub/market.db") -> None:
     with tab5:
         _recommendation_report(st, db_path)
 
-    st.caption("ADE Integrated Dashboard · 추천 검증 리포트는 별도 HTML을 열지 않고 이 화면에서 확인합니다.")
+    with tab6:
+        render_sell_panel(st, db_path, positions)
+
+    st.caption("ADE Integrated Dashboard · 매도는 자동 실행하지 않으며 사용자가 직접 승인한 KIS 모의주문만 전송합니다.")
 
 
 def _recommendation_report(st: object, db_path: str) -> None:

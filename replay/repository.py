@@ -60,20 +60,84 @@ class ReplayEventRepository:
             )
             """
         )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS replay_build_state (
+                ade_version TEXT NOT NULL,
+                market TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                last_price_date TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ade_version, market, ticker)
+            )
+            """
+        )
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_replay_events_state ON replay_events (sto_state, ma_state, weekly_position, money_flow)")
         self.conn.execute("CREATE INDEX IF NOT EXISTS idx_replay_events_symbol ON replay_events (market, ticker, event_date)")
+        self.conn.execute("CREATE INDEX IF NOT EXISTS idx_replay_build_state_market ON replay_build_state (ade_version, market, last_price_date)")
         self.conn.commit()
 
     def clear(self, ade_version: str | None = None) -> None:
         if ade_version is None:
             self.conn.execute("DELETE FROM replay_event_flow")
             self.conn.execute("DELETE FROM replay_events")
+            self.conn.execute("DELETE FROM replay_build_state")
         else:
             ids = [row["event_id"] for row in self.conn.execute("SELECT event_id FROM replay_events WHERE ade_version=?", (ade_version,)).fetchall()]
             for event_id in ids:
                 self.conn.execute("DELETE FROM replay_event_flow WHERE event_id=?", (event_id,))
             self.conn.execute("DELETE FROM replay_events WHERE ade_version=?", (ade_version,))
+            self.conn.execute("DELETE FROM replay_build_state WHERE ade_version=?", (ade_version,))
         self.conn.commit()
+
+    def get_last_processed_date(self, ade_version: str, market: str, ticker: str) -> str | None:
+        row = self.conn.execute(
+            """
+            SELECT last_price_date
+            FROM replay_build_state
+            WHERE ade_version=? AND market=? AND ticker=?
+            """,
+            (ade_version, market, ticker),
+        ).fetchone()
+        return None if row is None else str(row["last_price_date"])
+
+    def set_last_processed_date(self, ade_version: str, market: str, ticker: str, last_price_date: str) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO replay_build_state (ade_version, market, ticker, last_price_date, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(ade_version, market, ticker) DO UPDATE SET
+                last_price_date=excluded.last_price_date,
+                updated_at=CURRENT_TIMESTAMP
+            """,
+            (ade_version, market, ticker, last_price_date),
+        )
+
+    def latest_checkpoint(self, ade_version: str, market: str | None = None) -> str | None:
+        if market is None:
+            row = self.conn.execute(
+                "SELECT MAX(last_price_date) AS d FROM replay_build_state WHERE ade_version=?",
+                (ade_version,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT MAX(last_price_date) AS d FROM replay_build_state WHERE ade_version=? AND market=?",
+                (ade_version, market),
+            ).fetchone()
+        return None if row is None or row["d"] is None else str(row["d"])
+
+    def checkpoint_count(self, ade_version: str, market: str | None = None) -> int:
+        if market is None:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS c FROM replay_build_state WHERE ade_version=?",
+                (ade_version,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(
+                "SELECT COUNT(*) AS c FROM replay_build_state WHERE ade_version=? AND market=?",
+                (ade_version, market),
+            ).fetchone()
+        return int(row["c"])
 
     def upsert_event(self, event: ReplayEvent) -> None:
         self.conn.execute(

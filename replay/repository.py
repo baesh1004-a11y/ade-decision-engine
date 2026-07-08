@@ -139,6 +139,66 @@ class ReplayEventRepository:
             ).fetchone()
         return int(row["c"])
 
+    def bootstrap_checkpoints_from_existing_replay(
+        self,
+        ade_version: str,
+        market: str | None = None,
+        source: str = "fdr",
+    ) -> int:
+        """Create missing incremental checkpoints without rebuilding existing Replay events.
+
+        Existing Replay symbols are treated as already processed. The checkpoint uses the
+        latest locally stored price date, falling back to the Replay event/end date when
+        local price data is unavailable. Existing checkpoints are never overwritten.
+        """
+        replay_where = "WHERE ade_version=?"
+        replay_params: list[object] = [ade_version]
+        price_where = "WHERE source=?"
+        price_params: list[object] = [source]
+        if market is not None:
+            replay_where += " AND market=?"
+            replay_params.append(market)
+            price_where += " AND market=?"
+            price_params.append(market)
+
+        before = self.conn.total_changes
+        self.conn.execute(
+            f"""
+            WITH replay_symbols AS (
+                SELECT
+                    market,
+                    ticker,
+                    MAX(COALESCE(event_end_date, event_date)) AS replay_last_date
+                FROM replay_events
+                {replay_where}
+                GROUP BY market, ticker
+            ),
+            price_latest AS (
+                SELECT market, ticker, MAX(trade_date) AS latest_price_date
+                FROM price_bars
+                {price_where}
+                GROUP BY market, ticker
+            )
+            INSERT OR IGNORE INTO replay_build_state (
+                ade_version, market, ticker, last_price_date, updated_at
+            )
+            SELECT
+                ?,
+                rs.market,
+                rs.ticker,
+                COALESCE(pl.latest_price_date, rs.replay_last_date),
+                CURRENT_TIMESTAMP
+            FROM replay_symbols rs
+            LEFT JOIN price_latest pl
+              ON pl.market=rs.market AND pl.ticker=rs.ticker
+            WHERE COALESCE(pl.latest_price_date, rs.replay_last_date) IS NOT NULL
+            """,
+            [*replay_params, *price_params, ade_version],
+        )
+        inserted = self.conn.total_changes - before
+        self.conn.commit()
+        return int(inserted)
+
     def upsert_event(self, event: ReplayEvent) -> None:
         self.conn.execute(
             """

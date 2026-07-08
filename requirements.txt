@@ -5,3 +5,4 @@ finance-datareader
 ta
 fastapi
 uvicorn
+streamlit

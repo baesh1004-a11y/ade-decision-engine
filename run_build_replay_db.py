@@ -5,6 +5,7 @@ from pathlib import Path
 from time import perf_counter
 
 from replay.builder import ReplayEventDBBuilder
+from replay.models import ADE_VERSION
 from replay.repository import ReplayEventRepository
 
 
@@ -31,8 +32,8 @@ def main() -> None:
     repo = ReplayEventRepository(DB_PATH)
     try:
         before_events, before_flows = repo.counts()
-        before_checkpoint = repo.latest_checkpoint("2.0", args.market)
-        checkpoint_symbols = repo.checkpoint_count("2.0", args.market)
+        before_checkpoint = repo.latest_checkpoint(ADE_VERSION, args.market)
+        checkpoint_symbols = repo.checkpoint_count(ADE_VERSION, args.market)
     finally:
         repo.close()
 
@@ -40,6 +41,7 @@ def main() -> None:
     print(" ADE REPLAY EVENT DB UPDATE")
     print("========================================")
     print(f"Database           : {DB_PATH}")
+    print(f"ADE Version        : {ADE_VERSION}")
     print(f"Market             : {args.market}")
     print(f"Limit              : {args.limit or 'none'}")
     print(f"Mode               : {'FULL REBUILD' if full_build else 'INCREMENTAL'}")
@@ -47,6 +49,8 @@ def main() -> None:
     print(f"Existing Flows     : {before_flows}")
     print(f"Checkpoint Symbols : {checkpoint_symbols}")
     print(f"Latest Checkpoint  : {before_checkpoint or 'none'}")
+    if not full_build and before_events > 0 and checkpoint_symbols == 0:
+        print("Migration          : pending; existing Replay DB will be reused")
 
     started = perf_counter()
     builder = ReplayEventDBBuilder(DB_PATH)
@@ -71,6 +75,7 @@ def main() -> None:
     print(" REPLAY DB UPDATE SUMMARY")
     print("========================================")
     print(f"Mode               : {'FULL REBUILD' if full_build else 'INCREMENTAL'}")
+    print(f"Migrated Checkpoints: {stats.get('migrated_checkpoints', 0)}")
     print(f"Scanned Symbols    : {stats.get('symbols', 0)}")
     print(f"Updated Symbols    : {stats.get('updated_symbols', 0)}")
     print(f"Up-to-date Symbols : {stats.get('skipped_up_to_date', 0)}")

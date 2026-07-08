@@ -9,15 +9,7 @@ from paper_trading.models import PaperOrderExecution, PaperOrderPlan
 
 
 class PaperOrderManager:
-    """Convert ADE recommendations into paper-trading buy orders.
-
-    Paper rule:
-    - buy every recommended stock,
-    - equal budget per stock,
-    - market order,
-    - skip stocks already held unless explicitly allowed,
-    - sell rules are intentionally not implemented yet.
-    """
+    """Convert ADE recommendations and user-approved exits into paper orders."""
 
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
         self.price_repo = PriceRepository(db_path)
@@ -45,15 +37,11 @@ class PaperOrderManager:
             if not ticker or key in seen:
                 continue
             seen.add(key)
-
             if not allow_rebuy and key in held:
                 self.last_skipped_held.append(key)
                 continue
-
             price = self._latest_close(market, ticker)
-            if price <= 0:
-                continue
-            quantity = int(budget_per_stock // price)
+            quantity = int(budget_per_stock // price) if price > 0 else 0
             if quantity <= 0:
                 continue
             plans.append(
@@ -73,6 +61,31 @@ class PaperOrderManager:
                 )
             )
         return plans
+
+    def build_sell_plan(self, position: object, quantity: int | None = None) -> PaperOrderPlan | None:
+        market = str(getattr(position, "market", None) or position.get("market", "kr")).lower()
+        ticker = str(getattr(position, "ticker", None) or position.get("ticker", ""))
+        held_quantity = int(float(getattr(position, "quantity", None) or position.get("quantity", 0) or 0))
+        sell_quantity = held_quantity if quantity is None else min(max(int(quantity), 0), held_quantity)
+        price = self._latest_close(market, ticker)
+        if not ticker or sell_quantity <= 0 or price <= 0:
+            return None
+        name = getattr(position, "name", None) or position.get("name")
+        event_id = getattr(position, "top1_event_id", None) or position.get("top1_event_id")
+        return PaperOrderPlan(
+            market=market,
+            ticker=ticker,
+            name=name,
+            side="SELL",
+            budget=0,
+            reference_price=round(price, 4),
+            quantity=sell_quantity,
+            estimated_amount=int(sell_quantity * price),
+            top1_event_id=str(event_id or ""),
+            weekly_similarity=None,
+            sto_similarity=None,
+            final_similarity=None,
+        )
 
     def execute(self, broker: object, plans: Iterable[PaperOrderPlan], dry_run: bool = True) -> list[PaperOrderExecution]:
         executions: list[PaperOrderExecution] = []

@@ -11,29 +11,45 @@ from paper_trading.models import PaperOrderExecution, PaperOrderPlan
 class PaperOrderManager:
     """Convert ADE recommendations into paper-trading buy orders.
 
-    Paper v1 rule:
+    Paper rule:
     - buy every recommended stock,
     - equal budget per stock,
     - market order,
+    - skip stocks already held unless explicitly allowed,
     - sell rules are intentionally not implemented yet.
     """
 
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
         self.price_repo = PriceRepository(db_path)
+        self.last_skipped_held: list[str] = []
 
     def close(self) -> None:
         self.price_repo.close()
 
-    def build_buy_plans(self, recommendations: Iterable[object], budget_per_stock: int = 1_000_000) -> list[PaperOrderPlan]:
+    def build_buy_plans(
+        self,
+        recommendations: Iterable[object],
+        budget_per_stock: int = 1_000_000,
+        held_position_keys: set[str] | None = None,
+        allow_rebuy: bool = False,
+    ) -> list[PaperOrderPlan]:
         plans: list[PaperOrderPlan] = []
         seen: set[str] = set()
+        held = {str(key).lower() for key in (held_position_keys or set())}
+        self.last_skipped_held = []
+
         for item in recommendations:
-            market = str(getattr(item, "market", "kr"))
+            market = str(getattr(item, "market", "kr")).lower()
             ticker = str(getattr(item, "ticker", ""))
-            key = f"{market}:{ticker}"
+            key = f"{market}:{ticker}".lower()
             if not ticker or key in seen:
                 continue
             seen.add(key)
+
+            if not allow_rebuy and key in held:
+                self.last_skipped_held.append(key)
+                continue
+
             price = self._latest_close(market, ticker)
             if price <= 0:
                 continue

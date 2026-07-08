@@ -21,6 +21,11 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Preview only. No KIS order is sent.")
     parser.add_argument("--execute", action="store_true", help="Send paper orders to KIS mock trading account.")
     parser.add_argument("--yes", action="store_true", help="Skip confirmation prompt when --execute is used.")
+    parser.add_argument(
+        "--allow-rebuy",
+        action="store_true",
+        help="Allow another BUY for a stock that is already held. Default is to skip held stocks.",
+    )
     args = parser.parse_args()
 
     if args.execute and args.dry_run:
@@ -40,7 +45,13 @@ def main() -> None:
             min_sto_similarity=args.min_sto,
             replay_top_n=args.replay_top,
         )
-        plans = order_manager.build_buy_plans(recommendations, budget_per_stock=args.budget)
+        held_position_keys = portfolio.open_position_keys()
+        plans = order_manager.build_buy_plans(
+            recommendations,
+            budget_per_stock=args.budget,
+            held_position_keys=held_position_keys,
+            allow_rebuy=args.allow_rebuy,
+        )
 
         print("\n========================================")
         print(" ADE PAPER TRADING BUY PLAN")
@@ -49,7 +60,16 @@ def main() -> None:
         print(f"Rule             : weekly >= {args.min_weekly:.1f}% AND STO >= {args.min_sto:.1f}%")
         print(f"Budget per stock : {args.budget:,} KRW")
         print(f"Recommendations  : {len(recommendations)}")
+        print(f"Held positions   : {len(held_position_keys)}")
+        print(f"Rebuy policy     : {'ALLOW' if args.allow_rebuy else 'SKIP HELD'}")
+        print(f"Skipped held     : {len(order_manager.last_skipped_held)}")
         print(f"Order plans      : {len(plans)}")
+
+        if order_manager.last_skipped_held:
+            print("\nAlready held / skipped:")
+            for key in order_manager.last_skipped_held:
+                print(f"- {key.upper()}")
+
         print("\nRank | Stock | Qty | Ref Price | Est Amount | Final | Weekly | STO | Top1 Replay")
         print("-----|-------|-----|-----------|------------|-------|--------|-----|------------")
         total = 0
@@ -64,7 +84,7 @@ def main() -> None:
         print(f"\nTotal estimated buy amount: {total:,} KRW")
 
         if not plans:
-            print("No paper orders to submit.")
+            print("No paper orders to submit. All recommendations may already be held.")
             return
 
         if dry_run:

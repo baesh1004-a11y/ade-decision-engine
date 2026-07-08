@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 
 import pandas as pd
 
 from dashboard.data import PaperDashboardData
+from recommendation.event_recommender import RecentMoneyEventRecommender
+from report.chart_viewer import RecommendationChartViewer
 
 
 def _money(value: float) -> str:
@@ -65,7 +68,7 @@ def _run_streamlit(db_path: str = "datahub/market.db") -> None:
 
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
-    tab1, tab2, tab3, tab4 = st.tabs(["◈ Cockpit", "▣ Positions", "⌁ Replay Basis", "◎ Orders"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["◈ Cockpit", "▣ Positions", "⌁ Replay Basis", "◎ Orders", "🔎 추천 검증 1·2·3"])
 
     with tab1:
         left, center, right = st.columns([1.05, 1.55, 1.0])
@@ -96,6 +99,9 @@ def _run_streamlit(db_path: str = "datahub/market.db") -> None:
     with tab4:
         st.markdown("<div class='panel-title'>Order History</div>", unsafe_allow_html=True)
         _orders_table(st, orders)
+
+    with tab5:
+        _recommendation_audit(st, db_path)
 
     st.caption("ADE Paper Dashboard v1. 매도 로직은 아직 적용하지 않았습니다. 현재 화면은 모의매수 주문과 보유 평가 확인용입니다.")
 
@@ -251,7 +257,7 @@ def _replay_basis(st: object, positions: pd.DataFrame) -> None:
           <div class="status-card"><label>Weekly</label><strong>{_fmt_num(row.get('weekly_similarity'))}%</strong><span>shape similarity</span></div>
           <div class="status-card"><label>STO</label><strong>{_fmt_num(row.get('sto_similarity'))}%</strong><span>3-layer structure</span></div>
         </div>
-        <div class="chart-empty">다음 단계에서 이 영역에 현재 차트 vs Replay 차트를 직접 삽입합니다.</div>
+        <div class="chart-empty">추천 검증 1·2·3 탭에서 현재 차트 vs Replay 차트를 확인할 수 있습니다.</div>
         """,
         unsafe_allow_html=True,
     )
@@ -269,6 +275,160 @@ def _orders_table(st: object, orders: pd.DataFrame) -> None:
     st.dataframe(recent[[c for c in show_cols if c in recent.columns]], use_container_width=True, hide_index=True)
 
 
+def _recommendation_audit(st: object, db_path: str) -> None:
+    st.markdown("<div class='panel-title'>추천 검증 1·2·3</div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="chart-empty">
+        Step 1: 왜 추천됐는지 확인 → Step 2: Top5 Replay가 정말 좋은지 확인 → Step 3: 현재 차트와 Replay 차트를 눈으로 검증합니다.
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    top_n = c1.number_input("추천 수", min_value=1, max_value=30, value=10, step=1)
+    weekly_pool = c2.number_input("Weekly Pool", min_value=20, max_value=300, value=100, step=10)
+    min_weekly = c3.number_input("주봉 기준", min_value=70.0, max_value=99.0, value=85.0, step=1.0)
+    min_sto = c4.number_input("STO 기준", min_value=70.0, max_value=99.0, value=85.0, step=1.0)
+
+    if st.button("오늘 추천 검증 실행", type="primary"):
+        st.session_state["audit_recommendations"] = _load_recommendations(
+            db_path=db_path,
+            top_n=int(top_n),
+            weekly_pool_n=int(weekly_pool),
+            min_weekly=float(min_weekly),
+            min_sto=float(min_sto),
+        )
+
+    recommendations = st.session_state.get("audit_recommendations", [])
+    if not recommendations:
+        st.info("버튼을 누르면 현재 데이터 기준 추천종목을 계산하고, Step 1·2·3 검증 화면을 보여줍니다.")
+        return
+
+    rec_df = pd.DataFrame([
+        {
+            "rank": i,
+            "market": r.market.upper(),
+            "ticker": r.ticker,
+            "name": r.name,
+            "decision": r.decision,
+            "final": r.final_similarity,
+            "weekly": r.weekly_similarity,
+            "sto": r.sto_similarity,
+            "top1_replay": r.matched_event_id,
+            "max_return": r.matched_max_return,
+            "mdd": r.matched_max_drawdown,
+        }
+        for i, r in enumerate(recommendations, start=1)
+    ])
+    st.dataframe(rec_df, use_container_width=True, hide_index=True)
+
+    selected_rank = st.selectbox(
+        "검증할 추천종목",
+        list(range(len(recommendations))),
+        format_func=lambda i: f"#{i+1} {recommendations[i].name or recommendations[i].ticker} · {recommendations[i].ticker}",
+    )
+    item = recommendations[selected_rank]
+
+    st.markdown("<div class='audit-steps'>", unsafe_allow_html=True)
+    a, b, c = st.columns(3)
+    a.markdown(
+        f"""
+        <div class="step-card">
+          <div class="step-no">STEP 1</div>
+          <h3>왜 추천됐나?</h3>
+          <b>{item.name or item.ticker}</b><span>{item.market.upper()}:{item.ticker}</span>
+          <p>Final {_fmt_num(item.final_similarity)}% · Weekly {_fmt_num(item.weekly_similarity)}% · STO {_fmt_num(item.sto_similarity)}%</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    best = item.replay_matches[0] if item.replay_matches else None
+    b.markdown(
+        f"""
+        <div class="step-card">
+          <div class="step-no">STEP 2</div>
+          <h3>Replay가 최적인가?</h3>
+          <b>{best.name if best else '-'}</b><span>{best.event_id if best else '-'}</span>
+          <p>Top5 Replay 전체를 아래 표에서 비교합니다.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    c.markdown(
+        f"""
+        <div class="step-card">
+          <div class="step-no">STEP 3</div>
+          <h3>눈으로 검증</h3>
+          <b>SAME AS NOW</b><span>슬라이딩 매칭 위치</span>
+          <p>현재 차트와 Replay 이후 흐름을 나란히 확인합니다.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div class='panel-title'>Step 1 · 추천 사유</div>", unsafe_allow_html=True)
+    for reason in item.reasons:
+        st.markdown(f"- {reason}")
+
+    st.markdown("<div class='panel-title'>Step 2 · Top5 Replay 비교</div>", unsafe_allow_html=True)
+    match_df = pd.DataFrame([
+        {
+            "rank": f"Top {i}",
+            "event_id": m.event_id,
+            "name": m.name,
+            "ticker": m.ticker,
+            "final": m.final_similarity,
+            "weekly": m.weekly_similarity,
+            "sto": m.sto_similarity,
+            "max_return": m.max_return,
+            "mdd": m.max_drawdown,
+            "same_as_now_week": m.equivalent_week_index,
+            "future_weeks": m.future_weeks_available,
+        }
+        for i, m in enumerate(item.replay_matches, start=1)
+    ])
+    st.dataframe(match_df, use_container_width=True, hide_index=True)
+
+    if item.replay_matches:
+        match_idx = st.selectbox(
+            "차트로 볼 Replay",
+            list(range(len(item.replay_matches))),
+            format_func=lambda i: f"Top {i+1} · {item.replay_matches[i].name or item.replay_matches[i].ticker} · {item.replay_matches[i].event_id}",
+        )
+        st.markdown("<div class='panel-title'>Step 3 · 현재 vs Replay 비교차트</div>", unsafe_allow_html=True)
+        if st.button("비교차트 생성/새로고침"):
+            chart_viewer = RecommendationChartViewer(db_path=db_path, output_dir="output/dashboard_charts")
+            try:
+                chart_path = chart_viewer.render_replay_match(item, item.replay_matches[match_idx], selected_rank + 1, match_idx + 1)
+            finally:
+                chart_viewer.close()
+            st.session_state["audit_chart_path"] = chart_path
+        chart_path = st.session_state.get("audit_chart_path")
+        if chart_path and Path(chart_path).exists():
+            st.image(chart_path, use_container_width=True)
+        else:
+            st.info("비교차트 생성/새로고침 버튼을 누르면 HTS 스타일 차트가 표시됩니다.")
+
+
+def _load_recommendations(db_path: str, top_n: int, weekly_pool_n: int, min_weekly: float, min_sto: float) -> list[object]:
+    engine = RecentMoneyEventRecommender(db_path=db_path)
+    try:
+        return engine.recommend(
+            candidate_years=2,
+            lookback_months=6,
+            top_n=top_n,
+            weekly_pool_n=weekly_pool_n,
+            min_weekly_similarity=min_weekly,
+            min_sto_similarity=min_sto,
+            replay_top_n=5,
+        )
+    finally:
+        engine.close()
+
+
 def _inject_style(st: object) -> None:
     st.markdown(
         """
@@ -282,11 +442,11 @@ def _inject_style(st: object) -> None:
         .top-hero p { margin:8px 0 0; color:#6b778c; font-size:15px; }
         .hero-status { padding:12px 16px; border:1px solid #dbe5f2; border-radius:999px; background:#fff; color:#1f3b64; font-weight:800; box-shadow:0 10px 30px rgba(45,91,154,.08); }
         .pulse { display:inline-block; width:9px; height:9px; border-radius:50%; background:#10a37f; margin-right:8px; box-shadow:0 0 0 7px rgba(16,163,127,.12); }
-        .metric-card, .status-card, .ticker-card, .order-card, .replay-card { border:1px solid #dbe5f2; border-radius:24px; background:rgba(255,255,255,.82); box-shadow:0 16px 45px rgba(45,91,154,.09); backdrop-filter:blur(14px); }
+        .metric-card, .status-card, .ticker-card, .order-card, .replay-card, .step-card { border:1px solid #dbe5f2; border-radius:24px; background:rgba(255,255,255,.82); box-shadow:0 16px 45px rgba(45,91,154,.09); backdrop-filter:blur(14px); }
         .metric-card { padding:18px; min-height:118px; }
         .metric-card label, .status-card label { color:#6b778c; font-size:12px; display:block; }
         .metric-card strong { display:block; margin-top:9px; font-size:25px; color:#162033; letter-spacing:-.03em; }
-        .metric-card small, .status-card span, .mini-row span, .ticker-card span, .order-card span, .order-card small { display:block; margin-top:5px; color:#7b8798; font-size:12px; }
+        .metric-card small, .status-card span, .mini-row span, .ticker-card span, .order-card span, .order-card small, .step-card span { display:block; margin-top:5px; color:#7b8798; font-size:12px; }
         .pos { color:#10a37f !important; } .neg { color:#d64545 !important; }
         .section-gap { height:14px; }
         .panel-title { font-size:20px; font-weight:850; letter-spacing:-.035em; color:#162033; margin:8px 0 12px; }
@@ -311,6 +471,12 @@ def _inject_style(st: object) -> None:
         .replay-card small { color:#6b778c; font-size:14px; }
         .replay-score { font-size:34px; font-weight:950; }
         .replay-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:14px; }
+        .audit-steps { margin:14px 0; }
+        .step-card { padding:18px; min-height:170px; }
+        .step-card h3 { margin:6px 0 10px; font-size:22px; letter-spacing:-.04em; color:#162033; }
+        .step-card b { font-size:18px; color:#162033; }
+        .step-card p { color:#536176; font-size:13px; margin-top:12px; }
+        .step-no { display:inline-flex; padding:6px 10px; border-radius:999px; background:#edf5ff; color:#2f80ed; font-size:12px; font-weight:900; }
         @media(max-width:1100px){ .top-hero{display:block;} .heat-grid{grid-template-columns:repeat(2,1fr);} .replay-grid{grid-template-columns:repeat(2,1fr);} }
         </style>
         """,

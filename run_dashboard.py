@@ -5,7 +5,7 @@ import sys
 
 
 def main() -> None:
-    cmd = [sys.executable, "-m", "streamlit", "run", "dashboard/paper_app.py"]
+    cmd = [sys.executable, "-m", "streamlit", "run", "dashboard/integrated_app.py"]
     raise SystemExit(subprocess.call(cmd))
 
 

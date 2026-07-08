@@ -34,12 +34,7 @@ class PaperDashboardData:
 
     def load_orders(self) -> pd.DataFrame:
         self._ensure_table()
-        rows = self.conn.execute(
-            """
-            SELECT * FROM paper_orders
-            ORDER BY created_at DESC, id DESC
-            """
-        ).fetchall()
+        rows = self.conn.execute("SELECT * FROM paper_orders ORDER BY created_at DESC, id DESC").fetchall()
         df = pd.DataFrame([dict(row) for row in rows])
         if df.empty:
             return pd.DataFrame()
@@ -52,13 +47,16 @@ class PaperDashboardData:
         orders = self.load_orders()
         if orders.empty:
             return pd.DataFrame()
-        buys = orders[(orders["side"] == "BUY") & (orders["accepted"] == 1)].copy()
+        accepted = orders[orders["accepted"] == 1].copy()
+        buys = accepted[accepted["side"].str.upper() == "BUY"].copy()
         if buys.empty:
             return pd.DataFrame()
-        grouped = buys.groupby(["market", "ticker"], as_index=False).agg(
+        sells = accepted[accepted["side"].str.upper() == "SELL"].copy()
+
+        buy_group = buys.groupby(["market", "ticker"], as_index=False).agg(
             name=("name", "last"),
-            quantity=("quantity", "sum"),
-            invested_amount=("estimated_amount", "sum"),
+            buy_quantity=("quantity", "sum"),
+            buy_amount=("estimated_amount", "sum"),
             avg_reference_price=("reference_price", "mean"),
             first_buy_at=("created_at", "min"),
             last_buy_at=("created_at", "max"),
@@ -67,26 +65,42 @@ class PaperDashboardData:
             sto_similarity=("sto_similarity", "last"),
             final_similarity=("final_similarity", "last"),
         )
+        if sells.empty:
+            sell_group = pd.DataFrame(columns=["market", "ticker", "sell_quantity", "sell_amount"])
+        else:
+            sell_group = sells.groupby(["market", "ticker"], as_index=False).agg(
+                sell_quantity=("quantity", "sum"),
+                sell_amount=("estimated_amount", "sum"),
+            )
+
+        grouped = buy_group.merge(sell_group, on=["market", "ticker"], how="left")
+        grouped[["sell_quantity", "sell_amount"]] = grouped[["sell_quantity", "sell_amount"]].fillna(0)
         rows = []
         for _, row in grouped.iterrows():
-            market = str(row["market"])
-            ticker = str(row["ticker"])
-            current_price = self._latest_close(market, ticker)
-            quantity = float(row["quantity"] or 0)
-            invested = float(row["invested_amount"] or 0)
+            buy_qty = float(row["buy_quantity"] or 0)
+            sell_qty = float(row["sell_quantity"] or 0)
+            quantity = buy_qty - sell_qty
+            if quantity <= 0:
+                continue
+            avg_price = float(row["buy_amount"] or 0) / buy_qty if buy_qty > 0 else 0.0
+            invested = quantity * avg_price
+            current_price = self._latest_close(str(row["market"]), str(row["ticker"]))
             evaluation = quantity * current_price
             pnl = evaluation - invested
             pnl_rate = (pnl / invested * 100) if invested > 0 else 0.0
-            item = dict(row)
-            item.update(
+            rows.append(
                 {
-                    "current_price": current_price,
-                    "evaluation_amount": evaluation,
-                    "pnl": pnl,
-                    "pnl_rate": pnl_rate,
+                    "market": row["market"], "ticker": row["ticker"], "name": row["name"],
+                    "quantity": quantity, "invested_amount": invested,
+                    "avg_reference_price": avg_price, "first_buy_at": row["first_buy_at"],
+                    "last_buy_at": row["last_buy_at"], "top1_event_id": row["top1_event_id"],
+                    "weekly_similarity": row["weekly_similarity"], "sto_similarity": row["sto_similarity"],
+                    "final_similarity": row["final_similarity"], "current_price": current_price,
+                    "evaluation_amount": evaluation, "pnl": pnl, "pnl_rate": pnl_rate,
                 }
             )
-            rows.append(item)
+        if not rows:
+            return pd.DataFrame()
         return pd.DataFrame(rows).sort_values("pnl_rate", ascending=False).reset_index(drop=True)
 
     def metrics(self) -> DashboardMetrics:
@@ -100,27 +114,21 @@ class PaperDashboardData:
         pnl_rate = (pnl / invested * 100) if invested > 0 else 0.0
         winners = int((positions["pnl"] > 0).sum()) if not positions.empty else 0
         losers = int((positions["pnl"] < 0).sum()) if not positions.empty else 0
-        return DashboardMetrics(
-            orders=int(len(orders)),
-            accepted_orders=int((orders["accepted"] == 1).sum()) if "accepted" in orders.columns else 0,
-            invested_amount=invested,
-            evaluation_amount=evaluation,
-            pnl=pnl,
-            pnl_rate=pnl_rate,
-            winners=winners,
-            losers=losers,
-        )
+        return DashboardMetrics(len(orders), int((orders["accepted"] == 1).sum()), invested, evaluation, pnl, pnl_rate, winners, losers)
 
     def equity_curve(self) -> pd.DataFrame:
         orders = self.load_orders()
         if orders.empty:
             return pd.DataFrame(columns=["date", "invested"])
-        buys = orders[(orders["side"] == "BUY") & (orders["accepted"] == 1)].copy()
-        if buys.empty:
+        accepted = orders[orders["accepted"] == 1].copy()
+        if accepted.empty:
             return pd.DataFrame(columns=["date", "invested"])
-        buys["date"] = pd.to_datetime(buys["created_at"]).dt.date.astype(str)
-        curve = buys.groupby("date", as_index=False)["estimated_amount"].sum()
-        curve["invested"] = curve["estimated_amount"].cumsum()
+        accepted["date"] = pd.to_datetime(accepted["created_at"]).dt.date.astype(str)
+        accepted["cash_flow"] = accepted.apply(
+            lambda r: float(r["estimated_amount"]) if str(r["side"]).upper() == "BUY" else -float(r["estimated_amount"]), axis=1
+        )
+        curve = accepted.groupby("date", as_index=False)["cash_flow"].sum()
+        curve["invested"] = curve["cash_flow"].cumsum()
         return curve[["date", "invested"]]
 
     def _latest_close(self, market: str, ticker: str) -> float:

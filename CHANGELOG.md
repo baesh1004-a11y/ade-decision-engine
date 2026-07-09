@@ -15,6 +15,7 @@
 - Decision Engine Core specification.
 - Order Engine v1 specification.
 - Execution Monitor v1 specification.
+- Backtest Engine v1 specification.
 
 ### Updated
 
@@ -22,22 +23,20 @@
 - Documented the current Candidate Decision Engine as the existing Signal role.
 - Added the migration plan from `strategy/candidate.py` to Signal Engine v1.0.
 - Clarified that existing implementation must be smoke-tested before structural refactoring.
-- Marked Order Engine design as complete while keeping implementation status as not started.
-- Marked Execution Monitor design as complete while keeping implementation status as not started.
-- Updated design progress to approximately 85%.
+- Marked Backtest Engine design as complete while keeping implementation status as not started.
+- Updated design progress to approximately 90%.
 
 ### Notes
 
 - This version records architecture and reference design.
-- KIS OpenAPI integration is documented as a design layer. Live token issuance, REST calls, and account validation remain implementation tasks.
-- Production trading must remain disabled until an explicit safety review is completed.
-- Order Engine defaults must remain `DRY_RUN` or `LIVE_BLOCKED`; live order submission is forbidden until explicit safety review.
-- Execution Monitor must not trigger automatic reorders from failure or error states.
+- KIS OpenAPI integration is documented as a design layer.
+- Backtest Engine uses historical replay, simulated fills, portfolio simulation, metrics calculation, and reproducible configuration.
+- Backtest results are validation evidence, not proof of future performance.
 
 ### Next
 
 - Inspect `main.py`, `core/`, `strategy/`, `indicators/`, `pattern/`, and `tests/`.
 - Run a basic pipeline smoke test.
 - Reconcile existing Risk implementation with the new Risk Engine design.
-- Design Backtest Engine v1.
 - Design Report Engine v1.
+- Prepare Backtest fixture datasets and regression tests.

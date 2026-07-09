@@ -6,3 +6,6 @@ ta
 fastapi
 uvicorn
 streamlit
+plotly
+yfinance
+tqdm

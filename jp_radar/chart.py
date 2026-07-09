@@ -25,8 +25,8 @@ def make_radar_chart(result: RadarResult) -> go.Figure:
         horizontal_spacing=0.05,
         specs=[[{"secondary_y": True}, {"secondary_y": True}], [{"secondary_y": False}, {"secondary_y": False}]],
         subplot_titles=(
-            "일봉 Daily · 지수 및 에너지",
-            "주봉 Weekly · 지수 및 에너지",
+            "일봉 Daily · 지수 및 복합 에너지",
+            "주봉 Weekly · 지수 및 복합 에너지",
             "일봉 Daily · MACD",
             "주봉 Weekly · MACD",
         ),
@@ -38,11 +38,11 @@ def make_radar_chart(result: RadarResult) -> go.Figure:
         fig.add_hline(y=8, line_dash="dash", line_color="red", line_width=2, opacity=0.5, row=1, col=col, secondary_y=False)
     fig.update_layout(
         template="plotly_dark",
-        title=f"<b>JP 레이더: {result.sector.name} · 일봉/주봉 멀티 타임프레임</b>",
+        title=f"<b>JP 레이더: {result.sector.name} · 일봉/주봉 멀티 타임프레임 통합</b>",
         height=1000,
         legend_tracegroupgap=150,
-        yaxis=dict(title="스토캐스틱 에너지 (0-10)", range=[0, 10.5]),
-        yaxis3=dict(title="스토캐스틱 에너지 (0-10)", range=[0, 10.5]),
+        yaxis=dict(title="복합 에너지 (0-10)", range=[0, 10.5]),
+        yaxis3=dict(title="복합 에너지 (0-10)", range=[0, 10.5]),
         yaxis2=dict(title=result.sector.benchmark_name, showgrid=False),
         yaxis4=dict(title=result.sector.benchmark_name, showgrid=False),
     )

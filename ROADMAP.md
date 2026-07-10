@@ -32,12 +32,12 @@
 | 9 | Order Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 주문 생성, 검증, 전송 준비. 운영 모드는 별도 승인 전 제한 |
 | 10 | Execution Monitor | 완료 | 미구현 | 계획 완료 | 미확인 | 체결, 미체결, 실패 추적과 포트폴리오/리포트 이벤트 발행 |
 | 11 | Backtest Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 과거 데이터 기반 전략 검증과 시뮬레이션 결과 산출 |
-| 12 | Report Engine | 예정 | 미확인 | 미확인 | 미확인 | 일별 판단/성과/리스크 리포트 |
+| 12 | Report Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 일일 의사결정, 포트폴리오, 체결, 백테스트 리포트 생성 |
 
 ## 설계 진행률
 
 ```text
-[█████████░] 약 90%
+[██████████] 약 100%
 ```
 
 ## 현재 우선순위
@@ -46,15 +46,15 @@
 2. 현재 구현 알고리즘을 코드 기준으로 문서화
 3. Candidate → Signal 전환은 병행 구조로 점진 적용
 4. Risk/Decision 설계와 기존 구현의 정합성 검증
-5. Order/Execution/Backtest는 안전한 제한 모드와 시뮬레이션 중심으로 구현 준비
+5. Order/Execution/Backtest/Report는 제한 모드와 시뮬레이션 중심으로 구현 준비
 
 ## 다음 작업
 
 1. `main.py`, `core/`, `strategy/`, `indicators/`, `pattern/`, `tests/` 기준 구현 점검
 2. 기본 파이프라인 스모크 테스트
 3. 구현 상태표 갱신
-4. Report Engine v1 설계
-5. Backtest 구현 전 테스트 fixture 설계
+4. DataHub → Signal → Risk → Decision 실행 경로 확인
+5. Report Engine이 현재 출력물을 읽을 수 있도록 최소 리포트 fixture 설계
 
 ## 운영 원칙
 

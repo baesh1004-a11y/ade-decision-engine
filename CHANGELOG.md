@@ -16,6 +16,7 @@
 - Order Engine v1 specification.
 - Execution Monitor v1 specification.
 - Backtest Engine v1 specification.
+- Report Engine v1 specification.
 
 ### Updated
 
@@ -24,7 +25,8 @@
 - Added the migration plan from `strategy/candidate.py` to Signal Engine v1.0.
 - Clarified that existing implementation must be smoke-tested before structural refactoring.
 - Marked Backtest Engine design as complete while keeping implementation status as not started.
-- Updated design progress to approximately 90%.
+- Marked Report Engine design as complete while keeping implementation status as not started.
+- Updated design progress to approximately 100% for the core engine map.
 
 ### Notes
 
@@ -32,11 +34,12 @@
 - KIS OpenAPI integration is documented as a design layer.
 - Backtest Engine uses historical replay, simulated fills, portfolio simulation, metrics calculation, and reproducible configuration.
 - Backtest results are validation evidence, not proof of future performance.
+- Report Engine is an explanation and audit layer. It must not create new trading decisions or modify orders, executions, or portfolio state.
 
 ### Next
 
 - Inspect `main.py`, `core/`, `strategy/`, `indicators/`, `pattern/`, and `tests/`.
 - Run a basic pipeline smoke test.
 - Reconcile existing Risk implementation with the new Risk Engine design.
-- Design Report Engine v1.
-- Prepare Backtest fixture datasets and regression tests.
+- Verify the executable DataHub → Signal → Risk → Decision path.
+- Prepare minimal Report fixture data and Markdown/JSON output tests.

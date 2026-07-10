@@ -8,7 +8,7 @@ from report.recommendation_html_report import render_recommendation_html
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ADE v4 recent money event recommender")
+    parser = argparse.ArgumentParser(description="ADE Replay prediction recommender")
     parser.add_argument("--candidate-years", type=int, default=2)
     parser.add_argument("--lookback-months", type=int, default=6)
     parser.add_argument("--top", type=int, default=20)
@@ -36,7 +36,7 @@ def main() -> None:
     report_path = render_recommendation_html(recommendations, Path(args.report), lookback_months=args.lookback_months)
 
     print("\n========================================")
-    print(" ADE v4 RECENT MONEY EVENT RECOMMENDER")
+    print(" ADE REPLAY PREDICTION RECOMMENDER")
     print("========================================")
     print(f"Candidate window : recent {args.candidate_years} years")
     print(f"Weekly window    : recent {args.lookback_months} months")
@@ -44,20 +44,33 @@ def main() -> None:
     print(f"Replay matches   : Top {args.replay_top} per recommendation")
     print(f"Recommendations  : {len(recommendations)}")
     print(f"HTML report      : {report_path}")
-    print("\nRank | Stock | Decision | Top1 Final | Top1 Weekly | Top1 STO | Top1 Replay | Replay Max | MDD")
-    print("-----|-------|----------|------------|-------------|----------|-------------|------------|-----")
+    print("\nRank | Stock | Decision | Grade | 7D Up | 7D Exp | 7D Max | Peak Day | Target | Stop | Final")
+    print("-----|-------|----------|-------|-------|--------|--------|----------|--------|------|------")
     for i, item in enumerate(recommendations, start=1):
+        p = item.prediction
+        if p is None:
+            prediction_text = "- | - | - | - | - | - | -"
+        else:
+            prediction_text = (
+                f"{p.grade} | {p.seven_day_up_probability:.1f}% | {p.seven_day_expected_return:+.2f}% | "
+                f"{p.expected_max_return_7d:+.2f}% | {p.expected_peak_day:.1f} | "
+                f"{p.target_return:+.2f}% | {p.stop_return:.2f}%"
+            )
         print(
             f"{i:02d} | {item.market.upper()}:{item.ticker} {item.name or ''} | "
-            f"{item.decision} | {item.final_similarity:.2f}% | "
-            f"{item.weekly_similarity:.2f}% | {item.sto_similarity:.2f}% | "
-            f"{item.matched_event_id} | {item.matched_max_return}% | {item.matched_max_drawdown}%"
+            f"{item.decision} | {prediction_text} | {item.final_similarity:.2f}%"
         )
-        for j, match in enumerate(getattr(item, "replay_matches", [])[: args.replay_top], start=1):
+        if p is not None:
+            horizon_text = ", ".join(
+                f"{h.days}D up={h.up_probability:.1f}% exp={h.expected_return:+.2f}% med={h.median_return:+.2f}%"
+                for h in p.horizons
+            )
+            print(f"    Forecast: {horizon_text}")
+        for j, match in enumerate(item.replay_matches[: args.replay_top], start=1):
             print(
                 f"    Top{j}: {match.event_id} final={match.final_similarity:.2f}% "
                 f"weekly={match.weekly_similarity:.2f}% sto={match.sto_similarity:.2f}% "
-                f"max={match.max_return}% mdd={match.max_drawdown}%"
+                f"future_start_week={match.future_start_week_index}"
             )
 
 

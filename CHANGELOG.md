@@ -17,6 +17,7 @@
 - Execution Monitor v1 specification.
 - Backtest Engine v1 specification.
 - Report Engine v1 specification.
+- Integration Orchestrator v1 specification.
 
 ### Updated
 
@@ -26,20 +27,22 @@
 - Clarified that existing implementation must be smoke-tested before structural refactoring.
 - Marked Backtest Engine design as complete while keeping implementation status as not started.
 - Marked Report Engine design as complete while keeping implementation status as not started.
-- Updated design progress to approximately 100% for the core engine map.
+- Added run ID, stage state, failure isolation, idempotency, and audit-log design for integrated execution.
+- Changed the next milestone from additional engine design to Orchestrator wrapping and fixture-based smoke testing.
 
 ### Notes
 
 - This version records architecture and reference design.
 - KIS OpenAPI integration is documented as a design layer.
-- Backtest Engine uses historical replay, simulated fills, portfolio simulation, metrics calculation, and reproducible configuration.
 - Backtest results are validation evidence, not proof of future performance.
 - Report Engine is an explanation and audit layer. It must not create new trading decisions or modify orders, executions, or portfolio state.
+- Integration Orchestrator controls execution order and state but must not create or alter investment decisions.
+- The existing `main.py` and `ADEPipeline` are preserved initially and connected through an adapter before gradual stage separation.
 
 ### Next
 
-- Inspect `main.py`, `core/`, `strategy/`, `indicators/`, `pattern/`, and `tests/`.
-- Run a basic pipeline smoke test.
-- Reconcile existing Risk implementation with the new Risk Engine design.
-- Verify the executable DataHub → Signal → Risk → Decision path.
-- Prepare minimal Report fixture data and Markdown/JSON output tests.
+- Implement `RunRequest`, `RunResult`, and `StageResult`.
+- Implement SQLite repositories for run and stage state.
+- Wrap the existing analysis pipeline with an Orchestrator adapter.
+- Run a fixed-fixture DataHub → Signal → Risk → Decision smoke test.
+- Generate minimal Report Engine JSON fixture output.

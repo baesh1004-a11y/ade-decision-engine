@@ -4,6 +4,7 @@ import argparse
 
 import pandas as pd
 
+from feedback.engine import FeedbackEngine
 from meta_score.engine import MetaScoreEngine
 from recommendation.event_recommender import RecentMoneyEventRecommender
 
@@ -43,10 +44,21 @@ def run(db_path: str = "datahub/market.db") -> None:
             results = MetaScoreEngine().score(recommendations)
             st.session_state["meta_score_results"] = results
 
+            feedback = FeedbackEngine(db_path)
+            try:
+                inserted = feedback.register_meta_results(results)
+            finally:
+                feedback.close()
+            st.session_state["meta_feedback_inserted"] = inserted
+
     results = st.session_state.get("meta_score_results", [])
     if not results:
         st.info("통합점수 계산 결과가 없습니다.")
         return
+
+    inserted = st.session_state.get("meta_feedback_inserted", 0)
+    if inserted:
+        st.success(f"오늘의 Meta Score {inserted}건을 Feedback DB에 저장했습니다.")
 
     final_buy = sum(1 for item in results if item.decision == "FINAL BUY")
     buy_watch = sum(1 for item in results if item.decision == "BUY WATCH")

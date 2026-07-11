@@ -7,6 +7,8 @@ import pandas as pd
 from jp_radar.datasource import YFinanceRadarSource
 from jp_radar.indicators import calculate_signals, composite_energy, graded_signal, latest_signal, macd
 from jp_radar.sectors import RadarSector, get_sector
+from jp_radar.yearly_meaning import YearlyMeaning, calculate_yearly_meaning
+from jp_radar.yearly_score import calculate_yearly_score
 
 
 @dataclass(frozen=True)
@@ -34,6 +36,8 @@ class RadarResult:
     sector: RadarSector
     daily: TimeframeRadarResult
     weekly: TimeframeRadarResult
+    yearly: YearlyMeaning
+    yearly_score: float
     weights: dict[str, float]
 
     @property
@@ -64,7 +68,16 @@ class JPRadarEngine:
         weekly_index = self._weighted_index(bundle.weekly_prices, bundle.weights)
         daily = self._analyze_timeframe(daily_index, bundle.benchmark_daily["Close"], is_daily=True)
         weekly = self._analyze_timeframe(weekly_index, bundle.benchmark_weekly["Close"], is_daily=False)
-        return RadarResult(sector=sector, daily=daily, weekly=weekly, weights=bundle.weights)
+        yearly = calculate_yearly_meaning(bundle.benchmark_daily)
+        yearly_score = calculate_yearly_score(yearly)
+        return RadarResult(
+            sector=sector,
+            daily=daily,
+            weekly=weekly,
+            yearly=yearly,
+            yearly_score=yearly_score,
+            weights=bundle.weights,
+        )
 
     @staticmethod
     def _weighted_index(price_frame: pd.DataFrame, weights: dict[str, float]) -> pd.Series:

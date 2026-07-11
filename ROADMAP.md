@@ -33,28 +33,29 @@
 | 10 | Execution Monitor | 완료 | 미구현 | 계획 완료 | 미확인 | 체결, 미체결, 실패 추적과 포트폴리오/리포트 이벤트 발행 |
 | 11 | Backtest Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 과거 데이터 기반 전략 검증과 시뮬레이션 결과 산출 |
 | 12 | Report Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 일일 의사결정, 포트폴리오, 체결, 백테스트 리포트 생성 |
+| 13 | Integration Orchestrator | 완료 | 기존 통합 흐름 존재 | 계획 완료 | 미확인 | 실행 ID, 단계 상태, 실패 격리, 감사 로그를 관리하는 상위 제어 계층 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 약 100%
+[██████████] 핵심 엔진 및 통합 제어 설계 완료
 ```
 
 ## 현재 우선순위
 
 1. 기존 기본 파이프라인이 정상 실행되는지 확인
-2. 현재 구현 알고리즘을 코드 기준으로 문서화
-3. Candidate → Signal 전환은 병행 구조로 점진 적용
-4. Risk/Decision 설계와 기존 구현의 정합성 검증
-5. Order/Execution/Backtest/Report는 제한 모드와 시뮬레이션 중심으로 구현 준비
+2. Integration Orchestrator 최소 구현으로 기존 파이프라인 래핑
+3. 고정 CSV fixture 기반 스모크 테스트 작성
+4. Candidate → Signal 전환은 병행 구조로 점진 적용
+5. Risk/Decision 설계와 기존 구현의 정합성 검증
 
 ## 다음 작업
 
-1. `main.py`, `core/`, `strategy/`, `indicators/`, `pattern/`, `tests/` 기준 구현 점검
-2. 기본 파이프라인 스모크 테스트
-3. 구현 상태표 갱신
-4. DataHub → Signal → Risk → Decision 실행 경로 확인
-5. Report Engine이 현재 출력물을 읽을 수 있도록 최소 리포트 fixture 설계
+1. `RunRequest`, `RunResult`, `StageResult` 모델 구현
+2. `ade_runs`, `ade_run_stages` SQLite repository 구현
+3. `main.py`와 `ADEPipeline`용 adapter 작성
+4. DataHub → Signal → Risk → Decision 스모크 테스트
+5. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -64,3 +65,4 @@
 - 외부 주문 연동은 별도 검증 전까지 제한 모드로 유지한다.
 - 모든 엔진은 입력/출력, 책임 경계, DB, 알고리즘, 테스트 계획을 가진다.
 - 기존 동작 코드를 먼저 검증한 뒤 구조 변경을 수행한다.
+- Orchestrator는 투자 판단을 생성하거나 엔진 결과를 임의로 변경하지 않는다.

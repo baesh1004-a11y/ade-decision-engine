@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import pandas as pd
@@ -8,6 +8,8 @@ import yfinance as yf
 
 from jp_radar.engine import JPRadarEngine, RadarResult
 from jp_radar.indicators import macd
+from jp_radar.yearly_meaning import with_current_price
+from jp_radar.yearly_score import calculate_yearly_score
 
 
 @dataclass(frozen=True)
@@ -23,12 +25,7 @@ class IntradayRadarResult:
 
 
 class JPRadarLiveEngine:
-    """Combine stable daily/weekly JP Radar with an intraday benchmark overlay.
-
-    Daily/weekly energy is calculated from the normal sector composite index.
-    Intraday price and MACD are refreshed from the sector benchmark so the user
-    can see the live market move without rebuilding the full Replay/ADE system.
-    """
+    """Combine stable daily/weekly JP Radar with an intraday benchmark overlay."""
 
     def __init__(self) -> None:
         self.radar_engine = JPRadarEngine()
@@ -54,6 +51,10 @@ class JPRadarLiveEngine:
             latest = float(intraday_price.iloc[-1]) if not intraday_price.empty else 0.0
             previous = self._previous_session_close(intraday_price)
             source = "YFINANCE_INTRADAY"
+
+        if latest > 0:
+            yearly = with_current_price(radar.yearly, latest)
+            radar = replace(radar, yearly=yearly, yearly_score=calculate_yearly_score(yearly))
 
         change_rate = 0.0 if previous <= 0 else (latest / previous - 1.0) * 100.0
         macd_line, signal_line = macd(intraday_price)

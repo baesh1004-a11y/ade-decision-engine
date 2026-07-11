@@ -43,16 +43,36 @@ class YFinanceRadarSource:
             weekly.to_csv(weekly_file)
             pd.DataFrame([{"ticker": k, "weight": v} for k, v in weights.items()]).to_csv(weights_file, index=False)
 
+        bench_cache_valid = False
         if not refresh and bench_daily_file.exists() and bench_weekly_file.exists():
             bench_daily = pd.read_csv(bench_daily_file, index_col=0, parse_dates=True)
             bench_weekly = pd.read_csv(bench_weekly_file, index_col=0, parse_dates=True)
+            bench_cache_valid = {"Open", "High", "Low", "Close"}.issubset(bench_daily.columns)
         else:
+            bench_daily = pd.DataFrame()
+            bench_weekly = pd.DataFrame()
+
+        if not bench_cache_valid:
             bench_daily, bench_weekly = self._download_benchmark(benchmark)
             if bench_daily.empty:
                 combined_daily = (daily * pd.Series(weights)).sum(axis=1)
                 combined_weekly = (weekly * pd.Series(weights)).sum(axis=1)
-                bench_daily = pd.DataFrame({"Close": combined_daily})
-                bench_weekly = pd.DataFrame({"Close": combined_weekly})
+                bench_daily = pd.DataFrame(
+                    {
+                        "Open": combined_daily,
+                        "High": combined_daily,
+                        "Low": combined_daily,
+                        "Close": combined_daily,
+                    }
+                )
+                bench_weekly = pd.DataFrame(
+                    {
+                        "Open": combined_weekly,
+                        "High": combined_weekly,
+                        "Low": combined_weekly,
+                        "Close": combined_weekly,
+                    }
+                )
             bench_daily.to_csv(bench_daily_file)
             bench_weekly.to_csv(bench_weekly_file)
 
@@ -70,8 +90,9 @@ class YFinanceRadarSource:
                 cap = float(ticker.info.get("marketCap", 1) or 1)
                 if df.empty:
                     return ticker_text, None, None, 0.0
-                daily = process_daily(df)["Close"]
-                weekly = resample_to_weekly(process_daily(df))["Close"]
+                daily_frame = process_daily(df)
+                daily = daily_frame["Close"]
+                weekly = resample_to_weekly(daily_frame)["Close"]
                 return ticker_text, daily, weekly, cap
             except Exception:
                 return ticker_text, None, None, 0.0
@@ -98,6 +119,7 @@ class YFinanceRadarSource:
                 return pd.DataFrame(), pd.DataFrame()
             daily = process_daily(df)
             weekly = resample_to_weekly(daily)
-            return daily[["Close"]], weekly[["Close"]]
+            columns = ["Open", "High", "Low", "Close"]
+            return daily[columns], weekly[columns]
         except Exception:
             return pd.DataFrame(), pd.DataFrame()

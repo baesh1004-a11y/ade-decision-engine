@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 
 import pandas as pd
 
@@ -40,13 +41,23 @@ def run(db_path: str = "datahub/market.db") -> None:
 
     engine = FeedbackEngine(db_path)
     try:
+        today = date.today().isoformat()
+        if st.session_state.get("feedback_auto_update_date") != today:
+            st.session_state["feedback_auto_update_result"] = engine.update_open_cases()
+            st.session_state["feedback_auto_update_date"] = today
+
         c1, c2 = st.columns([1, 3])
         if c1.button("오늘 성과 업데이트", type="primary"):
             result = engine.update_open_cases()
+            st.session_state["feedback_auto_update_result"] = result
             st.success(
                 f"대상 {result['updated_cases']}건 · 신규 일별기록 {result['inserted_days']}건 · 7일 완료 {result['completed']}건"
             )
-        c2.caption("가격 DB가 갱신된 뒤 실행하면 모든 OPEN 추천의 최신 일별 성과를 저장합니다.")
+        auto_result = st.session_state.get("feedback_auto_update_result", {})
+        c2.caption(
+            "대시보드를 여는 날마다 한 번 자동 업데이트합니다. "
+            f"오늘 처리: 대상 {auto_result.get('updated_cases', 0)}건 · 신규 {auto_result.get('inserted_days', 0)}건 · 완료 {auto_result.get('completed', 0)}건"
+        )
 
         summary = engine.summary()
         k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
@@ -113,7 +124,7 @@ def run(db_path: str = "datahub/market.db") -> None:
                 row = cases.loc[selected]
                 daily = engine.daily_dataframe(int(row["id"]))
                 if not daily.empty:
-                    st.line_chart(daily.set_index("day_no")["return_rate"], height=360)
+                    st.line_chart(daily.set_index("day_no")[["return_rate", "running_max_return", "running_min_return"]], height=380)
                     st.dataframe(daily, use_container_width=True, hide_index=True)
 
         with tab3:
@@ -121,8 +132,7 @@ def run(db_path: str = "datahub/market.db") -> None:
             if ticker_stats.empty:
                 st.info("통계를 계산할 종목 데이터가 없습니다.")
             else:
-                display = ticker_stats.copy()
-                st.dataframe(display, use_container_width=True, hide_index=True)
+                st.dataframe(ticker_stats, use_container_width=True, hide_index=True)
 
                 metric = st.selectbox(
                     "종목 비교 기준",
@@ -135,7 +145,7 @@ def run(db_path: str = "datahub/market.db") -> None:
                         "recommendation_count": "추천 횟수",
                     }[x],
                 )
-                chart = display.sort_values(metric, ascending=False).head(15).set_index("name")[[metric]]
+                chart = ticker_stats.sort_values(metric, ascending=False).head(15).set_index("name")[[metric]]
                 st.bar_chart(chart, horizontal=True, height=500)
 
                 factor = st.selectbox(

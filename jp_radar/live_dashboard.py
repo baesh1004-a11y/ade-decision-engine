@@ -19,7 +19,7 @@ def run() -> None:
           <div>
             <div class="eyebrow">JP RADAR · LIVE MARKET CONTROL</div>
             <h1>시장·업종 에너지 실시간 레이더</h1>
-            <p>일봉·주봉 에너지와 실시간 지수·MACD를 한 화면에서 확인합니다.</p>
+            <p>일봉·주봉 에너지, 실시간 지수·MACD, 연봉 의미선을 한 화면에서 확인합니다.</p>
           </div>
           <div class="badge"><span></span> LIVE MONITOR</div>
         </div>
@@ -43,12 +43,29 @@ def run() -> None:
             )
 
         radar = result.radar
-        a, b, c, d, e = st.columns(5)
+        a, b, c, d, e, f = st.columns(6)
         a.metric("종합 판단", radar.combined_signal)
         b.metric("실시간 지수", f"{result.latest_price:,.2f}", f"{result.change_rate:+.2f}%")
         c.metric("일봉 에너지", f"{radar.daily.latest_energy:.2f}", radar.daily.signal_grade)
         d.metric("주봉 에너지", f"{radar.weekly.latest_energy:.2f}", radar.weekly.signal_grade)
-        e.metric("갱신 시각", result.updated_at.split("T")[-1], result.source)
+        e.metric("연봉 의미 점수", f"{radar.yearly_score:+.1f}", radar.yearly.state)
+        f.metric("갱신 시각", result.updated_at.split("T")[-1], result.source)
+
+        yearly = radar.yearly
+        candle_text = "양봉" if yearly.bullish else "음봉"
+        close_text = f"{yearly.close:,.2f}" if yearly.show_close_line else "미표시"
+        st.markdown(
+            f"""
+            <div class="yearly-card">
+              <div><span>YEARLY MEANING</span><h3>{yearly.year}년 · {candle_text}</h3></div>
+              <div><small>시가 의미선</small><b>{yearly.open:,.2f}</b></div>
+              <div><small>종가 의미선</small><b>{close_text}</b></div>
+              <div><small>현재가</small><b>{yearly.current:,.2f}</b></div>
+              <div><small>상태</small><b>{yearly.state}</b></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         st.plotly_chart(make_live_radar_chart(result), use_container_width=True)
 
@@ -81,16 +98,21 @@ def _interpret(result: object) -> str:
     intraday = result.change_rate
     daily = radar.daily.latest_energy
     weekly = radar.weekly.latest_energy
+    yearly = radar.yearly
 
+    yearly_text = (
+        f"연봉 의미선 기준 현재 위치는 {yearly.state}이며, "
+        f"{yearly.year}년 연봉은 {'양봉' if yearly.bullish else '음봉'}입니다."
+    )
     if radar.combined_signal in {"STRONG BUY", "BUY"} and intraday >= 0:
-        return "일봉·주봉 에너지와 장중 흐름이 함께 개선되고 있습니다. 신규 매수 검토 구간입니다."
+        return "일봉·주봉 에너지와 장중 흐름이 함께 개선되고 있습니다. " + yearly_text
     if radar.combined_signal in {"STRONG SELL", "SELL"} and intraday <= 0:
-        return "에너지 약화와 장중 하락이 동시에 나타납니다. 신규 매수는 보류하고 보유 비중을 점검할 구간입니다."
+        return "에너지 약화와 장중 하락이 동시에 나타납니다. " + yearly_text
     if daily <= 2.5 and weekly > 2.5:
-        return "단기 과매도 구간이지만 주봉 추세는 아직 완전히 꺾이지 않았습니다. 반등 확인 후 접근하는 편이 안전합니다."
+        return "단기 과매도 구간이지만 주봉 추세는 아직 완전히 꺾이지 않았습니다. " + yearly_text
     if daily >= 8 and weekly >= 8:
-        return "일봉과 주봉 모두 과열권입니다. 추격매수보다 이익실현과 변동성 확대에 유의해야 합니다."
-    return "일봉과 주봉 신호가 혼재합니다. 실시간 MACD와 장중 등락률을 함께 확인하며 관망하는 구간입니다."
+        return "일봉과 주봉 모두 과열권입니다. " + yearly_text
+    return "일봉과 주봉 신호가 혼재합니다. " + yearly_text
 
 
 def _style(st: object) -> None:
@@ -103,7 +125,8 @@ def _style(st: object) -> None:
         .hero h1{margin:3px 0;font-size:34px;letter-spacing:-.04em}.hero p{margin:5px 0;color:#8fa3b8}
         .eyebrow{font-size:12px;font-weight:800;letter-spacing:.16em;color:#4fc3f7}
         .badge{padding:10px 15px;border-radius:999px;background:#102a1d;color:#42d392;font-weight:800}.badge span{display:inline-block;width:9px;height:9px;border-radius:50%;background:#22c55e;margin-right:6px;box-shadow:0 0 12px #22c55e}
-        @media (max-width: 768px){.block-container{padding:.8rem}.hero{display:block;padding:18px}.hero h1{font-size:26px}.badge{display:inline-block;margin-top:12px}}
+        .yearly-card{display:grid;grid-template-columns:1.4fr repeat(4,1fr);gap:12px;align-items:center;padding:16px 18px;margin:14px 0;border-radius:18px;background:#111923;border:1px solid #27384a}.yearly-card span{font-size:11px;letter-spacing:.15em;color:#ffb45c;font-weight:800}.yearly-card h3{margin:3px 0}.yearly-card small{display:block;color:#7f95aa}.yearly-card b{font-size:18px}
+        @media (max-width: 768px){.block-container{padding:.8rem}.hero{display:block;padding:18px}.hero h1{font-size:26px}.badge{display:inline-block;margin-top:12px}.yearly-card{grid-template-columns:1fr 1fr}.yearly-card>div:first-child{grid-column:1/-1}}
         </style>
         """,
         unsafe_allow_html=True,

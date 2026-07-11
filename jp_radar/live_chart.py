@@ -29,7 +29,7 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
         row_heights=[0.58, 0.42],
         specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
         subplot_titles=(
-            f"JP 레이더 · {radar.sector.name} · 일봉/주봉 에너지 + 실시간 지수",
+            f"JP 레이더 · {radar.sector.name} · 일봉/주봉 에너지 + 실시간 지수 + 연봉 의미선",
             "실시간 MACD",
         ),
     )
@@ -93,6 +93,8 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
             col=1,
             secondary_y=True,
         )
+
+    _add_yearly_meaning_lines(fig, result)
 
     buy_dates = daily.index.index[daily.buy_signal]
     sell_dates = daily.index.index[daily.sell_signal]
@@ -169,3 +171,48 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
     fig.update_yaxes(title_text="MACD", row=2, col=1)
     fig.update_xaxes(rangeslider=dict(visible=True), row=2, col=1)
     return fig
+
+
+def _add_yearly_meaning_lines(fig: go.Figure, result: IntradayRadarResult) -> None:
+    yearly = result.radar.yearly
+    bench = result.radar.daily.benchmark.dropna()
+    intraday = result.intraday_price.dropna()
+    if bench.empty and intraday.empty:
+        return
+
+    start = bench.index.min() if not bench.empty else intraday.index.min()
+    end_candidates = []
+    if not bench.empty:
+        end_candidates.append(bench.index.max())
+    if not intraday.empty:
+        end_candidates.append(intraday.index.max())
+    end = max(end_candidates)
+
+    fig.add_trace(
+        go.Scatter(
+            x=[start, end],
+            y=[yearly.open, yearly.open],
+            mode="lines",
+            name=f"{yearly.year} 연봉 시가 {yearly.open:,.2f}",
+            line=dict(color="#ff9f43", width=2.2, dash="dash"),
+            hovertemplate="연봉 시가 %{y:,.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
+
+    if yearly.show_close_line:
+        fig.add_trace(
+            go.Scatter(
+                x=[start, end],
+                y=[yearly.close, yearly.close],
+                mode="lines",
+                name=f"{yearly.year} 연봉 종가 {yearly.close:,.2f}",
+                line=dict(color="#ff4d6d", width=2.2, dash="dot"),
+                hovertemplate="연봉 종가 %{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )

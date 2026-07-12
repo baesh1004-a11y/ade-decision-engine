@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections import OrderedDict
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
@@ -12,7 +13,7 @@ from prediction.replay_prediction import ReplayPrediction, ReplayPredictionEngin
 from similarity.replay_vector_index import ReplayVectorIndex
 from similarity.sliding_replay_matcher import SlidingReplayWindowMatcher
 from sto.structure_similarity import STOStructureSimilarityEngine
-from weekly.shape_similarity import WeeklyShapeSimilarityEngine
+from weekly.shape_similarity import WeeklyShape, WeeklyShapeSimilarityEngine
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,9 @@ class EventRecommendation:
 class RecentMoneyEventRecommender:
     """ADE recommendation rule with vector prefilter, sliding Replay matching and prediction."""
 
+    TIMELINE_CACHE_LIMIT = 512
+    SHAPE_CACHE_LIMIT = 2048
+
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
         self.db_path = Path(db_path)
         self.conn = sqlite3.connect(str(self.db_path))
@@ -74,8 +78,12 @@ class RecentMoneyEventRecommender:
         self.sliding_matcher = SlidingReplayWindowMatcher(min_weeks=10, max_weeks=26)
         self.prediction_engine = ReplayPredictionEngine(self.db_path)
         self.vector_index = ReplayVectorIndex(self.db_path)
+        self._timeline_cache: OrderedDict[str, pd.DataFrame] = OrderedDict()
+        self._shape_cache: OrderedDict[tuple[str, int], WeeklyShape] = OrderedDict()
 
     def close(self) -> None:
+        self._timeline_cache.clear()
+        self._shape_cache.clear()
         self.vector_index.close()
         self.prediction_engine.close()
         self.price_repo.close()
@@ -93,11 +101,14 @@ class RecentMoneyEventRecommender:
     ) -> list[EventRecommendation]:
         candidates = self._recent_event_candidates(candidate_years)
         historical_events = self._historical_events()
+        historical_by_id = {str(row["event_id"]): row for row in historical_events}
         recommendations: list[EventRecommendation] = []
+        lookback_days = max(40, lookback_months * 22)
+        replay_days = max(260, lookback_days + 132)
 
         for candidate in candidates:
             current_data = self.price_repo.fetch_dataframe(candidate["market"], candidate["ticker"], source="fdr")
-            current_window = current_data.tail(max(40, lookback_months * 22)).reset_index(drop=True)
+            current_window = current_data.tail(lookback_days).reset_index(drop=True)
             if current_window.empty:
                 continue
             current_weekly_shape = self.weekly_shape_engine.extract(current_window)
@@ -106,6 +117,7 @@ class RecentMoneyEventRecommender:
             candidate_events, vector_prefilter_used = self._vector_prefilter(
                 candidate,
                 historical_events,
+                historical_by_id,
                 weekly_pool_n=weekly_pool_n,
             )
 
@@ -113,13 +125,10 @@ class RecentMoneyEventRecommender:
             for event in candidate_events:
                 if event["event_id"] == candidate["event_id"]:
                     continue
-                replay_timeline = self._event_forward_window_days(event, days=max(260, lookback_months * 22 + 132))
+                replay_timeline = self._event_forward_window_days(event, days=replay_days)
                 if replay_timeline.empty:
                     continue
-                first_segment = replay_timeline.head(max(40, lookback_months * 22)).reset_index(drop=True)
-                if first_segment.empty:
-                    continue
-                event_weekly_shape = self.weekly_shape_engine.extract(first_segment)
+                event_weekly_shape = self._cached_weekly_shape(event, replay_timeline, lookback_days)
                 weekly_similarity = self.weekly_shape_engine.similarity(current_weekly_shape, event_weekly_shape)
                 if weekly_similarity >= min_weekly_similarity:
                     weekly_hits.append((weekly_similarity, event, replay_timeline))
@@ -210,19 +219,38 @@ class RecentMoneyEventRecommender:
         self,
         candidate: sqlite3.Row,
         historical_events: list[sqlite3.Row],
+        historical_by_id: dict[str, sqlite3.Row],
         weekly_pool_n: int,
     ) -> tuple[list[sqlite3.Row], bool]:
         if self.vector_index.count() <= 0:
             return historical_events, False
 
-        by_id = {str(row["event_id"]): row for row in historical_events}
         ranked = self.vector_index.rank_similar(
             query_event_id=str(candidate["event_id"]),
-            candidate_event_ids=list(by_id),
-            limit=max(500, int(weekly_pool_n) * 8),
+            candidate_event_ids=list(historical_by_id),
+            limit=max(120, int(weekly_pool_n) * 2),
         )
-        selected = [by_id[event_id] for event_id, _score in ranked if event_id in by_id]
+        selected = [historical_by_id[event_id] for event_id, _score in ranked if event_id in historical_by_id]
         return (selected, True) if selected else (historical_events, False)
+
+    def _cached_weekly_shape(
+        self,
+        event: sqlite3.Row,
+        replay_timeline: pd.DataFrame,
+        lookback_days: int,
+    ) -> WeeklyShape:
+        key = (str(event["event_id"]), int(lookback_days))
+        cached = self._shape_cache.get(key)
+        if cached is not None:
+            self._shape_cache.move_to_end(key)
+            return cached
+        first_segment = replay_timeline.head(lookback_days).reset_index(drop=True)
+        shape = self.weekly_shape_engine.extract(first_segment)
+        self._shape_cache[key] = shape
+        self._shape_cache.move_to_end(key)
+        while len(self._shape_cache) > self.SHAPE_CACHE_LIMIT:
+            self._shape_cache.popitem(last=False)
+        return shape
 
     @staticmethod
     def _sort_key(item: EventRecommendation) -> tuple[float, float, float]:
@@ -255,6 +283,12 @@ class RecentMoneyEventRecommender:
         return self.conn.execute("SELECT * FROM replay_events ORDER BY event_date").fetchall()
 
     def _event_forward_window_days(self, event: sqlite3.Row, days: int) -> pd.DataFrame:
+        event_id = str(event["event_id"])
+        cached = self._timeline_cache.get(event_id)
+        if cached is not None:
+            self._timeline_cache.move_to_end(event_id)
+            return cached.head(days).copy()
+
         data = self.price_repo.fetch_dataframe(event["market"], event["ticker"], source="fdr")
         if data.empty or "Date" not in data.columns:
             return pd.DataFrame()
@@ -265,8 +299,13 @@ class RecentMoneyEventRecommender:
         if matches.empty:
             return pd.DataFrame()
         start = int(matches.index[0])
-        end = min(len(df), start + max(60, days))
-        return df.iloc[start:end].reset_index(drop=True)
+        end = min(len(df), start + max(260, days))
+        timeline = df.iloc[start:end].reset_index(drop=True)
+        self._timeline_cache[event_id] = timeline
+        self._timeline_cache.move_to_end(event_id)
+        while len(self._timeline_cache) > self.TIMELINE_CACHE_LIMIT:
+            self._timeline_cache.popitem(last=False)
+        return timeline.head(days).copy()
 
     def _event_forward_window(self, event: sqlite3.Row, months: int) -> pd.DataFrame:
         return self._event_forward_window_days(event, days=max(40, months * 22))

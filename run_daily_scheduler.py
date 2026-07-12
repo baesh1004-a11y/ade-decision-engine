@@ -1,10 +1,31 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import time
 from datetime import datetime, time as clock_time
+from pathlib import Path
 
 from recommendation.daily_service import DailyRecommendationService
+
+
+HEARTBEAT_PATH = Path("output/ade_core_status.json")
+
+
+def _write_heartbeat(status: str, schedule: str, message: str = "") -> None:
+    HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "status": status,
+        "pid": os.getpid(),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "schedule": schedule,
+        "message": message,
+    }
+    HEARTBEAT_PATH.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 def main() -> None:
@@ -19,37 +40,48 @@ def main() -> None:
     args = parser.parse_args()
 
     target_time = clock_time(args.hour, args.minute)
+    schedule_text = f"weekdays {args.hour:02d}:{args.minute:02d}"
     print("========================================")
-    print(" ADE DAILY RECOMMENDATION SCHEDULER")
+    print(" ADE CORE")
     print("========================================")
-    print(f"Schedule : weekdays {args.hour:02d}:{args.minute:02d}")
+    print(f"Schedule : {schedule_text}")
     print(f"Poll     : every {args.poll_seconds}s")
+    _write_heartbeat("RUNNING", schedule_text, "ADE Core started")
 
-    while True:
-        now = datetime.now()
-        should_run = now.weekday() < 5 and now.time() >= target_time
-        if should_run:
-            service = DailyRecommendationService()
-            try:
-                if not service.auto_completed_today():
-                    print(f"[{now.isoformat(timespec='seconds')}] Starting AUTO recommendation...")
-                    result = service.run(
-                        "AUTO",
-                        top_n=args.top,
-                        weekly_pool_n=args.weekly_pool,
-                        min_weekly_similarity=args.min_weekly,
-                        min_sto_similarity=args.min_sto,
-                    )
-                    print(
-                        f"[{result.finished_at}] AUTO completed: "
-                        f"{result.recommendation_count} recommendations, "
-                        f"{result.elapsed_seconds:.1f}s"
-                    )
-            except Exception as exc:
-                print(f"[{datetime.now().isoformat(timespec='seconds')}] AUTO failed: {exc}")
-            finally:
-                service.close()
-        time.sleep(max(10, args.poll_seconds))
+    try:
+        while True:
+            now = datetime.now()
+            _write_heartbeat("RUNNING", schedule_text, "Waiting for schedule")
+            should_run = now.weekday() < 5 and now.time() >= target_time
+            if should_run:
+                service = DailyRecommendationService()
+                try:
+                    if not service.auto_completed_today():
+                        _write_heartbeat("RUNNING", schedule_text, "AUTO recommendation running")
+                        print(f"[{now.isoformat(timespec='seconds')}] Starting AUTO recommendation...")
+                        result = service.run(
+                            "AUTO",
+                            top_n=args.top,
+                            weekly_pool_n=args.weekly_pool,
+                            min_weekly_similarity=args.min_weekly,
+                            min_sto_similarity=args.min_sto,
+                        )
+                        message = (
+                            f"AUTO completed: {result.recommendation_count} recommendations, "
+                            f"{result.elapsed_seconds:.1f}s"
+                        )
+                        print(f"[{result.finished_at}] {message}")
+                        _write_heartbeat("RUNNING", schedule_text, message)
+                except Exception as exc:
+                    message = f"AUTO failed: {exc}"
+                    print(f"[{datetime.now().isoformat(timespec='seconds')}] {message}")
+                    _write_heartbeat("ERROR", schedule_text, message)
+                finally:
+                    service.close()
+            time.sleep(max(10, args.poll_seconds))
+    except KeyboardInterrupt:
+        _write_heartbeat("STOPPED", schedule_text, "ADE Core stopped by user")
+        print("ADE Core stopped")
 
 
 if __name__ == "__main__":

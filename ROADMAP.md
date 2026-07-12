@@ -34,28 +34,30 @@
 | 11 | Backtest Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 과거 데이터 기반 전략 검증과 시뮬레이션 결과 산출 |
 | 12 | Report Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 일일 의사결정, 포트폴리오, 체결, 백테스트 리포트 생성 |
 | 13 | Integration Orchestrator | 완료 | 기존 통합 흐름 존재 | 계획 완료 | 미확인 | 실행 ID, 단계 상태, 실패 격리, 감사 로그를 관리하는 상위 제어 계층 |
+| 14 | Run State Store | 완료 | 미구현 | 계획 완료 | 미확인 | SQLite run/stage/artifact 저장, 상태 전이, 멱등성, 감사 추적 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 핵심 엔진 및 통합 제어 설계 완료
+[██████████] 핵심 엔진 및 통합 실행 기반 설계 완료
 ```
 
 ## 현재 우선순위
 
-1. 기존 기본 파이프라인이 정상 실행되는지 확인
-2. Integration Orchestrator 최소 구현으로 기존 파이프라인 래핑
-3. 고정 CSV fixture 기반 스모크 테스트 작성
-4. Candidate → Signal 전환은 병행 구조로 점진 적용
-5. Risk/Decision 설계와 기존 구현의 정합성 검증
+1. Run State Store migration과 Repository 최소 구현
+2. `RunRequest`, `RunResult`, `StageResult` 모델 구현
+3. 기존 `main.py`/`ADEPipeline` adapter 작성
+4. 고정 CSV fixture 기반 스모크 테스트
+5. Candidate → Signal 병행 전환과 Risk/Decision 정합성 검증
 
 ## 다음 작업
 
-1. `RunRequest`, `RunResult`, `StageResult` 모델 구현
-2. `ade_runs`, `ade_run_stages` SQLite repository 구현
-3. `main.py`와 `ADEPipeline`용 adapter 작성
-4. DataHub → Signal → Risk → Decision 스모크 테스트
-5. Report Engine용 최소 JSON fixture 생성
+1. `db/migrations/001_create_run_state.sql` 구현
+2. `core/run_models.py`, `core/run_repository.py`, `core/run_state_store.py` 구현
+3. run/stage 상태 전이 단위 테스트 작성
+4. 기존 파이프라인을 Orchestrator stage로 래핑
+5. DataHub → Signal → Risk → Decision fixture 통합 테스트
+6. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -66,3 +68,6 @@
 - 모든 엔진은 입력/출력, 책임 경계, DB, 알고리즘, 테스트 계획을 가진다.
 - 기존 동작 코드를 먼저 검증한 뒤 구조 변경을 수행한다.
 - Orchestrator는 투자 판단을 생성하거나 엔진 결과를 임의로 변경하지 않는다.
+- Run State Store는 상태를 기록하되 최종 투자 판단이나 재시도 정책을 결정하지 않는다.
+- 완료 상태의 run은 되살리지 않으며 재실행 시 새 run ID를 생성한다.
+- stage 상태 변경과 산출물 저장은 가능한 한 동일 트랜잭션으로 처리한다.

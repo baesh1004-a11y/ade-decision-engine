@@ -5,19 +5,21 @@ import sys
 
 
 def main() -> None:
-    scheduler_cmd = [sys.executable, "run_daily_scheduler.py"]
-    app_cmd = [sys.executable, "-m", "streamlit", "run", "ade_home.py", "--server.address", "0.0.0.0"]
+    """Start only the ADE dashboard.
 
-    scheduler = subprocess.Popen(scheduler_cmd)
-    try:
-        exit_code = subprocess.call(app_cmd)
-    finally:
-        scheduler.terminate()
-        try:
-            scheduler.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            scheduler.kill()
-    raise SystemExit(exit_code)
+    Automatic recommendation scheduling is handled independently by
+    run_ade_core.py, so closing the dashboard does not stop ADE Core.
+    """
+    app_cmd = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        "ade_home.py",
+        "--server.address",
+        "0.0.0.0",
+    ]
+    raise SystemExit(subprocess.call(app_cmd))
 
 
 if __name__ == "__main__":

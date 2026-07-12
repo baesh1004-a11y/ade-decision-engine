@@ -7,6 +7,7 @@ import time
 from datetime import datetime, time as clock_time
 from pathlib import Path
 
+from maintenance.job_manager import ADEJobManager
 from recommendation.daily_service import DailyRecommendationService
 
 
@@ -57,15 +58,20 @@ def main() -> None:
                 service = DailyRecommendationService()
                 try:
                     if not service.auto_completed_today():
-                        _write_heartbeat("RUNNING", schedule_text, "AUTO recommendation running")
-                        print(f"[{now.isoformat(timespec='seconds')}] Starting AUTO recommendation...")
-                        result = service.run(
-                            "AUTO",
-                            top_n=args.top,
-                            weekly_pool_n=args.weekly_pool,
-                            min_weekly_similarity=args.min_weekly,
-                            min_sto_similarity=args.min_sto,
-                        )
+                        _write_heartbeat("RUNNING", schedule_text, "AUTO recommendation queued")
+                        print(f"[{now.isoformat(timespec='seconds')}] AUTO recommendation queued...")
+                        with ADEJobManager().acquire(
+                            "AUTO_RECOMMENDATION",
+                            wait=True,
+                            timeout_seconds=6 * 60 * 60,
+                        ):
+                            result = service.run(
+                                "AUTO",
+                                top_n=args.top,
+                                weekly_pool_n=args.weekly_pool,
+                                min_weekly_similarity=args.min_weekly,
+                                min_sto_similarity=args.min_sto,
+                            )
                         message = (
                             f"AUTO completed: {result.recommendation_count} recommendations, "
                             f"{result.elapsed_seconds:.1f}s"

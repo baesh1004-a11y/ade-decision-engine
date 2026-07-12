@@ -7,6 +7,7 @@ from time import perf_counter
 from replay.builder import ReplayEventDBBuilder
 from replay.models import ADE_VERSION
 from replay.repository import ReplayEventRepository
+from replay.vector_builder import ReplayEventVectorBuilder
 
 
 DB_PATH = Path("datahub/market.db")
@@ -25,6 +26,11 @@ def main() -> None:
         "--clear",
         action="store_true",
         help="Backward-compatible alias of --full.",
+    )
+    parser.add_argument(
+        "--skip-vectors",
+        action="store_true",
+        help="Skip Replay event-vector generation after the event DB update.",
     )
     args = parser.parse_args()
     full_build = bool(args.full or args.clear)
@@ -63,6 +69,18 @@ def main() -> None:
         stats = dict(builder.last_stats)
     finally:
         builder.close()
+
+    vector_stats = None
+    if not args.skip_vectors:
+        vector_builder = ReplayEventVectorBuilder(DB_PATH)
+        try:
+            vector_stats = vector_builder.build(
+                ade_version=ADE_VERSION,
+                rebuild=full_build,
+            )
+        finally:
+            vector_builder.close()
+
     elapsed = perf_counter() - started
 
     repo = ReplayEventRepository(DB_PATH)
@@ -84,6 +102,13 @@ def main() -> None:
     print(f"Added Flows        : {flow_count}")
     print(f"Total Events       : {total_events}")
     print(f"Total Flows        : {total_flows}")
+    if vector_stats is not None:
+        print(f"Scanned Vectors    : {vector_stats.scanned_events}")
+        print(f"Upserted Vectors   : {vector_stats.upserted_vectors}")
+        print(f"Skipped Vectors    : {vector_stats.skipped_events}")
+        print(f"Total Vectors      : {vector_stats.total_vectors}")
+    else:
+        print("Replay Vectors     : skipped")
     print(f"Checkpoint Symbols : {stats.get('checkpoint_symbols', 0)}")
     print(f"Latest Checkpoint  : {stats.get('latest_checkpoint') or 'none'}")
     print(f"Elapsed            : {elapsed:.1f}s")

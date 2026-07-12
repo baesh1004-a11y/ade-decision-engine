@@ -9,6 +9,7 @@ import pandas as pd
 
 from datahub.repository import PriceRepository
 from prediction.replay_prediction import ReplayPrediction, ReplayPredictionEngine
+from similarity.replay_vector_index import ReplayVectorIndex
 from similarity.sliding_replay_matcher import SlidingReplayWindowMatcher
 from sto.structure_similarity import STOStructureSimilarityEngine
 from weekly.shape_similarity import WeeklyShapeSimilarityEngine
@@ -61,7 +62,7 @@ class EventRecommendation:
 
 
 class RecentMoneyEventRecommender:
-    """ADE recommendation rule with sliding Replay matching and forward prediction."""
+    """ADE recommendation rule with vector prefilter, sliding Replay matching and prediction."""
 
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
         self.db_path = Path(db_path)
@@ -72,8 +73,10 @@ class RecentMoneyEventRecommender:
         self.sto_structure_engine = STOStructureSimilarityEngine()
         self.sliding_matcher = SlidingReplayWindowMatcher(min_weeks=10, max_weeks=26)
         self.prediction_engine = ReplayPredictionEngine(self.db_path)
+        self.vector_index = ReplayVectorIndex(self.db_path)
 
     def close(self) -> None:
+        self.vector_index.close()
         self.prediction_engine.close()
         self.price_repo.close()
         self.conn.close()
@@ -100,8 +103,14 @@ class RecentMoneyEventRecommender:
             current_weekly_shape = self.weekly_shape_engine.extract(current_window)
             current_sto_structure = self.sto_structure_engine.extract(current_data)
 
+            candidate_events, vector_prefilter_used = self._vector_prefilter(
+                candidate,
+                historical_events,
+                weekly_pool_n=weekly_pool_n,
+            )
+
             weekly_hits: list[tuple[float, sqlite3.Row, pd.DataFrame]] = []
-            for event in historical_events:
+            for event in candidate_events:
                 if event["event_id"] == candidate["event_id"]:
                     continue
                 replay_timeline = self._event_forward_window_days(event, days=max(260, lookback_months * 22 + 132))
@@ -150,7 +159,12 @@ class RecentMoneyEventRecommender:
             prediction = self.prediction_engine.predict(replay_matches)
             reasons = [
                 f"최근 {candidate_years}년 내 대금 이벤트 발생: {candidate['event_date']}",
-                f"Replay DB 전체에서 Top {len(replay_matches)} 유사 이벤트 검색",
+                (
+                    f"Replay Vector 1차 후보축소 적용: {len(candidate_events)}개 이벤트"
+                    if vector_prefilter_used
+                    else "Replay Vector 미사용: 전체 이벤트에서 기존 방식으로 검색"
+                ),
+                f"Replay DB에서 Top {len(replay_matches)} 유사 이벤트 검색",
                 f"슬라이딩 매칭: Top1 Replay의 {best.equivalent_week_index}번째 주봉이 현재 NOW와 가장 유사",
                 f"비교 구간 {best.weeks_compared}주, 이후 확인 가능 구간 {best.future_weeks_available}주",
                 f"Top1 주봉 차트형태 유사도 {best.weekly_similarity:.2f}%",
@@ -169,7 +183,6 @@ class RecentMoneyEventRecommender:
                         f"Replay Prediction 등급 {prediction.grade}",
                     ]
                 )
-
             recommendations.append(
                 EventRecommendation(
                     market=str(candidate["market"]),
@@ -192,6 +205,24 @@ class RecentMoneyEventRecommender:
             )
 
         return sorted(recommendations, key=self._sort_key, reverse=True)[:top_n]
+
+    def _vector_prefilter(
+        self,
+        candidate: sqlite3.Row,
+        historical_events: list[sqlite3.Row],
+        weekly_pool_n: int,
+    ) -> tuple[list[sqlite3.Row], bool]:
+        if self.vector_index.count() <= 0:
+            return historical_events, False
+
+        by_id = {str(row["event_id"]): row for row in historical_events}
+        ranked = self.vector_index.rank_similar(
+            query_event_id=str(candidate["event_id"]),
+            candidate_event_ids=list(by_id),
+            limit=max(500, int(weekly_pool_n) * 8),
+        )
+        selected = [by_id[event_id] for event_id, _score in ranked if event_id in by_id]
+        return (selected, True) if selected else (historical_events, False)
 
     @staticmethod
     def _sort_key(item: EventRecommendation) -> tuple[float, float, float]:

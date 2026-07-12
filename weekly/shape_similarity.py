@@ -22,12 +22,7 @@ class WeeklyShape:
 
 
 class WeeklyShapeSimilarityEngine:
-    """Compare weekly chart shape, not only category labels.
-
-    The shape is based on the last N weekly candles:
-    normalized close/high/low path, volume flow, box width, pullback depth,
-    breakout angle and trend slope.
-    """
+    """Compare weekly chart shape, not only category labels."""
 
     def __init__(self, weeks: int = 26) -> None:
         self.weeks = weeks
@@ -37,18 +32,19 @@ class WeeklyShapeSimilarityEngine:
         if weekly.empty:
             return WeeklyShape([], [], [], [], 0, 0, 0, 0, ["weekly_shape_empty"])
 
-        close = weekly["Close"].astype(float)
-        high = weekly["High"].astype(float)
-        low = weekly["Low"].astype(float)
-        volume = weekly["Volume"].astype(float)
+        close = pd.to_numeric(weekly["Close"], errors="coerce").astype(float)
+        high = pd.to_numeric(weekly["High"], errors="coerce").astype(float)
+        low = pd.to_numeric(weekly["Low"], errors="coerce").astype(float)
+        volume = pd.to_numeric(weekly["Volume"], errors="coerce").astype(float)
         base = float(close.iloc[0]) if float(close.iloc[0]) != 0 else 1.0
 
         normalized_close = ((close / base) - 1).clip(-1.0, 3.0).round(6).tolist()
         normalized_high = ((high / base) - 1).clip(-1.0, 3.0).round(6).tolist()
         normalized_low = ((low / base) - 1).clip(-1.0, 3.0).round(6).tolist()
 
-        vol_ma = volume.rolling(8, min_periods=2).mean().replace(0, pd.NA)
-        volume_ratio = (volume / vol_ma).fillna(1).clip(0, 10).round(6).tolist()
+        vol_ma = volume.rolling(8, min_periods=2).mean()
+        safe_vol_ma = vol_ma.where(vol_ma != 0)
+        volume_ratio = pd.to_numeric(volume.div(safe_vol_ma), errors="coerce").fillna(1.0).clip(0, 10).round(6).tolist()
 
         prior = weekly.iloc[:-1] if len(weekly) > 1 else weekly
         high_max = float(prior["High"].max()) if not prior.empty else float(high.max())

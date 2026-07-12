@@ -4,6 +4,7 @@ import argparse
 import json
 
 from feedback.engine import FeedbackEngine
+from maintenance.job_manager import ADEJobManager
 
 
 def main() -> None:
@@ -11,12 +12,17 @@ def main() -> None:
     parser.add_argument("--db", default="datahub/market.db")
     args = parser.parse_args()
 
-    engine = FeedbackEngine(args.db)
-    try:
-        result = engine.update_open_cases()
-        summary = engine.summary()
-    finally:
-        engine.close()
+    with ADEJobManager().acquire(
+        "FEEDBACK_UPDATE",
+        wait=True,
+        timeout_seconds=2 * 60 * 60,
+    ):
+        engine = FeedbackEngine(args.db)
+        try:
+            result = engine.update_open_cases()
+            summary = engine.summary()
+        finally:
+            engine.close()
 
     print(json.dumps({
         "update": result,

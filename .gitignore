@@ -1,9 +1,41 @@
+# Python environments and caches
 .venv/
+venv/
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors and OS files
 .vscode/
-backups/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Secrets and local configuration
 .env
+.env.*
+!.env.example
 .ade_sync.json
 .ade_sync_state.json
+
+# Local ADE databases and SQLite runtime files
+datahub/*.db
+datahub/*.db-*
+datahub/*.sqlite
+datahub/*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Generated reports, output, cache and backups
+output/
+reports/
+cache/
+backups/
+
+# Temporary/runtime files
+*.tmp
+*.log
+*.pid

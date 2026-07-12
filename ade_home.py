@@ -26,6 +26,7 @@ def main() -> None:
     )
 
     rows = [
+        ("pages/7_Daily_Center.py", "Daily Center", "평일 16:10 자동 추천과 장중 수동 추천을 통합 운영"),
         ("pages/1_ADE_Cockpit.py", "ADE Cockpit", "추천 검증, 보유종목, 주문내역, 매도판단"),
         ("pages/2_Meta_Score.py", "Meta Score", "Replay·Prediction·JP Radar·Risk 통합점수"),
         ("pages/3_Live_Monitor.py", "Live Monitor", "추천종목과 보유종목 장중 KIS 현재가 모니터"),
@@ -39,7 +40,7 @@ def main() -> None:
         for col, (path, title, desc) in zip(cols, rows[start:start + 3]):
             with col:
                 st.markdown(f'<div class="card"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
-                st.page_link(path, label=f"{title} 열기", icon="→")
+                st.page_link(path, label=f"{title} 열기")
 
     st.divider()
     st.markdown("### 운영 명령")

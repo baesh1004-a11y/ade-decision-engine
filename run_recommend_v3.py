@@ -1,10 +1,25 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 from pathlib import Path
+from time import perf_counter
 
 from recommendation.event_recommender import RecentMoneyEventRecommender
 from report.recommendation_html_report import render_recommendation_html
+
+
+DB_PATH = Path("datahub/market.db")
+
+
+def _db_count(table: str) -> int:
+    conn = sqlite3.connect(str(DB_PATH))
+    try:
+        return int(conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()[0])
+    except sqlite3.Error:
+        return 0
+    finally:
+        conn.close()
 
 
 def main() -> None:
@@ -19,8 +34,27 @@ def main() -> None:
     parser.add_argument("--report", default="output/recommendation_report.html")
     args = parser.parse_args()
 
-    engine = RecentMoneyEventRecommender()
+    event_count = _db_count("replay_events")
+    vector_count = _db_count("replay_event_vectors")
+    flow_count = _db_count("replay_event_flow")
+
+    print("\n========================================")
+    print(" ADE REPLAY RECOMMENDATION START")
+    print("========================================")
+    print(f"Database         : {DB_PATH}")
+    print(f"Replay Events    : {event_count:,}")
+    print(f"Replay Vectors   : {vector_count:,}")
+    print(f"Replay Flows     : {flow_count:,}")
+    print(f"Vector Prefilter : {'ENABLED' if vector_count > 0 else 'DISABLED'}")
+    print(f"Candidate Window : recent {args.candidate_years} years")
+    print(f"Lookback Window  : {args.lookback_months} months")
+    print(f"Threshold        : weekly {args.min_weekly:.1f}% / STO {args.min_sto:.1f}%")
+    print("\n[1/3] Loading recent candidates and Replay vector index...")
+
+    started = perf_counter()
+    engine = RecentMoneyEventRecommender(DB_PATH)
     try:
+        print("[2/3] Running vector prefilter, weekly/STO matching and prediction...")
         recommendations = engine.recommend(
             candidate_years=args.candidate_years,
             lookback_months=args.lookback_months,
@@ -33,7 +67,9 @@ def main() -> None:
     finally:
         engine.close()
 
+    print("[3/3] Writing HTML recommendation report...")
     report_path = render_recommendation_html(recommendations, Path(args.report), lookback_months=args.lookback_months)
+    elapsed = perf_counter() - started
 
     print("\n========================================")
     print(" ADE REPLAY PREDICTION RECOMMENDER")
@@ -42,7 +78,9 @@ def main() -> None:
     print(f"Weekly window    : recent {args.lookback_months} months")
     print(f"Rule             : weekly >= {args.min_weekly:.1f}% AND STO >= {args.min_sto:.1f}%")
     print(f"Replay matches   : Top {args.replay_top} per recommendation")
+    print(f"Vector prefilter : {'enabled' if vector_count > 0 else 'disabled'}")
     print(f"Recommendations  : {len(recommendations)}")
+    print(f"Elapsed          : {elapsed:.1f}s")
     print(f"HTML report      : {report_path}")
     print("\nRank | Stock | Decision | Grade | 7D Up | 7D Exp | 7D Max | Peak Day | Target | Stop | Final")
     print("-----|-------|----------|-------|-------|--------|--------|----------|--------|------|------")
@@ -60,6 +98,9 @@ def main() -> None:
             f"{i:02d} | {item.market.upper()}:{item.ticker} {item.name or ''} | "
             f"{item.decision} | {prediction_text} | {item.final_similarity:.2f}%"
         )
+        vector_reason = next((reason for reason in item.reasons if "Replay Vector" in reason), None)
+        if vector_reason:
+            print(f"    Vector: {vector_reason}")
         if p is not None:
             horizon_text = ", ".join(
                 f"{h.days}D up={h.up_probability:.1f}% exp={h.expected_return:+.2f}% med={h.median_return:+.2f}%"

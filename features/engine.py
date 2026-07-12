@@ -27,8 +27,9 @@ class FeatureEngine:
         delta = close.diff()
         gain = delta.clip(lower=0).rolling(14).mean()
         loss = (-delta.clip(upper=0)).rolling(14).mean()
-        rs = gain / loss.replace(0, pd.NA)
-        df["RSI14"] = (100 - (100 / (1 + rs))).fillna(50.0)
+        rs = gain.div(loss.where(loss != 0))
+        rsi = 100.0 - (100.0 / (1.0 + rs))
+        df["RSI14"] = pd.to_numeric(rsi, errors="coerce").fillna(50.0).astype(float)
 
         prev_close = close.shift(1)
         true_range = pd.concat(
@@ -41,7 +42,7 @@ class FeatureEngine:
         df["BB_UPPER"] = df["MA20"] + (2 * std20)
         df["BB_LOWER"] = df["MA20"] - (2 * std20)
         df["VOLUME_MA20"] = volume.rolling(20).mean()
-        df["VOLUME_RATIO"] = volume / df["VOLUME_MA20"].replace(0, pd.NA)
+        df["VOLUME_RATIO"] = volume / df["VOLUME_MA20"].where(df["VOLUME_MA20"] != 0)
         df["RETURN_1D"] = close.pct_change()
         df["RETURN_20D"] = close.pct_change(20)
         df["VOLATILITY_20D"] = df["RETURN_1D"].rolling(20).std()

@@ -20,6 +20,8 @@ from dashboard.paper_app import (
     _top_movers,
 )
 from dashboard.sell_panel import render_sell_panel
+from maintenance.job_manager import ADEJobManager
+from recommendation.daily_service import DailyRecommendationService
 from recommendation.event_recommender import RecentMoneyEventRecommender
 from report.chart_viewer import RecommendationChartViewer
 
@@ -118,7 +120,7 @@ def _recommendation_report(st: object, db_path: str) -> None:
     st.markdown(
         """
         <div class="chart-empty">
-        오늘 추천종목 전체 요약, 추천 사유, Top5 Replay, SAME AS NOW 위치, Replay 이후 실제 흐름을 한 화면에서 검증합니다.
+        현재 시점 추천종목을 생성·저장한 뒤, 추천 사유와 Top5 Replay를 상세 검증합니다.
         </div>
         """,
         unsafe_allow_html=True,
@@ -130,26 +132,79 @@ def _recommendation_report(st: object, db_path: str) -> None:
     min_weekly = c3.number_input("주봉 기준", min_value=70.0, max_value=99.0, value=85.0, step=1.0, key="report_weekly")
     min_sto = c4.number_input("STO 기준", min_value=70.0, max_value=99.0, value=85.0, step=1.0, key="report_sto")
 
-    if st.button("추천 검증 리포트 생성", type="primary"):
-        engine = RecentMoneyEventRecommender(db_path=db_path)
-        try:
-            recommendations = engine.recommend(
-                candidate_years=2,
-                lookback_months=6,
-                top_n=int(top_n),
-                weekly_pool_n=int(weekly_pool),
-                min_weekly_similarity=float(min_weekly),
-                min_sto_similarity=float(min_sto),
-                replay_top_n=5,
-            )
-        finally:
-            engine.close()
-        st.session_state["dashboard_recommendation_report"] = recommendations
-        st.session_state.pop("dashboard_report_charts", None)
+    manager = ADEJobManager()
+    current_job = manager.current_status() or {}
+    j1, j2, j3 = st.columns(3)
+    j1.metric("ADE 작업 상태", str(current_job.get("state", "IDLE")))
+    j2.metric("현재 작업", str(current_job.get("job_name", "없음")))
+    j3.metric("최근 갱신", str(current_job.get("updated_at", "없음")))
+
+    generate_col, verify_col = st.columns(2)
+    generate_clicked = generate_col.button(
+        "추천종목 생성 및 저장",
+        type="primary",
+        use_container_width=True,
+        key="generate_recommendations",
+    )
+    verify_clicked = verify_col.button(
+        "추천 검증 리포트 생성",
+        use_container_width=True,
+        key="verify_recommendations",
+    )
+
+    if generate_clicked:
+        with st.status("현재 시점 추천종목을 생성하고 있습니다...", expanded=True) as status:
+            service = DailyRecommendationService(db_path)
+            try:
+                st.write("다른 DB 작업 종료 대기")
+                with manager.acquire(
+                    "MANUAL_RECOMMENDATION",
+                    wait=True,
+                    timeout_seconds=6 * 60 * 60,
+                ):
+                    st.write("Replay Vector 및 주봉·STO 유사도 계산")
+                    result = service.run(
+                        "MANUAL",
+                        top_n=int(top_n),
+                        weekly_pool_n=int(weekly_pool),
+                        min_weekly_similarity=float(min_weekly),
+                        min_sto_similarity=float(min_sto),
+                        replay_top_n=5,
+                    )
+                status.update(label="추천종목 생성 완료", state="complete", expanded=False)
+                st.success(
+                    f"추천 {result.recommendation_count}개 저장 완료 · "
+                    f"소요시간 {result.elapsed_seconds:.1f}초 · {result.run_id}"
+                )
+                st.caption(f"HTML 보고서: {result.report_path}")
+            except Exception as exc:
+                status.update(label="추천종목 생성 실패", state="error", expanded=True)
+                st.error(str(exc))
+            finally:
+                service.close()
+
+    if verify_clicked:
+        with st.status("추천 검증 리포트를 계산하고 있습니다...", expanded=False) as status:
+            engine = RecentMoneyEventRecommender(db_path=db_path)
+            try:
+                recommendations = engine.recommend(
+                    candidate_years=2,
+                    lookback_months=6,
+                    top_n=int(top_n),
+                    weekly_pool_n=int(weekly_pool),
+                    min_weekly_similarity=float(min_weekly),
+                    min_sto_similarity=float(min_sto),
+                    replay_top_n=5,
+                )
+            finally:
+                engine.close()
+            st.session_state["dashboard_recommendation_report"] = recommendations
+            st.session_state.pop("dashboard_report_charts", None)
+            status.update(label="추천 검증 리포트 생성 완료", state="complete")
 
     rows = st.session_state.get("dashboard_recommendation_report", [])
     if not rows:
-        st.info("추천 검증 리포트 생성 버튼을 누르면 현재 데이터 기준 리포트를 만듭니다.")
+        st.info("먼저 추천종목을 생성·저장하거나, 추천 검증 리포트 생성 버튼을 누르세요.")
         return
 
     summary = pd.DataFrame(

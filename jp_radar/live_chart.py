@@ -16,7 +16,7 @@ ENERGY_LINES = [
 ]
 
 
-def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
+def make_live_radar_chart(result: IntradayRadarResult, mobile: bool = False) -> go.Figure:
     radar = result.radar
     daily = radar.daily
     intraday = result.intraday_price
@@ -25,16 +25,16 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
         rows=2,
         cols=1,
         shared_xaxes=False,
-        vertical_spacing=0.06,
-        row_heights=[0.58, 0.42],
+        vertical_spacing=0.10 if mobile else 0.06,
+        row_heights=[0.68, 0.32] if mobile else [0.58, 0.42],
         specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
         subplot_titles=(
-            f"JP 레이더 · {radar.sector.name} · 일봉/주봉 에너지 + 실시간 지수 + 연봉 의미선",
-            "실시간 MACD",
+            "에너지 · 지수 · 연봉 의미선" if mobile else f"JP 레이더 · {radar.sector.name} · 일봉/주봉 에너지 + 실시간 지수 + 연봉 의미선",
+            "MACD" if mobile else "실시간 MACD",
         ),
     )
 
-    for name, attr, color in ENERGY_LINES:
+    for idx, (name, attr, color) in enumerate(ENERGY_LINES):
         data = getattr(daily, attr)
         fig.add_trace(
             go.Scatter(
@@ -42,6 +42,7 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
                 y=data,
                 name=name,
                 line=dict(color=color, width=1.6, dash="dot"),
+                visible=True if not mobile or idx < 2 else "legendonly",
             ),
             row=1,
             col=1,
@@ -54,14 +55,15 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
         ("주봉 중기", weekly.m_k, "#66bb6a"),
         ("주봉 장기", weekly.l_k, "#42a5f5"),
     ]
-    for name, data, color in weekly_lines:
+    for idx, (name, data, color) in enumerate(weekly_lines):
         fig.add_trace(
             go.Scatter(
                 x=data.index,
                 y=data,
                 name=name,
                 line=dict(color=color, width=2.0),
-                opacity=0.72,
+                opacity=0.78,
+                visible=True if not mobile or idx == 0 else "legendonly",
             ),
             row=1,
             col=1,
@@ -109,6 +111,7 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
                 mode="markers",
                 name="매수 신호",
                 marker=dict(color="lime", size=10, symbol="circle"),
+                visible="legendonly" if mobile else True,
             ),
             row=1,
             col=1,
@@ -122,6 +125,7 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
                 mode="markers",
                 name="매도 신호",
                 marker=dict(color="yellow", size=10, symbol="x"),
+                visible="legendonly" if mobile else True,
             ),
             row=1,
             col=1,
@@ -153,23 +157,79 @@ def make_live_radar_chart(result: IntradayRadarResult) -> go.Figure:
     fig.add_hline(y=8, line_dash="dash", line_color="red", opacity=0.5, row=1, col=1)
     fig.add_hline(y=0, line_dash="dot", line_color="#708090", opacity=0.6, row=2, col=1)
 
-    fig.update_layout(
-        template="plotly_dark",
-        height=980,
-        margin=dict(l=40, r=40, t=80, b=40),
-        paper_bgcolor="#0b0f14",
-        plot_bgcolor="#0b0f14",
-        legend=dict(orientation="v", x=1.01, y=1.0),
-        hovermode="x unified",
-        title=(
+    if mobile:
+        legend = dict(
+            orientation="h",
+            x=0,
+            y=-0.19,
+            xanchor="left",
+            yanchor="top",
+            font=dict(size=10),
+            bgcolor="rgba(17,25,35,.82)",
+            bordercolor="#27384a",
+            borderwidth=1,
+            itemwidth=48,
+        )
+        margin = dict(l=8, r=8, t=72, b=150)
+        title = f"<b>JP Radar · {radar.sector.name}</b><br><sup>{result.updated_at}</sup>"
+        height = 760
+    else:
+        legend = dict(orientation="v", x=1.01, y=1.0)
+        margin = dict(l=40, r=40, t=80, b=40)
+        title = (
             f"<b>JP Radar Live · {radar.sector.name}</b>"
             f"<br><sup>{result.source} · {result.updated_at}</sup>"
-        ),
+        )
+        height = 980
+
+    fig.update_layout(
+        template="plotly_dark",
+        height=height,
+        margin=margin,
+        paper_bgcolor="#0b0f14",
+        plot_bgcolor="#0b0f14",
+        legend=legend,
+        hovermode="x unified",
+        title=title,
+        font=dict(size=11 if mobile else 13),
+        autosize=True,
+        dragmode="pan" if mobile else "zoom",
     )
-    fig.update_yaxes(title_text="에너지 0~10", range=[0, 10.5], row=1, col=1, secondary_y=False)
-    fig.update_yaxes(title_text=radar.sector.benchmark_name, row=1, col=1, secondary_y=True)
-    fig.update_yaxes(title_text="MACD", row=2, col=1)
-    fig.update_xaxes(rangeslider=dict(visible=True), row=2, col=1)
+    fig.update_yaxes(
+        title_text="에너지" if mobile else "에너지 0~10",
+        range=[0, 10.5],
+        row=1,
+        col=1,
+        secondary_y=False,
+        title_font=dict(size=10 if mobile else 13),
+        tickfont=dict(size=9 if mobile else 12),
+        automargin=True,
+    )
+    fig.update_yaxes(
+        title_text="지수" if mobile else radar.sector.benchmark_name,
+        row=1,
+        col=1,
+        secondary_y=True,
+        title_font=dict(size=10 if mobile else 13),
+        tickfont=dict(size=9 if mobile else 12),
+        automargin=True,
+    )
+    fig.update_yaxes(
+        title_text="MACD",
+        row=2,
+        col=1,
+        title_font=dict(size=10 if mobile else 13),
+        tickfont=dict(size=9 if mobile else 12),
+        automargin=True,
+    )
+    fig.update_xaxes(
+        tickfont=dict(size=9 if mobile else 12),
+        automargin=True,
+        rangeslider=dict(visible=False if mobile else True),
+        row=2,
+        col=1,
+    )
+    fig.update_xaxes(tickfont=dict(size=9 if mobile else 12), automargin=True, row=1, col=1)
     return fig
 
 

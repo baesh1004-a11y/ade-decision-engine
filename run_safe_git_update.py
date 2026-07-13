@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
+import sqlite3
 import subprocess
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +12,8 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 DB_PATH = PROJECT_ROOT / "datahub" / "market.db"
 BACKUP_ROOT = PROJECT_ROOT / "backups" / "pre_git_update"
+JOB_STATUS_PATH = PROJECT_ROOT / "output" / "ade_job_status.json"
+CORE_STATUS_PATH = PROJECT_ROOT / "output" / "ade_core_status.json"
 
 
 def _run(*args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
@@ -22,6 +26,33 @@ def _run(*args: str, capture: bool = False) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _read_json(path: Path) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _active_job() -> str | None:
+    status = _read_json(JOB_STATUS_PATH) or {}
+    if str(status.get("state", "")).upper() == "RUNNING":
+        return str(status.get("job_name") or "UNKNOWN_ADE_JOB")
+    return None
+
+
+def _sqlite_backup(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    source_conn = sqlite3.connect(str(source), timeout=30)
+    destination_conn = sqlite3.connect(str(destination))
+    try:
+        source_conn.backup(destination_conn)
+    finally:
+        destination_conn.close()
+        source_conn.close()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Safely update ADE source code while preserving the local market.db"
@@ -31,7 +62,19 @@ def main() -> None:
         action="store_true",
         help="Run without interactive confirmation.",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Continue even when ADE reports an active database job.",
+    )
     args = parser.parse_args()
+
+    active_job = _active_job()
+    if active_job and not args.force:
+        raise SystemExit(
+            f"ADE database job is still running: {active_job}. "
+            "Wait for completion, or use --force only if you are certain the status file is stale."
+        )
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_dir = BACKUP_ROOT / timestamp
@@ -39,8 +82,8 @@ def main() -> None:
 
     db_backup = backup_dir / "market.db"
     if DB_PATH.exists():
-        shutil.copy2(DB_PATH, db_backup)
-        print(f"DB backup created: {db_backup}")
+        _sqlite_backup(DB_PATH, db_backup)
+        print(f"Consistent SQLite backup created: {db_backup}")
     else:
         print("No local market.db found; source update will continue.")
 

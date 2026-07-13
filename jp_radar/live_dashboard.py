@@ -27,11 +27,12 @@ def run() -> None:
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3, c4 = st.columns([1.2, 1, 1, 2])
+    c1, c2, c3, c4, c5 = st.columns([1.25, 1, 1, 1.1, 1.2])
     sector_code = c1.selectbox("시장·업종", sorted(SECTORS), format_func=lambda code: SECTORS[code].name)
     interval = c2.selectbox("자동 갱신", [30, 60, 120, 300], index=1, format_func=lambda x: f"{x}초")
     refresh_history = c3.checkbox("일봉·주봉 재수집", value=False)
-    force = c4.button("지금 새로고침", type="primary")
+    mobile_view = c4.toggle("모바일 간편 보기", value=True)
+    force = c5.button("지금 새로고침", type="primary", use_container_width=True)
 
     def render() -> None:
         with st.spinner("JP Radar 실시간 계산 중..."):
@@ -43,13 +44,24 @@ def run() -> None:
             )
 
         radar = result.radar
-        a, b, c, d, e, f = st.columns(6)
-        a.metric("종합 판단", radar.combined_signal)
-        b.metric("실시간 지수", f"{result.latest_price:,.2f}", f"{result.change_rate:+.2f}%")
-        c.metric("일봉 에너지", f"{radar.daily.latest_energy:.2f}", radar.daily.signal_grade)
-        d.metric("주봉 에너지", f"{radar.weekly.latest_energy:.2f}", radar.weekly.signal_grade)
-        e.metric("연봉 의미 점수", f"{radar.yearly_score:+.1f}", radar.yearly.state)
-        f.metric("갱신 시각", result.updated_at.split("T")[-1], result.source)
+        if mobile_view:
+            top1, top2 = st.columns(2)
+            top1.metric("종합 판단", radar.combined_signal)
+            top2.metric("실시간 지수", f"{result.latest_price:,.2f}", f"{result.change_rate:+.2f}%")
+            mid1, mid2 = st.columns(2)
+            mid1.metric("일봉 에너지", f"{radar.daily.latest_energy:.2f}", radar.daily.signal_grade)
+            mid2.metric("주봉 에너지", f"{radar.weekly.latest_energy:.2f}", radar.weekly.signal_grade)
+            low1, low2 = st.columns(2)
+            low1.metric("연봉 의미 점수", f"{radar.yearly_score:+.1f}", radar.yearly.state)
+            low2.metric("갱신 시각", result.updated_at.split("T")[-1], result.source)
+        else:
+            a, b, c, d, e, f = st.columns(6)
+            a.metric("종합 판단", radar.combined_signal)
+            b.metric("실시간 지수", f"{result.latest_price:,.2f}", f"{result.change_rate:+.2f}%")
+            c.metric("일봉 에너지", f"{radar.daily.latest_energy:.2f}", radar.daily.signal_grade)
+            d.metric("주봉 에너지", f"{radar.weekly.latest_energy:.2f}", radar.weekly.signal_grade)
+            e.metric("연봉 의미 점수", f"{radar.yearly_score:+.1f}", radar.yearly.state)
+            f.metric("갱신 시각", result.updated_at.split("T")[-1], result.source)
 
         yearly = radar.yearly
         candle_text = "양봉" if yearly.bullish else "음봉"
@@ -67,7 +79,20 @@ def run() -> None:
             unsafe_allow_html=True,
         )
 
-        st.plotly_chart(make_live_radar_chart(result), use_container_width=True)
+        chart = make_live_radar_chart(result, mobile=mobile_view)
+        st.plotly_chart(
+            chart,
+            use_container_width=True,
+            config={
+                "displaylogo": False,
+                "scrollZoom": True,
+                "responsive": True,
+                "modeBarButtonsToRemove": ["lasso2d", "select2d"],
+            },
+        )
+
+        if mobile_view:
+            st.caption("모바일 간편 보기에서는 핵심 선만 기본 표시됩니다. 범례를 눌러 숨겨진 선을 켤 수 있습니다.")
 
         st.markdown("### JP Radar 해석")
         st.info(_interpret(result))
@@ -126,7 +151,19 @@ def _style(st: object) -> None:
         .eyebrow{font-size:12px;font-weight:800;letter-spacing:.16em;color:#4fc3f7}
         .badge{padding:10px 15px;border-radius:999px;background:#102a1d;color:#42d392;font-weight:800}.badge span{display:inline-block;width:9px;height:9px;border-radius:50%;background:#22c55e;margin-right:6px;box-shadow:0 0 12px #22c55e}
         .yearly-card{display:grid;grid-template-columns:1.4fr repeat(4,1fr);gap:12px;align-items:center;padding:16px 18px;margin:14px 0;border-radius:18px;background:#111923;border:1px solid #27384a}.yearly-card span{font-size:11px;letter-spacing:.15em;color:#ffb45c;font-weight:800}.yearly-card h3{margin:3px 0}.yearly-card small{display:block;color:#7f95aa}.yearly-card b{font-size:18px}
-        @media (max-width: 768px){.block-container{padding:.8rem}.hero{display:block;padding:18px}.hero h1{font-size:26px}.badge{display:inline-block;margin-top:12px}.yearly-card{grid-template-columns:1fr 1fr}.yearly-card>div:first-child{grid-column:1/-1}}
+        @media (max-width: 768px){
+          .block-container{padding:.55rem .45rem 1rem;max-width:100%}
+          .hero{display:block;padding:15px 16px;border-radius:18px}
+          .hero h1{font-size:23px;line-height:1.15}
+          .hero p{font-size:13px;line-height:1.45}
+          .badge{display:inline-block;margin-top:10px;font-size:12px}
+          .yearly-card{grid-template-columns:1fr 1fr;gap:8px;padding:12px}
+          .yearly-card>div:first-child{grid-column:1/-1}
+          .yearly-card b{font-size:15px}
+          div[data-testid="stMetric"]{padding:8px 10px}
+          div[data-testid="stMetricValue"]{font-size:1.25rem}
+          div[data-testid="stPlotlyChart"]{margin-left:-4px;margin-right:-4px}
+        }
         </style>
         """,
         unsafe_allow_html=True,

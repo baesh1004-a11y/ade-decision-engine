@@ -33,6 +33,7 @@ def main() -> None:
         ("pages/4_KIS_Account.py", "KIS Account", "모의계좌 현금·잔고·평가손익 동기화"),
         ("pages/5_JP_Radar_Live.py", "JP Radar Live", "시장·업종 에너지와 장중 지수·MACD"),
         ("pages/6_Feedback.py", "Feedback", "추천 이후 일별 성과와 종목별 통계"),
+        ("pages/8_Mobile_Access.py", "Mobile Access", "같은 Wi-Fi에서 휴대폰으로 ADE 접속"),
     ]
 
     for start in range(0, len(rows), 3):

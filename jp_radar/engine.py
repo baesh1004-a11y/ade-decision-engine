@@ -62,7 +62,8 @@ class JPRadarEngine:
         self.source = source or YFinanceRadarSource()
 
     def analyze(self, sector_code: str = "kospi50", refresh: bool = False) -> RadarResult:
-        sector = get_sector(sector_code)
+        dynamic_n = 50 if sector_code in {"kospi50", "kosdaq50"} else None
+        sector = get_sector(sector_code, dynamic_top_n=dynamic_n)
         bundle = self.source.load(sector.code, sector.tickers, sector.benchmark, refresh=refresh)
         daily_index = self._weighted_index(bundle.daily_prices, bundle.weights)
         weekly_index = self._weighted_index(bundle.weekly_prices, bundle.weights)

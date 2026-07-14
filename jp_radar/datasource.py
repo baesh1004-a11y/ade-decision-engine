@@ -37,6 +37,11 @@ class YFinanceRadarSource:
             weekly = pd.read_csv(weekly_file, index_col=0, parse_dates=True)
             weights_df = pd.read_csv(weights_file)
             weights = dict(zip(weights_df["ticker"], weights_df["weight"]))
+            if set(weights) != set(tickers):
+                daily, weekly, weights = self._download_universe(tickers)
+                daily.to_csv(daily_file)
+                weekly.to_csv(weekly_file)
+                pd.DataFrame([{"ticker": k, "weight": v} for k, v in weights.items()]).to_csv(weights_file, index=False)
         else:
             daily, weekly, weights = self._download_universe(tickers)
             daily.to_csv(daily_file)
@@ -47,7 +52,7 @@ class YFinanceRadarSource:
         if not refresh and bench_daily_file.exists() and bench_weekly_file.exists():
             bench_daily = pd.read_csv(bench_daily_file, index_col=0, parse_dates=True)
             bench_weekly = pd.read_csv(bench_weekly_file, index_col=0, parse_dates=True)
-            bench_cache_valid = {"Open", "High", "Low", "Close"}.issubset(bench_daily.columns)
+            bench_cache_valid = {"Open", "High", "Low", "Close", "Volume"}.issubset(bench_daily.columns)
         else:
             bench_daily = pd.DataFrame()
             bench_weekly = pd.DataFrame()
@@ -57,22 +62,8 @@ class YFinanceRadarSource:
             if bench_daily.empty:
                 combined_daily = (daily * pd.Series(weights)).sum(axis=1)
                 combined_weekly = (weekly * pd.Series(weights)).sum(axis=1)
-                bench_daily = pd.DataFrame(
-                    {
-                        "Open": combined_daily,
-                        "High": combined_daily,
-                        "Low": combined_daily,
-                        "Close": combined_daily,
-                    }
-                )
-                bench_weekly = pd.DataFrame(
-                    {
-                        "Open": combined_weekly,
-                        "High": combined_weekly,
-                        "Low": combined_weekly,
-                        "Close": combined_weekly,
-                    }
-                )
+                bench_daily = pd.DataFrame({"Open": combined_daily, "High": combined_daily, "Low": combined_daily, "Close": combined_daily, "Volume": 0.0})
+                bench_weekly = pd.DataFrame({"Open": combined_weekly, "High": combined_weekly, "Low": combined_weekly, "Close": combined_weekly, "Volume": 0.0})
             bench_daily.to_csv(bench_daily_file)
             bench_weekly.to_csv(bench_weekly_file)
 
@@ -118,8 +109,8 @@ class YFinanceRadarSource:
             if df.empty:
                 return pd.DataFrame(), pd.DataFrame()
             daily = process_daily(df)
-            weekly = resample_to_weekly(daily)
-            columns = ["Open", "High", "Low", "Close"]
+            weekly = daily.resample("W-FRI").agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"}).dropna()
+            columns = ["Open", "High", "Low", "Close", "Volume"]
             return daily[columns], weekly[columns]
         except Exception:
             return pd.DataFrame(), pd.DataFrame()

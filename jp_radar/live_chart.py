@@ -16,46 +16,100 @@ def make_live_radar_chart(
     mobile: bool = False,
     period_days: int = 365,
 ) -> go.Figure:
+    """Compact JP Radar chart: 120m energy/price plus one 120m MACD panel."""
+    radar = result.radar_120m
+    price = result.intraday_price.dropna()
+
     fig = make_subplots(
-        rows=6,
+        rows=2,
         cols=1,
-        shared_xaxes=False,
-        vertical_spacing=0.025 if not mobile else 0.035,
-        row_heights=[0.20, 0.11, 0.20, 0.11, 0.20, 0.11],
-        specs=[
-            [{"secondary_y": True}], [{"secondary_y": False}],
-            [{"secondary_y": True}], [{"secondary_y": False}],
-            [{"secondary_y": True}], [{"secondary_y": False}],
-        ],
-        subplot_titles=(
-            "1. 120분봉 에너지 · 가격", "2. 120분봉 MACD",
-            "3. 일봉 에너지 · 가격", "4. 일봉 MACD",
-            "5. 주봉 에너지 · 가격", "6. 주봉 MACD",
-        ),
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[0.68, 0.32],
+        specs=[[{"secondary_y": True}], [{"secondary_y": False}]],
+        subplot_titles=("120분봉 에너지 · 가격 · 주/월/연 의미선", "120분봉 MACD"),
     )
 
-    radar = result.radar
-    frames = [
-        (result.radar_120m, result.intraday_price, "120m", 1, 2),
-        (radar.daily, radar.daily.benchmark.dropna(), "D", 3, 4),
-        (radar.weekly, radar.weekly.benchmark.dropna(), "W", 5, 6),
+    energy_lines = [
+        ("빨 D", radar.s_k),
+        ("주 D", radar.s_d),
+        ("노 D", radar.m_k),
+        ("초 D", radar.m_d),
+        ("파 D", radar.l_k),
+        ("남 D", radar.l_d),
     ]
-    for timeframe, price, label, energy_row, macd_row in frames:
-        _add_timeframe(fig, timeframe, price, label, energy_row, macd_row, mobile)
-        _add_meaning_lines(fig, result, price, energy_row)
+    for idx, (name, series) in enumerate(energy_lines):
+        fig.add_trace(
+            go.Scatter(
+                x=series.index,
+                y=series,
+                name=f"{name} : {series.iloc[-1]:.2f}" if not series.empty else name,
+                legendgroup="energy",
+                line=dict(color=COLORS[idx], width=1.35, dash="dot"),
+                hovertemplate=f"{name} %{{y:.2f}}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+            secondary_y=False,
+        )
 
-    _add_yearly_lines(fig, result)
+    if not price.empty:
+        fig.add_trace(
+            go.Scatter(
+                x=price.index,
+                y=price,
+                name=f"현재가 : {result.latest_price:,.2f}",
+                legendgroup="price",
+                line=dict(color="#f7f7f7", width=2.3),
+                hovertemplate="가격 %{y:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
 
-    latest = max(
-        [series.index.max() for _, series, _, _, _ in frames if not series.empty],
-        default=None,
+    _add_meaning_lines(fig, result, price)
+    _add_signals(fig, radar, price, mobile)
+
+    fig.add_trace(
+        go.Scatter(
+            x=radar.macd.index,
+            y=radar.macd,
+            name=f"MACD : {radar.macd.iloc[-1]:.2f}" if not radar.macd.empty else "MACD",
+            legendgroup="macd",
+            line=dict(color="#22d3ee", width=1.8),
+            hovertemplate="MACD %{y:.2f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
     )
-    cutoff = latest - timedelta(days=period_days) if latest is not None else None
+    fig.add_trace(
+        go.Scatter(
+            x=radar.signal.index,
+            y=radar.signal,
+            name=f"Signal : {radar.signal.iloc[-1]:.2f}" if not radar.signal.empty else "Signal",
+            legendgroup="macd",
+            line=dict(color="#ec4cff", width=1.8),
+            hovertemplate="Signal %{y:.2f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+
+    _add_macd_signal_markers(fig, radar)
+
+    latest = price.index.max() if not price.empty else None
+    visible_days = min(max(int(period_days), 14), 90)
+    cutoff = latest - timedelta(days=visible_days) if latest is not None else None
+
+    fig.add_hline(y=2, line_dash="dash", line_color="#25d366", opacity=0.7, row=1, col=1)
+    fig.add_hline(y=8, line_dash="dash", line_color="#ff5b5b", opacity=0.7, row=1, col=1)
+    fig.add_hline(y=0, line_dash="dot", line_color="#d8dde3", opacity=0.55, row=2, col=1)
 
     fig.update_layout(
         template="plotly_dark",
-        height=1250 if mobile else 1700,
-        margin=dict(l=12 if mobile else 48, r=12 if mobile else 190, t=75, b=80),
+        height=690 if mobile else 760,
+        margin=dict(l=10 if mobile else 42, r=10 if mobile else 175, t=62, b=45),
         paper_bgcolor="#0b1118",
         plot_bgcolor="#0b1118",
         hovermode="x unified",
@@ -63,44 +117,51 @@ def make_live_radar_chart(
         legend=dict(
             orientation="h" if mobile else "v",
             x=0 if mobile else 1.01,
-            y=-0.03 if mobile else 1.0,
+            y=-0.13 if mobile else 1.0,
             xanchor="left",
             yanchor="top",
             font=dict(size=8 if mobile else 10),
             bgcolor="rgba(14,22,31,.94)",
             bordercolor="#2a3949",
             borderwidth=1,
-            groupclick="toggleitem",
+            tracegroupgap=3,
         ),
         font=dict(size=9 if mobile else 11, color="#dce6f0"),
         autosize=True,
     )
 
-    for row in [1, 3, 5]:
-        fig.update_yaxes(range=[0, 10.5], title_text="에너지", row=row, col=1, secondary_y=False, gridcolor="#25303c")
-        fig.update_yaxes(title_text="가격", row=row, col=1, secondary_y=True, gridcolor="rgba(0,0,0,0)")
-        fig.add_hline(y=2, line_dash="dash", line_color="#25d366", opacity=0.5, row=row, col=1)
-        fig.add_hline(y=8, line_dash="dash", line_color="#ff5b5b", opacity=0.5, row=row, col=1)
-    for row in [2, 4, 6]:
-        fig.update_yaxes(title_text="MACD", row=row, col=1, gridcolor="#25303c")
-        fig.add_hline(y=0, line_dash="dot", line_color="#657383", opacity=0.7, row=row, col=1)
+    fig.update_yaxes(
+        title_text="스토캐스틱 에너지 (0~10)",
+        range=[0, 10.5],
+        row=1,
+        col=1,
+        secondary_y=False,
+        gridcolor="#27323d",
+        zeroline=False,
+    )
+    fig.update_yaxes(
+        title_text="가격",
+        row=1,
+        col=1,
+        secondary_y=True,
+        gridcolor="rgba(0,0,0,0)",
+    )
+    fig.update_yaxes(title_text="MACD", row=2, col=1, gridcolor="#27323d")
 
-    for row in range(1, 7):
+    for row in [1, 2]:
         fig.update_xaxes(gridcolor="#202a35", row=row, col=1, rangeslider=dict(visible=False))
     if cutoff is not None:
-        fig.update_xaxes(range=[cutoff, latest], row=3, col=1)
-        fig.update_xaxes(range=[cutoff, latest], row=4, col=1)
-        fig.update_xaxes(range=[cutoff, latest], row=5, col=1)
-        fig.update_xaxes(range=[cutoff, latest], row=6, col=1)
+        fig.update_xaxes(range=[cutoff, latest], row=1, col=1)
+        fig.update_xaxes(range=[cutoff, latest], row=2, col=1)
+
     fig.update_xaxes(
-        row=6,
+        row=2,
         col=1,
-        rangeslider=dict(visible=not mobile),
         rangeselector=dict(
             buttons=[
                 dict(count=1, label="1개월", step="month", stepmode="backward"),
+                dict(count=2, label="2개월", step="month", stepmode="backward"),
                 dict(count=3, label="3개월", step="month", stepmode="backward"),
-                dict(count=1, label="1년", step="year", stepmode="backward"),
                 dict(step="all", label="전체"),
             ]
         ) if not mobile else None,
@@ -108,76 +169,131 @@ def make_live_radar_chart(
     return fig
 
 
-def _add_timeframe(fig, timeframe, price, label: str, energy_row: int, macd_row: int, mobile: bool) -> None:
-    lines = [
-        ("단기 K", timeframe.s_k), ("단기 D", timeframe.s_d),
-        ("중기 K", timeframe.m_k), ("중기 D", timeframe.m_d),
-        ("장기 K", timeframe.l_k), ("장기 D", timeframe.l_d),
-    ]
-    for idx, (name, series) in enumerate(lines):
-        fig.add_trace(
-            go.Scatter(
-                x=series.index, y=series, name=f"{label} {name}", legendgroup=label,
-                line=dict(color=COLORS[idx], width=1.4, dash="dot" if idx % 2 else "solid"),
-                visible=True if idx in {0, 2, 4} else "legendonly",
-                hovertemplate=f"{label} {name} %{{y:.2f}}<extra></extra>",
-            ),
-            row=energy_row, col=1, secondary_y=False,
-        )
-
-    if not price.empty:
-        fig.add_trace(
-            go.Scatter(
-                x=price.index, y=price, name=f"{label} 원본가격", legendgroup=f"{label}-price",
-                line=dict(color="#f4f7fb", width=2.2),
-                hovertemplate=f"{label} 가격 %{{y:,.2f}}<extra></extra>",
-            ),
-            row=energy_row, col=1, secondary_y=True,
-        )
-
-    fig.add_trace(
-        go.Scatter(x=timeframe.macd.index, y=timeframe.macd, name=f"{label} MACD", legendgroup=f"{label}-macd", line=dict(color="#22d3ee", width=1.7)),
-        row=macd_row, col=1,
-    )
-    fig.add_trace(
-        go.Scatter(x=timeframe.signal.index, y=timeframe.signal, name=f"{label} Signal", legendgroup=f"{label}-macd", line=dict(color="#ec4cff", width=1.7)),
-        row=macd_row, col=1,
-    )
-
-    buy_dates = timeframe.buy_signal[timeframe.buy_signal].index.intersection(price.index)
-    sell_dates = timeframe.sell_signal[timeframe.sell_signal].index.intersection(price.index)
-    if len(buy_dates):
-        fig.add_trace(go.Scatter(x=buy_dates, y=price.loc[buy_dates], mode="markers", name=f"{label} 매수", legendgroup=f"{label}-signal", marker=dict(color="#2cff68", size=7, symbol="circle"), visible="legendonly" if mobile else True), row=energy_row, col=1, secondary_y=True)
-    if len(sell_dates):
-        fig.add_trace(go.Scatter(x=sell_dates, y=price.loc[sell_dates], mode="markers", name=f"{label} 매도", legendgroup=f"{label}-signal", marker=dict(color="#ffe34f", size=8, symbol="x"), visible="legendonly" if mobile else True), row=energy_row, col=1, secondary_y=True)
-
-
-def _add_meaning_lines(fig: go.Figure, result: IntradayRadarResult, price, row: int) -> None:
-    if price.empty or not result.meaningful_lines:
+def _add_meaning_lines(fig: go.Figure, result: IntradayRadarResult, price) -> None:
+    if price.empty:
         return
     start, end = price.index.min(), price.index.max()
-    palette = {"W": "#66c2ff", "M": "#b388ff", "Y": "#ffb74d"}
+    palette = {"W": "#5ec8ff", "M": "#f4d35e", "Y": "#ff9f43"}
+    dash = {"W": "dot", "M": "dash", "Y": "longdash"}
+
     for item in result.meaningful_lines:
         fig.add_trace(
             go.Scatter(
-                x=[start, end], y=[item.price, item.price], mode="lines",
-                name=f"{item.timeframe} 의미선 {item.line_type} {item.price:,.0f}",
+                x=[start, end],
+                y=[item.price, item.price],
+                mode="lines",
+                name=f"{item.timeframe} {item.line_type} ₩{item.price:,.0f}",
                 legendgroup=f"meaning-{item.timeframe}",
-                line=dict(color=palette.get(item.timeframe, "#9aa7b3"), width=1, dash="dot"),
-                opacity=0.32,
-                visible="legendonly" if row != 3 else True,
+                line=dict(
+                    color=palette.get(item.timeframe, "#9aa7b3"),
+                    width=1.15,
+                    dash=dash.get(item.timeframe, "dot"),
+                ),
+                opacity=0.72,
                 hovertemplate=f"{item.timeframe} 거래대금 의미선 {item.price:,.2f}<extra></extra>",
             ),
-            row=row, col=1, secondary_y=True,
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
+
+    yearly = result.radar.yearly
+    fig.add_trace(
+        go.Scatter(
+            x=[start, end],
+            y=[yearly.open, yearly.open],
+            mode="lines",
+            name=f"연봉 시가 ₩{yearly.open:,.0f}",
+            legendgroup="yearly",
+            line=dict(color="#ffb347", width=1.8, dash="dash"),
+            hovertemplate=f"연봉 시가 {yearly.open:,.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+        secondary_y=True,
+    )
+    if yearly.show_close_line:
+        fig.add_trace(
+            go.Scatter(
+                x=[start, end],
+                y=[yearly.close, yearly.close],
+                mode="lines",
+                name=f"연봉 종가 ₩{yearly.close:,.0f}",
+                legendgroup="yearly",
+                line=dict(color="#ff6680", width=1.8, dash="dot"),
+                hovertemplate=f"연봉 종가 {yearly.close:,.2f}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
         )
 
 
-def _add_yearly_lines(fig: go.Figure, result: IntradayRadarResult) -> None:
-    yearly = result.radar.yearly
-    for row, price in [(1, result.intraday_price), (3, result.radar.daily.benchmark.dropna()), (5, result.radar.weekly.benchmark.dropna())]:
-        if price.empty:
-            continue
-        start, end = price.index.min(), price.index.max()
-        fig.add_trace(go.Scatter(x=[start, end], y=[yearly.open, yearly.open], mode="lines", name=f"{yearly.year} 연봉 시가", legendgroup="yearly", line=dict(color="#ff9f43", width=1.8, dash="dash"), visible=True if row == 3 else "legendonly"), row=row, col=1, secondary_y=True)
-        if yearly.show_close_line:
-            fig.add_trace(go.Scatter(x=[start, end], y=[yearly.close, yearly.close], mode="lines", name=f"{yearly.year} 연봉 종가", legendgroup="yearly", line=dict(color="#ff6680", width=1.8, dash="dot"), visible=True if row == 3 else "legendonly"), row=row, col=1, secondary_y=True)
+def _add_signals(fig: go.Figure, radar, price, mobile: bool) -> None:
+    if price.empty:
+        return
+    buy_dates = radar.buy_signal[radar.buy_signal].index.intersection(price.index)
+    sell_dates = radar.sell_signal[radar.sell_signal].index.intersection(price.index)
+    if len(buy_dates):
+        fig.add_trace(
+            go.Scatter(
+                x=buy_dates,
+                y=price.loc[buy_dates],
+                mode="markers",
+                name="매수",
+                legendgroup="signal",
+                marker=dict(color="#2cff68", size=8, symbol="circle"),
+                visible="legendonly" if mobile else True,
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
+    if len(sell_dates):
+        fig.add_trace(
+            go.Scatter(
+                x=sell_dates,
+                y=price.loc[sell_dates],
+                mode="markers",
+                name="매도",
+                legendgroup="signal",
+                marker=dict(color="#ffe34f", size=8, symbol="x"),
+                visible="legendonly" if mobile else True,
+            ),
+            row=1,
+            col=1,
+            secondary_y=True,
+        )
+
+
+def _add_macd_signal_markers(fig: go.Figure, radar) -> None:
+    buy_dates = radar.buy_signal[radar.buy_signal].index.intersection(radar.macd.index)
+    sell_dates = radar.sell_signal[radar.sell_signal].index.intersection(radar.macd.index)
+    if len(buy_dates):
+        fig.add_trace(
+            go.Scatter(
+                x=buy_dates,
+                y=radar.macd.loc[buy_dates],
+                mode="markers",
+                name="MACD 매수",
+                legendgroup="signal",
+                marker=dict(color="#2cff68", size=7, symbol="circle"),
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+    if len(sell_dates):
+        fig.add_trace(
+            go.Scatter(
+                x=sell_dates,
+                y=radar.macd.loc[sell_dates],
+                mode="markers",
+                name="MACD 매도",
+                legendgroup="signal",
+                marker=dict(color="#ffe34f", size=8, symbol="x"),
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )

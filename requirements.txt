@@ -9,3 +9,5 @@ streamlit
 plotly
 yfinance
 tqdm
+requests
+python-dotenv

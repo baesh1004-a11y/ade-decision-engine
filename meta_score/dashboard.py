@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sqlite3
+from pathlib import Path
 
 import pandas as pd
 
 from feedback.engine import FeedbackEngine
 from meta_score.engine import MetaScoreEngine
-from recommendation.event_recommender import RecentMoneyEventRecommender
+from prediction.replay_prediction import HorizonPrediction, ReplayPrediction
+from recommendation.event_recommender import (
+    EventRecommendation,
+    RecentMoneyEventRecommender,
+    ReplayMatch,
+)
 
 
 def run(db_path: str = "datahub/market.db") -> None:
@@ -29,31 +37,47 @@ def run(db_path: str = "datahub/market.db") -> None:
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3 = st.columns([1, 1, 2])
+    c1, c2, c3, c4 = st.columns([1, 1, 1.3, 1.7])
     top_n = c1.number_input("후보 수", min_value=3, max_value=30, value=10, step=1)
     replay_top = c2.number_input("Replay 표본", min_value=3, max_value=10, value=5, step=1)
-    run_button = c3.button("통합점수 계산", type="primary")
+    load_button = c3.button("저장 추천 불러오기", type="primary", use_container_width=True)
+    recompute_button = c4.button("추천부터 다시 계산", use_container_width=True)
 
-    if run_button or "meta_score_results" not in st.session_state:
-        with st.spinner("ADE 추천과 JP Radar를 결합해 통합점수를 계산 중..."):
+    needs_initial_load = "meta_score_results" not in st.session_state
+
+    if recompute_button:
+        with st.spinner("추천 엔진부터 다시 실행해 통합점수를 계산 중입니다..."):
             recommender = RecentMoneyEventRecommender(db_path=db_path)
             try:
-                recommendations = recommender.recommend(top_n=int(top_n), replay_top_n=int(replay_top))
+                recommendations = recommender.recommend(
+                    top_n=int(top_n),
+                    replay_top_n=int(replay_top),
+                )
             finally:
                 recommender.close()
-            results = MetaScoreEngine().score(recommendations)
-            st.session_state["meta_score_results"] = results
+            _save_scored_results(st, db_path, recommendations, source="실시간 재계산")
 
-            feedback = FeedbackEngine(db_path)
-            try:
-                inserted = feedback.register_meta_results(results)
-            finally:
-                feedback.close()
-            st.session_state["meta_feedback_inserted"] = inserted
+    elif load_button or needs_initial_load:
+        with st.spinner("최근 저장 추천을 불러와 Meta Score를 계산 중입니다..."):
+            recommendations, run_id = _load_latest_recommendations(db_path, limit=int(top_n))
+            if recommendations:
+                _save_scored_results(
+                    st,
+                    db_path,
+                    recommendations,
+                    source=f"저장 추천 · {run_id}",
+                )
+            else:
+                st.session_state["meta_score_results"] = []
+                st.session_state["meta_score_source"] = "저장 추천 없음"
+                st.session_state["meta_feedback_inserted"] = 0
 
     results = st.session_state.get("meta_score_results", [])
+    source = st.session_state.get("meta_score_source", "-")
+    st.caption(f"데이터 원본: {source}")
+
     if not results:
-        st.info("통합점수 계산 결과가 없습니다.")
+        st.info("저장된 추천 결과가 없습니다. Daily Center에서 추천을 먼저 생성하거나 '추천부터 다시 계산'을 실행하세요.")
         return
 
     inserted = st.session_state.get("meta_feedback_inserted", 0)
@@ -154,6 +178,109 @@ def run(db_path: str = "datahub/market.db") -> None:
         st.markdown(f"- {reason}")
 
     st.caption("고정 공식: Replay 30% + Prediction 25% + JP Radar 20% + Market 10% + Sector 10% + Risk 5%")
+
+
+def _save_scored_results(st: object, db_path: str, recommendations: list[EventRecommendation], source: str) -> None:
+    results = MetaScoreEngine().score(recommendations)
+    st.session_state["meta_score_results"] = results
+    st.session_state["meta_score_source"] = source
+
+    feedback = FeedbackEngine(db_path)
+    try:
+        inserted = feedback.register_meta_results(results)
+    finally:
+        feedback.close()
+    st.session_state["meta_feedback_inserted"] = inserted
+
+
+def _load_latest_recommendations(db_path: str, limit: int) -> tuple[list[EventRecommendation], str | None]:
+    path = Path(db_path)
+    if not path.exists():
+        return [], None
+
+    conn = sqlite3.connect(str(path), timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        run = conn.execute(
+            """
+            SELECT run_id
+            FROM recommendation_runs
+            WHERE status='COMPLETED'
+            ORDER BY started_at DESC
+            LIMIT 1
+            """
+        ).fetchone()
+        if run is None:
+            return [], None
+
+        run_id = str(run["run_id"])
+        rows = conn.execute(
+            """
+            SELECT payload_json
+            FROM daily_recommendations
+            WHERE run_id=?
+            ORDER BY rank_no
+            LIMIT ?
+            """,
+            (run_id, int(limit)),
+        ).fetchall()
+        recommendations = []
+        for row in rows:
+            try:
+                payload = json.loads(str(row["payload_json"]))
+                recommendations.append(_recommendation_from_payload(payload))
+            except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                continue
+        return recommendations, run_id
+    except sqlite3.OperationalError:
+        return [], None
+    finally:
+        conn.close()
+
+
+def _recommendation_from_payload(payload: dict[str, object]) -> EventRecommendation:
+    replay_matches = [ReplayMatch(**item) for item in payload.get("replay_matches", [])]
+    prediction_payload = payload.get("prediction")
+    prediction = None
+    if isinstance(prediction_payload, dict):
+        horizons = tuple(
+            HorizonPrediction(**item)
+            for item in prediction_payload.get("horizons", [])
+        )
+        prediction = ReplayPrediction(
+            sample_count=int(prediction_payload["sample_count"]),
+            horizons=horizons,
+            seven_day_up_probability=float(prediction_payload["seven_day_up_probability"]),
+            seven_day_expected_return=float(prediction_payload["seven_day_expected_return"]),
+            seven_day_median_return=float(prediction_payload["seven_day_median_return"]),
+            expected_max_return_7d=float(prediction_payload["expected_max_return_7d"]),
+            expected_max_return_20d=float(prediction_payload["expected_max_return_20d"]),
+            expected_peak_day=float(prediction_payload["expected_peak_day"]),
+            expected_mdd_7d=float(prediction_payload["expected_mdd_7d"]),
+            target_return=float(prediction_payload["target_return"]),
+            stop_return=float(prediction_payload["stop_return"]),
+            holding_days=int(prediction_payload["holding_days"]),
+            grade=str(prediction_payload["grade"]),
+        )
+
+    return EventRecommendation(
+        market=str(payload["market"]),
+        ticker=str(payload["ticker"]),
+        name=payload.get("name"),
+        recent_event_date=str(payload["recent_event_date"]),
+        recent_money_ratio=float(payload["recent_money_ratio"]),
+        matched_event_id=str(payload["matched_event_id"]),
+        matched_event_date=str(payload["matched_event_date"]),
+        weekly_similarity=float(payload["weekly_similarity"]),
+        sto_similarity=float(payload["sto_similarity"]),
+        final_similarity=float(payload["final_similarity"]),
+        matched_max_return=payload.get("matched_max_return"),
+        matched_max_drawdown=payload.get("matched_max_drawdown"),
+        decision=str(payload["decision"]),
+        reasons=[str(item) for item in payload.get("reasons", [])],
+        replay_matches=replay_matches,
+        prediction=prediction,
+    )
 
 
 def _style(st: object) -> None:

@@ -20,7 +20,7 @@ def main() -> None:
         <div class="hero">
           <div class="eyebrow">ADE · SEPARATED MARKET WORKSPACES</div>
           <h1>AI Decision Engine Home</h1>
-          <p>한국장과 미국장을 서로 다른 DB·추천 이력·운영 화면으로 분리합니다.</p>
+          <p>한국장과 미국장을 서로 다른 DB·추천 이력·주문 화면으로 분리합니다.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -38,23 +38,25 @@ def main() -> None:
             st.markdown(f'<div class="card"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
             st.page_link(path, label=f"{title} 열기")
 
-    st.markdown('<div class="market"><h2>🇺🇸 미국장 ADE</h2><p>DB: datahub/us_market.db · yfinance 기반 · 한국장 DB와 완전 분리</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="market"><h2>🇺🇸 미국장 ADE</h2><p>DB: datahub/us_market.db · yfinance 기반 · KIS 미국주식 모의주문</p></div>', unsafe_allow_html=True)
     us_rows = [
         ("pages/10_US_Daily_Center.py", "US Daily Center", "미국장 전용 추천 생성과 이력"),
         ("pages/11_US_Meta_Score.py", "US Meta Score", "미국장 전용 통합점수"),
+        ("pages/12_US_Trading_Desk.py", "US Trading Desk", "KIS 미국주식 모의·승인 주문"),
         ("pages/5_JP_Radar_Live.py", "US JP Radar", "NASDAQ 30 또는 미국 개별 종목 분석"),
     ]
-    cols = st.columns(3)
-    for col, (path, title, desc) in zip(cols, us_rows):
-        with col:
-            st.markdown(f'<div class="card"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
-            st.page_link(path, label=f"{title} 열기")
+    for start in range(0, len(us_rows), 3):
+        cols = st.columns(3)
+        for col, (path, title, desc) in zip(cols, us_rows[start:start + 3]):
+            with col:
+                st.markdown(f'<div class="card"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
+                st.page_link(path, label=f"{title} 열기")
 
     st.markdown('<div class="market"><h2>공통 운영 도구</h2><p>계좌·모니터·Feedback·모바일 접속</p></div>', unsafe_allow_html=True)
     common_rows = [
         ("pages/1_ADE_Cockpit.py", "ADE Cockpit", "추천 검증과 보유종목"),
         ("pages/3_Live_Monitor.py", "Live Monitor", "장중 현재가 모니터"),
-        ("pages/4_KIS_Account.py", "KIS Account", "계좌 잔고 동기화"),
+        ("pages/4_KIS_Account.py", "KIS Account", "국내 계좌 잔고 동기화"),
         ("pages/6_Feedback.py", "Feedback", "추천 이후 성과 통계"),
         ("pages/8_Mobile_Access.py", "Mobile Access", "휴대폰 접속 안내"),
     ]
@@ -76,7 +78,7 @@ def main() -> None:
         "python run_ade.py",
         language="bash",
     )
-    st.caption("현재 KIS Trading Desk는 국내주식 전용입니다. 미국장 주문은 별도 해외주식 주문 모듈이 필요합니다.")
+    st.caption("미국주식 모의투자는 지정가 주문만 지원하며, 주문 승인 문구를 직접 입력해야 KIS로 전송됩니다.")
 
 
 if __name__ == "__main__":

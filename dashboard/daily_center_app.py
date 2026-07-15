@@ -17,15 +17,33 @@ def run(market_code: str = "kr") -> None:
     st.markdown(
         f"""
         <style>
-        .stApp{{background:linear-gradient(135deg,#eef7ff,#fbfdff 48%,#eaf3ff);color:#13253a}}
-        .block-container{{max-width:1550px;padding-top:1.1rem}}
-        .hero{{padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}}
-        .hero h1{{margin:3px 0}}.hero p{{margin:5px 0;color:#687d92}}.eyebrow{{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}}
+        :root{{--ink:#14263a;--muted:#6d8194;--line:rgba(77,125,168,.18);--blue:#2f80ed}}
+        .stApp{{background:radial-gradient(circle at 12% 0%,rgba(125,190,255,.20),transparent 27%),linear-gradient(135deg,#f7fbff,#eef5fb 52%,#f9fcff);color:var(--ink)}}
+        .block-container{{max-width:1540px;padding-top:1.05rem;padding-bottom:3rem}}
+        [data-testid="stSidebar"]{{background:linear-gradient(180deg,rgba(248,252,255,.97),rgba(232,242,251,.98));border-right:1px solid var(--line)}}
+        [data-testid="stSidebar"] a{{border-radius:12px;margin:3px 8px;padding:9px 12px;color:#30475d!important;font-weight:650}}
+        [data-testid="stSidebar"] a:hover{{background:rgba(47,128,237,.08)}}
+        [data-testid="stSidebar"] a[aria-current="page"]{{background:linear-gradient(135deg,#dcecff,#eef6ff);color:#1768bd!important;box-shadow:inset 0 0 0 1px rgba(47,128,237,.16)}}
+        .hero{{padding:30px 34px;border-radius:28px;background:linear-gradient(135deg,rgba(255,255,255,.94),rgba(240,248,255,.86));border:1px solid var(--line);box-shadow:0 22px 62px rgba(42,88,130,.12);margin-bottom:20px;position:relative;overflow:hidden}}
+        .hero:after{{content:"";position:absolute;right:-60px;top:-90px;width:260px;height:260px;border-radius:50%;background:radial-gradient(circle,rgba(67,149,236,.20),rgba(67,149,236,0) 68%)}}
+        .hero h1{{margin:5px 0 7px;font-size:36px;letter-spacing:-.045em;line-height:1.12}}
+        .hero p{{margin:0;color:var(--muted);font-size:15px}}
+        .eyebrow{{font-size:12px;letter-spacing:.16em;font-weight:850;color:#2f78ba}}
+        div[data-testid="stMetric"]{{background:rgba(255,255,255,.78);border:1px solid var(--line);padding:16px 18px;border-radius:18px;box-shadow:0 9px 26px rgba(56,100,139,.07)}}
+        div[data-testid="stMetricLabel"]{{color:#6e8295;font-weight:700}}
+        div[data-testid="stMetricValue"]{{font-size:1.8rem;font-weight:850;letter-spacing:-.035em;color:#1b334a}}
+        h3{{margin-top:1.65rem!important;margin-bottom:.75rem!important;letter-spacing:-.03em;color:#1c344c}}
+        div[data-baseweb="input"]>div,div[data-baseweb="select"]>div{{border-radius:13px!important;background:rgba(255,255,255,.88)!important;border-color:var(--line)!important}}
+        div[data-testid="stButton"] button{{border-radius:14px;min-height:46px;font-weight:800;letter-spacing:-.015em;border:1px solid rgba(47,128,237,.18)}}
+        div[data-testid="stDataFrame"]{{border-radius:18px;overflow:hidden;border:1px solid var(--line);box-shadow:0 10px 28px rgba(56,100,139,.07)}}
+        div[data-testid="stAlert"]{{border-radius:16px}}
+        hr{{border-color:var(--line)!important}}
+        @media(max-width:768px){{.block-container{{padding:.75rem}}.hero{{padding:22px}}.hero h1{{font-size:29px}}}}
         </style>
         <div class="hero">
           <div class="eyebrow">ADE {profile.code.upper()} DAILY RECOMMENDATION CENTER</div>
           <h1>{profile.name} 자동·수동 추천 운영</h1>
-          <p>DB: {profile.db_path} · 가격원: {profile.price_source} · 통화: {profile.currency}</p>
+          <p>DB {profile.db_path} · 가격원 {profile.price_source} · 통화 {profile.currency}</p>
         </div>
         """,
         unsafe_allow_html=True,

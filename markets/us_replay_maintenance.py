@@ -11,8 +11,22 @@ def purge_disabled_us_replay(db_path: str | Path = "datahub/us_market.db") -> di
             str(row[0])
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
-        if "us_universe" not in table_names or "replay_events" not in table_names:
-            return {"events": 0, "flows": 0, "vectors": 0, "checkpoints": 0}
+        counts = {"events": 0, "flows": 0, "vectors": 0, "checkpoints": 0, "exchanges": 0}
+        if "us_universe" not in table_names:
+            return counts
+
+        exchange_update = conn.execute(
+            """
+            UPDATE us_universe
+            SET exchange='NASD', updated_at=CURRENT_TIMESTAMP
+            WHERE exchange IS NULL OR TRIM(exchange)='' OR UPPER(exchange)='MANUAL'
+            """
+        )
+        counts["exchanges"] = max(0, int(exchange_update.rowcount))
+
+        if "replay_events" not in table_names:
+            conn.commit()
+            return counts
 
         stale_ids = [
             str(row[0])
@@ -37,7 +51,6 @@ def purge_disabled_us_replay(db_path: str | Path = "datahub/us_market.db") -> di
             ).fetchall()
         ]
 
-        counts = {"events": 0, "flows": 0, "vectors": 0, "checkpoints": 0}
         if stale_ids:
             placeholders = ",".join("?" for _ in stale_ids)
             if "replay_event_flow" in table_names:

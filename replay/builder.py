@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 import pandas as pd
@@ -12,12 +13,19 @@ from replay.models import ADE_VERSION, ReplayEvent, ReplayEventFlow
 from replay.repository import ReplayEventRepository
 from state.engine import ADEStateEngine
 from universe.manager import DynamicUniverseManager
+from universe.models import UniverseSymbol
 
 
 class ReplayEventDBBuilder:
-    def __init__(self, db_path: str | Path = "datahub/market.db", ade_version: str = ADE_VERSION) -> None:
+    def __init__(
+        self,
+        db_path: str | Path = "datahub/market.db",
+        ade_version: str = ADE_VERSION,
+        price_source: str = "fdr",
+    ) -> None:
         self.db_path = Path(db_path)
         self.ade_version = ade_version
+        self.price_source = price_source
         self.price_repo = PriceRepository(self.db_path)
         self.replay_repo = ReplayEventRepository(self.db_path)
         self.event_filter = MoneyExplosionEventFilter(min_ratio_120d=10.0)
@@ -38,7 +46,7 @@ class ReplayEventDBBuilder:
             migrated_checkpoints = self.replay_repo.bootstrap_checkpoints_from_existing_replay(
                 self.ade_version,
                 market=market,
-                source="fdr",
+                source=self.price_source,
             )
             if migrated_checkpoints:
                 print(
@@ -46,7 +54,7 @@ class ReplayEventDBBuilder:
                     f"created checkpoints={migrated_checkpoints}"
                 )
 
-        symbols = DynamicUniverseManager().active(market)
+        symbols = self._active_symbols(market)
         if limit > 0:
             symbols = symbols[:limit]
 
@@ -57,7 +65,11 @@ class ReplayEventDBBuilder:
         skipped_no_data = 0
 
         for idx, symbol in enumerate(symbols, start=1):
-            data = self.price_repo.fetch_dataframe(symbol.market, symbol.ticker, source="fdr")
+            data = self.price_repo.fetch_dataframe(
+                symbol.market,
+                symbol.ticker,
+                source=self.price_source,
+            )
             df = self._prepare(data)
             if len(df) < 180:
                 skipped_no_data += 1
@@ -132,6 +144,41 @@ class ReplayEventDBBuilder:
             "checkpoint_symbols": self.replay_repo.checkpoint_count(self.ade_version, market),
         }
         return total_events, total_flows
+
+    def _active_symbols(self, market: str) -> list[UniverseSymbol]:
+        if market.lower() != "us":
+            return DynamicUniverseManager().active(market)
+
+        conn = sqlite3.connect(str(self.db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            exists = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='us_universe'"
+            ).fetchone()
+            if exists is None:
+                return DynamicUniverseManager().active("us")
+            rows = conn.execute(
+                """
+                SELECT symbol, name, sector
+                FROM us_universe
+                WHERE enabled=1
+                ORDER BY market_cap DESC, avg_dollar_volume DESC, symbol
+                """
+            ).fetchall()
+            if not rows:
+                return DynamicUniverseManager().active("us")
+            return [
+                UniverseSymbol(
+                    market="us",
+                    ticker=str(row["symbol"]),
+                    name=row["name"],
+                    sector=row["sector"],
+                    source="us_universe",
+                )
+                for row in rows
+            ]
+        finally:
+            conn.close()
 
     @staticmethod
     def _incremental_scan_window(df: pd.DataFrame, last_processed_date: str | None) -> pd.DataFrame:

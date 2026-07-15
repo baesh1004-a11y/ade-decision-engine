@@ -5,6 +5,7 @@ from pathlib import Path
 from time import perf_counter
 
 from maintenance.job_manager import ADEJobManager
+from markets.us_replay_maintenance import purge_disabled_us_replay
 from replay.builder import ReplayEventDBBuilder
 from replay.models import ADE_VERSION
 from replay.repository import ReplayEventRepository
@@ -30,6 +31,13 @@ def main() -> None:
         lock_path="output/us_replay_job.lock",
         status_path="output/us_replay_job_status.json",
     ).acquire("US_REPLAY_DB_BUILD", wait=True, timeout_seconds=24 * 60 * 60):
+        purged = purge_disabled_us_replay(DB_PATH)
+        print(
+            "US Replay cleanup: "
+            f"events={purged['events']}, flows={purged['flows']}, "
+            f"vectors={purged['vectors']}, checkpoints={purged['checkpoints']}"
+        )
+
         repo = ReplayEventRepository(DB_PATH)
         try:
             before_events, before_flows = repo.counts()

@@ -70,15 +70,17 @@ def main() -> None:
     st.divider()
     st.markdown("### 시장별 DB 구축")
     st.code(
-        "# 한국장 기존 DB\n"
+        "# 한국장 Replay DB\n"
         "python run_build_replay_db.py\n\n"
         "# 미국장 가격 DB\n"
         "python run_build_us_market_db.py\n\n"
+        "# 미국장 Replay 이벤트·흐름·벡터 DB\n"
+        "python run_build_us_replay_db.py\n\n"
         "# 대시보드\n"
         "python run_ade.py",
         language="bash",
     )
-    st.caption("미국주식 모의투자는 지정가 주문만 지원하며, 주문 승인 문구를 직접 입력해야 KIS로 전송됩니다.")
+    st.caption("미국 추천은 us_market.db의 가격 데이터와 Replay 이벤트·벡터 구축이 모두 완료되어야 생성됩니다.")
 
 
 if __name__ == "__main__":

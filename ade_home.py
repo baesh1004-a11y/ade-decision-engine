@@ -1,102 +1,132 @@
 from __future__ import annotations
 
+import os
+import sqlite3
+from pathlib import Path
+
+from dashboard.system_status import inspect_market_db
+
 
 def main() -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="ADE Home", page_icon="◈", layout="wide")
+    st.set_page_config(page_title="ADE Command Center", page_icon="◈", layout="wide")
     st.markdown(
         """
         <style>
-        :root{
-          --ink:#14263a;--muted:#6f8295;--line:rgba(77,125,168,.18);
-          --glass:rgba(255,255,255,.84);--blue:#2f80ed;--blue-soft:#eaf3ff;
-        }
-        .stApp{background:radial-gradient(circle at 14% 0%,rgba(125,190,255,.22),transparent 28%),linear-gradient(135deg,#f7fbff 0%,#eef5fb 52%,#f9fcff 100%);color:var(--ink)}
-        .block-container{max-width:1480px;padding-top:1.1rem;padding-bottom:3rem}
-        [data-testid="stSidebar"]{background:linear-gradient(180deg,rgba(248,252,255,.97),rgba(232,242,251,.98));border-right:1px solid var(--line)}
-        [data-testid="stSidebar"] [data-testid="stSidebarNav"]{padding-top:.5rem}
-        [data-testid="stSidebar"] a{border-radius:12px;margin:3px 8px;padding:9px 12px;color:#30475d!important;font-weight:650}
-        [data-testid="stSidebar"] a:hover{background:rgba(47,128,237,.08)}
-        [data-testid="stSidebar"] a[aria-current="page"]{background:linear-gradient(135deg,#dcecff,#eef6ff);color:#1768bd!important;box-shadow:inset 0 0 0 1px rgba(47,128,237,.16)}
-        .hero{padding:34px 38px;border-radius:30px;background:linear-gradient(135deg,rgba(255,255,255,.94),rgba(241,248,255,.84));border:1px solid var(--line);box-shadow:0 24px 70px rgba(42,88,130,.13);margin-bottom:24px;position:relative;overflow:hidden}
-        .hero:after{content:"";position:absolute;right:-70px;top:-95px;width:290px;height:290px;border-radius:50%;background:radial-gradient(circle,rgba(67,149,236,.22),rgba(67,149,236,0) 68%)}
-        .hero h1{margin:5px 0 8px;font-size:42px;letter-spacing:-.045em;line-height:1.08}
-        .hero p{margin:0;color:var(--muted);font-size:16px}.eyebrow{font-size:12px;letter-spacing:.17em;font-weight:850;color:#2f78ba}
-        .market{padding:17px 21px;border-radius:18px;background:rgba(255,255,255,.72);border:1px solid var(--line);margin:22px 0 12px;display:flex;align-items:center;justify-content:space-between;gap:18px}
-        .market h2{margin:0;font-size:22px;letter-spacing:-.03em}.market p{margin:0;color:var(--muted);font-size:14px;text-align:right}
-        .card{padding:22px;border-radius:22px;background:var(--glass);border:1px solid var(--line);min-height:154px;box-shadow:0 12px 34px rgba(56,100,139,.09);transition:.18s ease}
-        .card:hover{transform:translateY(-2px);box-shadow:0 18px 42px rgba(56,100,139,.13)}
-        .card h3{margin:0 0 8px;font-size:19px;letter-spacing:-.025em}.card p{color:var(--muted);min-height:44px;line-height:1.55}
-        div[data-testid="stPageLink"] a{border-radius:13px!important;border:1px solid rgba(47,128,237,.16)!important;background:linear-gradient(135deg,#f4f9ff,#e8f3ff)!important;color:#226bad!important;font-weight:800!important}
-        div[data-testid="stCode"]{border-radius:18px;overflow:hidden;border:1px solid var(--line)}
-        hr{border-color:var(--line)!important}
-        @media(max-width:768px){.block-container{padding:.75rem}.hero{padding:24px}.hero h1{font-size:32px}.market{display:block}.market p{text-align:left;margin-top:6px}}
+        :root{--ink:#14263a;--muted:#708397;--line:rgba(76,124,168,.18);--blue:#2f80ed;--glass:rgba(255,255,255,.86)}
+        .stApp{background:radial-gradient(circle at 10% 0%,rgba(125,190,255,.20),transparent 28%),linear-gradient(135deg,#f8fbfe,#edf4fa 55%,#f9fcff);color:var(--ink)}
+        .block-container{max-width:1580px;padding-top:1rem;padding-bottom:3rem}
+        [data-testid="stSidebar"]{background:linear-gradient(180deg,rgba(248,252,255,.98),rgba(232,242,251,.98));border-right:1px solid var(--line)}
+        [data-testid="stSidebar"] a{border-radius:11px!important;margin:2px 7px!important;font-weight:680!important;color:#31485d!important}
+        [data-testid="stSidebar"] a[aria-current="page"]{background:linear-gradient(135deg,#dcecff,#eef6ff)!important;color:#1768bd!important}
+        .hero{display:flex;justify-content:space-between;align-items:flex-end;padding:30px 34px;border-radius:28px;background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(239,247,255,.88));border:1px solid var(--line);box-shadow:0 22px 60px rgba(42,88,130,.12);margin-bottom:18px}
+        .hero h1{margin:4px 0 7px;font-size:38px;letter-spacing:-.045em}.hero p{margin:0;color:var(--muted)}
+        .eyebrow{font-size:12px;letter-spacing:.17em;font-weight:850;color:#2f78ba}.mode{font-size:13px;font-weight:850;color:#226bad;background:#e9f3ff;border:1px solid rgba(47,128,237,.16);padding:9px 13px;border-radius:999px}
+        .section{display:flex;justify-content:space-between;align-items:center;margin:24px 0 10px}.section h2{font-size:21px;margin:0;letter-spacing:-.03em}.section span{color:var(--muted);font-size:13px}
+        .status-card{padding:19px 20px;border-radius:19px;background:var(--glass);border:1px solid var(--line);box-shadow:0 9px 26px rgba(56,100,139,.07);min-height:132px}
+        .status-card h3{margin:0 0 7px;font-size:17px}.status-card p{margin:4px 0;color:var(--muted);font-size:13px}.ok{color:#16724d;font-weight:850}.warn{color:#b36b16;font-weight:850}
+        div[data-testid="stMetric"]{background:rgba(255,255,255,.82);border:1px solid var(--line);padding:16px 18px;border-radius:18px;box-shadow:0 9px 26px rgba(56,100,139,.07)}
+        div[data-testid="stMetricLabel"]{font-weight:720;color:#708397}div[data-testid="stMetricValue"]{font-size:1.85rem;font-weight:880;letter-spacing:-.04em;color:#1a3249}
+        div[data-testid="stDataFrame"]{border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 9px 26px rgba(56,100,139,.07)}
+        @media(max-width:768px){.block-container{padding:.7rem}.hero{display:block;padding:22px}.mode{display:inline-block;margin-top:14px}.hero h1{font-size:30px}}
         </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    mode = os.getenv("KIS_ENV", "paper").upper()
+    st.markdown(
+        f"""
         <div class="hero">
-          <div class="eyebrow">ADE · DECISION OPERATIONS</div>
-          <h1>AI Decision Engine</h1>
-          <p>한국장과 미국장을 분리 운영하면서 추천, 판단, 주문, 피드백을 한 흐름으로 연결합니다.</p>
+          <div><div class="eyebrow">ADE · INVESTMENT OPERATIONS TERMINAL</div><h1>Command Center</h1><p>추천, 판단, 주문, 데이터 상태를 시장별로 한 화면에서 확인합니다.</p></div>
+          <div class="mode">KIS {mode}</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
-    st.markdown('<div class="market"><h2>🇰🇷 한국장 ADE</h2><p>FDR · datahub/market.db · KIS 국내주식</p></div>', unsafe_allow_html=True)
-    kr_rows = [
-        ("pages/7_Daily_Center.py", "KR Daily Center", "한국장 추천 생성과 실행 이력을 관리합니다."),
-        ("pages/2_Meta_Score.py", "KR Meta Score", "Replay·Prediction·JP Radar를 통합해 최종 판단을 봅니다."),
-        ("pages/9_Trading_Desk.py", "KR Trading Desk", "승인 절차를 거쳐 KIS 국내주식 주문을 전송합니다."),
-    ]
-    cols = st.columns(3)
-    for col, (path, title, desc) in zip(cols, kr_rows):
+    kr = inspect_market_db("datahub/market.db", "kr")
+    us = inspect_market_db("datahub/us_market.db", "us")
+    kr_rec, us_rec, pending_orders = _summary_counts()
+
+    a, b, c, d = st.columns(4)
+    a.metric("KR 최근 추천", kr_rec)
+    b.metric("US 최근 추천", us_rec)
+    c.metric("승인 대기 주문", pending_orders)
+    d.metric("운영 준비 시장", f"{int(kr.ready) + int(us.ready)} / 2")
+
+    st.markdown('<div class="section"><h2>Market Readiness</h2><span>가격 · Universe · Replay · Vector</span></div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    for col, title, status, price_cmd, replay_cmd in [
+        (c1, "🇰🇷 KOREA", kr, "python run_build_replay_db.py", "python run_build_replay_db.py"),
+        (c2, "🇺🇸 USA", us, "python run_build_us_market_db.py", "python run_build_us_replay_db.py"),
+    ]:
         with col:
-            st.markdown(f'<div class="card"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
-            st.page_link(path, label=f"{title} 열기")
+            state_class = "ok" if status.ready else "warn"
+            state_text = "READY" if status.ready else "ACTION REQUIRED"
+            st.markdown(
+                f"""
+                <div class="status-card">
+                  <h3>{title} <span class="{state_class}">· {state_text}</span></h3>
+                  <p>활성종목 {status.active_symbols:,} · 가격 {status.price_rows:,}행 · Replay {status.replay_events:,}건 · Vector {status.replay_vectors:,}건</p>
+                  <p>가격 최신일 {status.latest_price_date or '-'} · Replay 최신일 {status.latest_replay_date or '-'}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+            if not status.ready:
+                st.warning(" / ".join(status.issues))
+                st.code(f"{price_cmd}\n{replay_cmd}", language="bash")
 
-    st.markdown('<div class="market"><h2>🇺🇸 미국장 ADE</h2><p>yfinance · datahub/us_market.db · KIS 미국주식</p></div>', unsafe_allow_html=True)
-    us_rows = [
-        ("pages/10_US_Daily_Center.py", "US Daily Center", "미국장 전용 추천 생성과 실행 이력을 관리합니다."),
-        ("pages/11_US_Meta_Score.py", "US Meta Score", "미국장 추천 결과를 별도 기준으로 통합 평가합니다."),
-        ("pages/12_US_Trading_Desk.py", "US Trading Desk", "미국주식 모의·실전 주문을 승인형으로 관리합니다."),
-        ("pages/5_JP_Radar_Live.py", "US JP Radar", "NASDAQ 30 또는 미국 개별 종목의 상태를 분석합니다."),
-    ]
-    for start in range(0, len(us_rows), 3):
-        cols = st.columns(3)
-        for col, (path, title, desc) in zip(cols, us_rows[start:start + 3]):
-            with col:
-                st.markdown(f'<div class="card"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
-                st.page_link(path, label=f"{title} 열기")
+    st.markdown('<div class="section"><h2>Decision Workflow</h2><span>추천 → 판단 → 주문 → 성과</span></div>', unsafe_allow_html=True)
+    w1, w2, w3, w4 = st.columns(4)
+    w1.info("**01 RECOMMEND**\n\nDaily Center에서 후보 생성")
+    w2.info("**02 DECIDE**\n\nMeta Score와 Radar 검토")
+    w3.info("**03 EXECUTE**\n\nTrading Desk 승인 주문")
+    w4.info("**04 REVIEW**\n\nCockpit·Performance 확인")
 
-    st.markdown('<div class="market"><h2>운영 도구</h2><p>검증 · 모니터링 · 계좌 · 피드백 · 모바일</p></div>', unsafe_allow_html=True)
-    common_rows = [
-        ("pages/1_ADE_Cockpit.py", "ADE Cockpit", "추천과 보유종목을 한 화면에서 검토합니다."),
-        ("pages/3_Live_Monitor.py", "Live Monitor", "장중 가격과 상태 변화를 실시간으로 확인합니다."),
-        ("pages/4_KIS_Account.py", "KIS Account", "국내 계좌 잔고와 보유종목을 동기화합니다."),
-        ("pages/6_Feedback.py", "Feedback", "추천 이후 실제 성과를 기록하고 비교합니다."),
-        ("pages/8_Mobile_Access.py", "Mobile Access", "같은 네트워크에서 휴대폰으로 접속합니다."),
-    ]
-    for start in range(0, len(common_rows), 3):
-        cols = st.columns(3)
-        for col, (path, title, desc) in zip(cols, common_rows[start:start + 3]):
-            with col:
-                st.markdown(f'<div class="card"><h3>{title}</h3><p>{desc}</p></div>', unsafe_allow_html=True)
-                st.page_link(path, label=f"{title} 열기")
+    st.markdown('<div class="section"><h2>Quick Access</h2><span>업무 흐름 중심</span></div>', unsafe_allow_html=True)
+    q1, q2, q3, q4 = st.columns(4)
+    q1.page_link("pages/7_Daily_Center.py", label="KR Daily Recommendation", icon="▦")
+    q2.page_link("pages/10_US_Daily_Center.py", label="US Daily Recommendation", icon="▦")
+    q3.page_link("pages/9_Trading_Desk.py", label="KR Trading Desk", icon="₩")
+    q4.page_link("pages/12_US_Trading_Desk.py", label="US Trading Desk", icon="$")
 
-    st.divider()
-    st.markdown("### 시장별 DB 구축")
-    st.code(
-        "# 한국장 Replay DB\n"
-        "python run_build_replay_db.py\n\n"
-        "# 미국장 가격 DB\n"
-        "python run_build_us_market_db.py\n\n"
-        "# 미국장 Replay 이벤트·흐름·벡터 DB\n"
-        "python run_build_us_replay_db.py\n\n"
-        "# 대시보드\n"
-        "python run_ade.py",
-        language="bash",
-    )
-    st.caption("미국 추천은 가격 데이터와 Replay 이벤트·벡터 구축이 모두 완료되어야 생성됩니다.")
+
+def _summary_counts() -> tuple[int, int, int]:
+    kr_rec = _latest_recommendation_count(Path("datahub/market.db"))
+    us_rec = _latest_recommendation_count(Path("datahub/us_market.db"))
+    pending = _pending_count(Path("datahub/market.db"), "trade_order_requests")
+    pending += _pending_count(Path("datahub/us_market.db"), "us_trade_order_requests")
+    return kr_rec, us_rec, pending
+
+
+def _latest_recommendation_count(path: Path) -> int:
+    if not path.exists():
+        return 0
+    conn = sqlite3.connect(str(path))
+    try:
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recommendation_runs'").fetchone()
+        if not exists:
+            return 0
+        row = conn.execute("SELECT recommendation_count FROM recommendation_runs WHERE status='COMPLETED' ORDER BY started_at DESC LIMIT 1").fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        conn.close()
+
+
+def _pending_count(path: Path, table: str) -> int:
+    if not path.exists():
+        return 0
+    conn = sqlite3.connect(str(path))
+    try:
+        exists = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+        if not exists:
+            return 0
+        return int(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE status='PENDING_APPROVAL'").fetchone()[0])
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":

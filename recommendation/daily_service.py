@@ -9,8 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
-from recommendation.event_recommender import RecentMoneyEventRecommender
 from report.recommendation_html_report import render_recommendation_html
+from surge.pattern_engine import SurgePatternRecommender
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class RecommendationRunResult:
 
 
 class DailyRecommendationService:
-    """Run one recommendation engine for both scheduled and dashboard-triggered jobs."""
+    """Run the pre-surge 120-session recommendation engine."""
 
     _process_lock = threading.Lock()
 
@@ -109,8 +109,9 @@ class DailyRecommendationService:
         run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{normalized_type}-{uuid.uuid4().hex[:8]}"
         started = datetime.now()
         parameters = {
-            "candidate_years": candidate_years,
-            "lookback_months": lookback_months,
+            "algorithm": "pre-surge-120d-v1",
+            "pattern_days": 120,
+            "surge_definition": "next 5 sessions max high >= +30%",
             "top_n": top_n,
             "weekly_pool_n": weekly_pool_n,
             "min_weekly_similarity": min_weekly_similarity,
@@ -135,7 +136,7 @@ class DailyRecommendationService:
 
         timer = perf_counter()
         try:
-            engine = RecentMoneyEventRecommender(self.db_path)
+            engine = SurgePatternRecommender(self.db_path)
             try:
                 recommendations = engine.recommend(
                     candidate_years=candidate_years,

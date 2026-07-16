@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from dashboard.system_status import inspect_market_db
 from maintenance.job_manager import ADEJobManager
 from markets.profiles import get_market_profile
 from recommendation.daily_service import DailyRecommendationService
@@ -50,27 +51,37 @@ def run(market_code: str = "kr") -> None:
     )
 
     service = DailyRecommendationService(profile.db_path)
-    manager = ADEJobManager(status_path=f"output/{profile.code}_job_status.json")
+    manager = ADEJobManager(
+        lock_path=f"output/{profile.code}_recommendation.lock",
+        status_path=f"output/{profile.code}_job_status.json",
+    )
     try:
+        readiness = inspect_market_db(profile.db_path, profile.code)
         runs = service.latest_runs(50)
         latest_auto = next((row for row in runs if row["run_type"] == "AUTO"), None)
         latest_manual = next((row for row in runs if row["run_type"] == "MANUAL"), None)
         job_status = manager.current_status() or {}
 
         a, b, c, d = st.columns(4)
-        a.metric("자동 스케줄", profile.scheduler_time)
-        b.metric("오늘 자동 완료", "YES" if service.auto_completed_today() else "NO")
-        c.metric("최근 자동", latest_auto["finished_at"] if latest_auto else "없음")
-        d.metric("최근 수동", latest_manual["finished_at"] if latest_manual else "없음")
+        a.metric("운영 준비", "READY" if readiness.ready else "NOT READY")
+        b.metric("활성 종목", f"{readiness.active_symbols:,}")
+        c.metric("Replay / Vector", f"{readiness.replay_events:,} / {readiness.replay_vectors:,}")
+        d.metric("가격 최신일", readiness.latest_price_date or "없음")
 
-        st.markdown("### ADE 작업 상태")
-        s1, s2, s3 = st.columns(3)
-        s1.metric("상태", str(job_status.get("state", "IDLE")))
-        s2.metric("작업", str(job_status.get("job_name", "없음")))
-        s3.metric("갱신", str(job_status.get("updated_at", "없음")))
+        if not readiness.ready:
+            st.error("추천 실행 전 데이터 준비가 필요합니다: " + " / ".join(readiness.issues))
+            if profile.code == "us":
+                st.code("python run_build_us_market_db.py\npython run_build_us_replay_db.py", language="bash")
+            else:
+                st.code("python run_build_replay_db.py", language="bash")
 
-        if not profile.db_path.exists():
-            st.warning(f"{profile.db_path}가 없습니다. 해당 시장 DB를 먼저 구축해야 합니다.")
+        st.markdown("### 운영 상태")
+        s1, s2, s3, s4 = st.columns(4)
+        s1.metric("자동 스케줄", profile.scheduler_time)
+        s2.metric("오늘 자동 완료", "YES" if service.auto_completed_today() else "NO")
+        s3.metric("현재 작업", str(job_status.get("job_name", "없음")))
+        s4.metric("작업 상태", str(job_status.get("state", "IDLE")))
+        st.caption(f"최근 자동 {latest_auto['finished_at'] if latest_auto else '없음'} · 최근 수동 {latest_manual['finished_at'] if latest_manual else '없음'}")
 
         st.markdown("### 장중 수동 추천")
         c1, c2, c3, c4 = st.columns(4)
@@ -79,7 +90,13 @@ def run(market_code: str = "kr") -> None:
         min_weekly = c3.number_input("최소 주봉 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_weekly")
         min_sto = c4.number_input("최소 STO 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_sto")
 
-        if st.button(f"{profile.name} 현재 시점 추천종목 생성", type="primary", use_container_width=True, key=f"{profile.code}_run"):
+        if st.button(
+            f"{profile.name} 현재 시점 추천종목 생성",
+            type="primary",
+            use_container_width=True,
+            key=f"{profile.code}_run",
+            disabled=not readiness.ready,
+        ):
             with st.status(f"{profile.name} 수동 추천을 작업 대기열에 등록했습니다...", expanded=True) as status:
                 try:
                     with manager.acquire(

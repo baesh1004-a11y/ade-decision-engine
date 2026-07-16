@@ -6,6 +6,7 @@ import streamlit as st
 PAGES = {
     "OVERVIEW": [
         st.Page("ade_home.py", title="Command Center", icon="🏠", default=True),
+        st.Page("pages/13_Surge_Pattern_Lab.py", title="Surge Pattern Lab", icon="🔬"),
     ],
     "KOREA": [
         st.Page("pages/7_Daily_Center.py", title="Daily Recommendation", icon="📅"),

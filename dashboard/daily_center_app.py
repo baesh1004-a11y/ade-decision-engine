@@ -42,9 +42,9 @@ def run(market_code: str = "kr") -> None:
         @media(max-width:768px){{.block-container{{padding:.75rem}}.hero{{padding:22px}}.hero h1{{font-size:29px}}}}
         </style>
         <div class="hero">
-          <div class="eyebrow">ADE {profile.code.upper()} DAILY RECOMMENDATION CENTER</div>
-          <h1>{profile.name} 자동·수동 추천 운영</h1>
-          <p>DB {profile.db_path} · 가격원 {profile.price_source} · 통화 {profile.currency}</p>
+          <div class="eyebrow">ADE {profile.code.upper()} PRE-SURGE RECOMMENDATION</div>
+          <h1>{profile.name} 급등직전 120일 패턴 추천</h1>
+          <p>현재 최근 120거래일을 과거 5거래일 30% 급등 직전 패턴과 비교합니다.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -65,15 +65,24 @@ def run(market_code: str = "kr") -> None:
         a, b, c, d = st.columns(4)
         a.metric("운영 준비", "READY" if readiness.ready else "NOT READY")
         b.metric("활성 종목", f"{readiness.active_symbols:,}")
-        c.metric("Replay / Vector", f"{readiness.replay_events:,} / {readiness.replay_vectors:,}")
+        c.metric("급등직전 패턴", f"{readiness.surge_patterns:,}")
         d.metric("가격 최신일", readiness.latest_price_date or "없음")
 
         if not readiness.ready:
             st.error("추천 실행 전 데이터 준비가 필요합니다: " + " / ".join(readiness.issues))
             if profile.code == "us":
-                st.code("python run_build_us_market_db.py\npython run_build_us_replay_db.py", language="bash")
+                st.code(
+                    "python run_build_us_market_db.py\n"
+                    "python run_build_us_replay_db.py --full\n"
+                    "python run_build_surge_patterns.py --market us --full",
+                    language="bash",
+                )
             else:
-                st.code("python run_build_replay_db.py", language="bash")
+                st.code(
+                    "python run_build_replay_db.py --full\n"
+                    "python run_build_surge_patterns.py --market kr --full",
+                    language="bash",
+                )
 
         st.markdown("### 운영 상태")
         s1, s2, s3, s4 = st.columns(4)
@@ -86,18 +95,18 @@ def run(market_code: str = "kr") -> None:
         st.markdown("### 장중 수동 추천")
         c1, c2, c3, c4 = st.columns(4)
         top_n = c1.number_input("추천 개수", min_value=1, max_value=50, value=20, step=1, key=f"{profile.code}_top_n")
-        weekly_pool = c2.number_input("주봉 후보", min_value=10, max_value=300, value=100, step=10, key=f"{profile.code}_weekly_pool")
-        min_weekly = c3.number_input("최소 주봉 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_weekly")
-        min_sto = c4.number_input("최소 STO 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_sto")
+        pattern_pool = c2.number_input("비교 패턴 풀", min_value=10, max_value=300, value=100, step=10, key=f"{profile.code}_weekly_pool")
+        min_chart = c3.number_input("최소 차트 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_weekly")
+        min_sto = c4.number_input("최소 STO 3계층 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_sto")
 
         if st.button(
-            f"{profile.name} 현재 시점 추천종목 생성",
+            f"{profile.name} 급등 가능 추천종목 생성",
             type="primary",
             use_container_width=True,
             key=f"{profile.code}_run",
             disabled=not readiness.ready,
         ):
-            with st.status(f"{profile.name} 수동 추천을 작업 대기열에 등록했습니다...", expanded=True) as status:
+            with st.status(f"{profile.name} 급등직전 패턴 매칭을 시작했습니다...", expanded=True) as status:
                 try:
                     with manager.acquire(
                         f"{profile.code.upper()}_MANUAL_RECOMMENDATION",
@@ -107,17 +116,18 @@ def run(market_code: str = "kr") -> None:
                         result = service.run(
                             "MANUAL",
                             top_n=int(top_n),
-                            weekly_pool_n=int(weekly_pool),
-                            min_weekly_similarity=float(min_weekly),
+                            weekly_pool_n=int(pattern_pool),
+                            min_weekly_similarity=float(min_chart),
                             min_sto_similarity=float(min_sto),
                         )
-                    status.update(label="수동 추천 생성 완료", state="complete", expanded=False)
+                    status.update(label="급등직전 패턴 추천 완료", state="complete", expanded=False)
                     st.success(f"{result.recommendation_count}개 추천 · {result.elapsed_seconds:.1f}초 · {result.run_id}")
+                    st.page_link("pages/13_Surge_Pattern_Lab.py", label="추천종목과 과거 급등직전 차트 비교하기")
                     if Path(result.report_path).exists():
                         st.caption(f"HTML 보고서: {result.report_path}")
                     st.rerun()
                 except Exception as exc:
-                    status.update(label="수동 추천 실패", state="error", expanded=True)
+                    status.update(label="급등직전 패턴 추천 실패", state="error", expanded=True)
                     st.error(str(exc))
 
         st.divider()
@@ -153,6 +163,7 @@ def run(market_code: str = "kr") -> None:
             details = pd.DataFrame(service.recommendations_for_run(selected))
             if not details.empty:
                 st.dataframe(details, use_container_width=True, hide_index=True)
+                st.page_link("pages/13_Surge_Pattern_Lab.py", label="선택 추천 결과 차트 비교")
     finally:
         service.close()
 

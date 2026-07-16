@@ -22,7 +22,7 @@ def main() -> None:
     urls = dashboard_urls(args.port)
 
     print("========================================")
-    print(" ADE DASHBOARD")
+    print(" ADE PROFESSIONAL TERMINAL")
     print("========================================")
     print(f"Desktop : {urls['desktop']}")
     if args.local_only:
@@ -37,7 +37,7 @@ def main() -> None:
         "-m",
         "streamlit",
         "run",
-        "ade_home.py",
+        "dashboard_app.py",
         "--server.address",
         address,
         "--server.port",

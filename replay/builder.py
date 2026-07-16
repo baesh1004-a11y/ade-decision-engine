@@ -28,7 +28,7 @@ class ReplayEventDBBuilder:
         self.price_source = price_source
         self.price_repo = PriceRepository(self.db_path)
         self.replay_repo = ReplayEventRepository(self.db_path)
-        self.event_filter = MoneyExplosionEventFilter(min_ratio_120d=10.0)
+        self.event_filter = MoneyExplosionEventFilter()
         self.state_engine = ADEStateEngine()
         self.centerline_engine = CenterlineEngine()
         self.analyzer = ReplayEventAnalyzer(max_flow_days=240)

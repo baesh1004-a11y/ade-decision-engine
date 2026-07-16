@@ -13,8 +13,10 @@ class MarketReadiness:
     replay_events: int
     replay_flows: int
     replay_vectors: int
+    surge_patterns: int
     latest_price_date: str | None
     latest_replay_date: str | None
+    latest_surge_date: str | None
     ready: bool
     issues: tuple[str, ...]
 
@@ -25,7 +27,10 @@ class MarketReadiness:
 def inspect_market_db(db_path: str | Path, market: str) -> MarketReadiness:
     path = Path(db_path)
     if not path.exists():
-        return MarketReadiness(False, 0, 0, 0, 0, 0, None, None, False, (f"{path} 파일이 없습니다.",))
+        return MarketReadiness(
+            False, 0, 0, 0, 0, 0, 0, None, None, None, False,
+            (f"{path} 파일이 없습니다.",),
+        )
 
     conn = sqlite3.connect(str(path), timeout=10)
     conn.row_factory = sqlite3.Row
@@ -78,6 +83,13 @@ def inspect_market_db(db_path: str | Path, market: str) -> MarketReadiness:
             (market,),
         ) if "replay_events" in tables else None
 
+        surge_patterns = _count(conn, "surge_patterns", "market=?", (market,)) if "surge_patterns" in tables else 0
+        latest_surge = _scalar(
+            conn,
+            "SELECT MAX(surge_start_date) FROM surge_patterns WHERE market=?",
+            (market,),
+        ) if "surge_patterns" in tables else None
+
         issues: list[str] = []
         if price_rows <= 0:
             issues.append("가격 데이터가 없습니다.")
@@ -89,6 +101,8 @@ def inspect_market_db(db_path: str | Path, market: str) -> MarketReadiness:
             issues.append("Replay 흐름 데이터가 없습니다.")
         if replay_vectors <= 0:
             issues.append("Replay 벡터가 없습니다.")
+        if surge_patterns <= 0:
+            issues.append("급등직전 120일 패턴이 없습니다.")
 
         return MarketReadiness(
             db_exists=True,
@@ -97,8 +111,10 @@ def inspect_market_db(db_path: str | Path, market: str) -> MarketReadiness:
             replay_events=replay_events,
             replay_flows=replay_flows,
             replay_vectors=replay_vectors,
+            surge_patterns=surge_patterns,
             latest_price_date=str(latest_price) if latest_price else None,
             latest_replay_date=str(latest_replay) if latest_replay else None,
+            latest_surge_date=str(latest_surge) if latest_surge else None,
             ready=not issues,
             issues=tuple(issues),
         )

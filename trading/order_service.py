@@ -219,28 +219,74 @@ class TradingOrderService:
         return [dict(row) for row in rows]
 
     def latest_recommendations(self, limit: int = 30) -> list[dict[str, object]]:
-        """Return only candidates that completed the final-decision stage."""
-        table = self.conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='final_decisions'"
-        ).fetchone()
-        if table is None:
+        """Return the exact latest completed recommendation run used by the workbench.
+
+        Validation data is joined by ``source_run_id`` and ticker. Unvalidated rows remain
+        visible so the trading desk never silently falls back to an older validated run.
+        """
+        tables = {
+            str(row["name"])
+            for row in self.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+        }
+        if "recommendation_runs" not in tables or "daily_recommendations" not in tables:
             return []
+
         run = self.conn.execute(
-            "SELECT source_run_id FROM final_decisions ORDER BY created_at DESC, rank_no LIMIT 1"
+            """
+            SELECT r.run_id, r.started_at, r.finished_at, r.run_type
+            FROM recommendation_runs r
+            WHERE r.status='COMPLETED'
+              AND EXISTS(
+                SELECT 1 FROM daily_recommendations d
+                WHERE d.run_id=r.run_id AND d.market='kr'
+              )
+            ORDER BY r.started_at DESC
+            LIMIT 1
+            """
         ).fetchone()
         if run is None:
             return []
-        rows = self.conn.execute(
-            """
-            SELECT source_run_id AS run_id, rank_no, ticker, name, decision,
-                   grade, meta_score, target_return, stop_return
-            FROM final_decisions
-            WHERE source_run_id=? AND decision IN ('FINAL BUY', 'BUY WATCH')
-            ORDER BY rank_no
-            LIMIT ?
-            """,
-            (run["source_run_id"], int(limit)),
-        ).fetchall()
+
+        has_final = "final_decisions" in tables
+        if has_final:
+            rows = self.conn.execute(
+                """
+                SELECT d.run_id, d.rank_no, d.ticker,
+                       COALESCE(NULLIF(d.name, ''), f.name, d.ticker) AS name,
+                       COALESCE(f.decision, 'UNVALIDATED') AS decision,
+                       COALESCE(f.grade, '') AS grade,
+                       d.weekly_similarity AS ranking_score,
+                       d.weekly_similarity, d.sto_similarity,
+                       f.target_return, f.stop_return,
+                       CASE WHEN f.ticker IS NULL THEN 0 ELSE 1 END AS validation_available,
+                       ? AS run_started_at, ? AS run_finished_at, ? AS run_type
+                FROM daily_recommendations d
+                LEFT JOIN final_decisions f
+                  ON f.source_run_id=d.run_id AND f.ticker=d.ticker
+                WHERE d.run_id=? AND d.market='kr'
+                ORDER BY d.rank_no
+                LIMIT ?
+                """,
+                (run["started_at"], run["finished_at"], run["run_type"], run["run_id"], int(limit)),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT d.run_id, d.rank_no, d.ticker,
+                       COALESCE(NULLIF(d.name, ''), d.ticker) AS name,
+                       'UNVALIDATED' AS decision, '' AS grade,
+                       d.weekly_similarity AS ranking_score,
+                       d.weekly_similarity, d.sto_similarity,
+                       NULL AS target_return, NULL AS stop_return,
+                       0 AS validation_available,
+                       ? AS run_started_at, ? AS run_finished_at, ? AS run_type
+                FROM daily_recommendations d
+                WHERE d.run_id=? AND d.market='kr'
+                ORDER BY d.rank_no
+                LIMIT ?
+                """,
+                (run["started_at"], run["finished_at"], run["run_type"], run["run_id"], int(limit)),
+            ).fetchall()
         return [dict(row) for row in rows]
 
     @staticmethod

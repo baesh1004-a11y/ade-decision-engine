@@ -8,6 +8,7 @@ from pathlib import Path
 import pandas as pd
 
 from feedback.engine import FeedbackEngine
+from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from meta_score.engine import MetaScoreEngine
 from prediction.replay_prediction import HorizonPrediction, ReplayPrediction
 from recommendation.event_recommender import EventRecommendation, ReplayMatch
@@ -53,14 +54,12 @@ def run(db_path: str = "datahub/market.db") -> None:
     state_key = f"meta_score_results:{db_path}"
     source_key = f"meta_score_source_run:{db_path}"
     inserted_key = f"meta_feedback_inserted:{db_path}"
-
-    # 새 추천 실행이 완료되면 기존 Streamlit 세션 캐시를 자동 폐기한다.
     cached_run = st.session_state.get(source_key)
     should_reload = load_button or cached_run != run_id or state_key not in st.session_state
 
     if should_reload:
         with st.spinner("최신 추천 실행의 시장·업종·위험 상태를 확인하고 있습니다..."):
-            recommendations = _load_recommendations_for_run(db_path, run_id, int(top_n))
+            recommendations = _load_recommendations_for_run(db_path, run_id, int(top_n), market_code)
             if recommendations:
                 results = MetaScoreEngine().score(recommendations)
                 _save_final_decisions(db_path, run_id, results)
@@ -79,7 +78,6 @@ def run(db_path: str = "datahub/market.db") -> None:
 
     results = st.session_state.get(state_key, [])
     st.caption(f"연결 흐름: 추천 실행 {run_id} → 추천 검증 → 주문관리")
-
     if not results:
         st.warning("선택된 완료 실행에 유효한 추천 payload가 없습니다. 추천 실행 결과를 다시 확인하세요.")
         return
@@ -93,12 +91,13 @@ def run(db_path: str = "datahub/market.db") -> None:
     k1.metric("매수 검토", final_buy)
     k2.metric("관찰", buy_watch)
     k3.metric("보류", hold)
-    k4.metric("추천 1위", best.name or best.ticker, f"주봉 {best.breakdown.replay:.2f}%")
+    k4.metric("추천 1위", display_symbol(best.name, best.ticker, market_code), f"주봉 {best.breakdown.replay:.2f}%")
 
     ranking = pd.DataFrame([
         {
             "순위": item.rank,
-            "종목코드": item.ticker,
+            "종목": display_symbol(item.name, item.ticker, market_code),
+            "종목코드": normalize_ticker(item.ticker, market_code),
             "종목명": item.name,
             "검증결과": _decision_label(item.decision),
             "주봉 순위점수": item.breakdown.replay,
@@ -114,14 +113,18 @@ def run(db_path: str = "datahub/market.db") -> None:
     selected = st.selectbox(
         "상세 종목",
         list(range(len(results))),
-        format_func=lambda i: f"#{results[i].rank} {results[i].name or results[i].ticker} · 주봉 {results[i].breakdown.replay:.2f}%",
+        format_func=lambda i: (
+            f"#{results[i].rank} {display_symbol(results[i].name, results[i].ticker, market_code)} · "
+            f"주봉 {results[i].breakdown.replay:.2f}%"
+        ),
     )
     item = results[selected]
+    item_label = display_symbol(item.name, item.ticker, market_code)
     st.markdown(
         f"""
         <div class="decision-card">
-          <div><div class="eyebrow">추천 검증 #{item.rank}</div><h2>{item.name or item.ticker}</h2>
-          <p>{item.market_code.upper()}:{item.ticker} · 시장 {item.market_signal} · 업종 {item.sector_signal}</p></div>
+          <div><div class="eyebrow">추천 검증 #{item.rank}</div><h2>{item_label}</h2>
+          <p>{market_name} · 종목코드 {normalize_ticker(item.ticker, market_code)} · 시장 {item.market_signal} · 업종 {item.sector_signal}</p></div>
           <div class="score">{item.breakdown.replay:.2f}%<small>주봉 순위점수 · {_decision_label(item.decision)}</small></div>
         </div>
         """,
@@ -131,7 +134,12 @@ def run(db_path: str = "datahub/market.db") -> None:
     for reason in item.reasons:
         st.markdown(f"- {reason}")
     st.caption("검증 결과는 반드시 현재 연결된 동일 run_id로 주문관리에 전달됩니다.")
-    st.page_link("pages/9_Trading_Desk.py" if market_code == "kr" else "pages/12_US_Trading_Desk.py", label="주문관리 열기", icon="🛒", use_container_width=True)
+    st.page_link(
+        "pages/9_Trading_Desk.py" if market_code == "kr" else "pages/12_US_Trading_Desk.py",
+        label="주문관리 열기",
+        icon="🛒",
+        use_container_width=True,
+    )
 
 
 def _decision_label(value: str) -> str:
@@ -200,7 +208,8 @@ def _save_final_decisions(db_path: str, source_run_id: str, results: list[object
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    source_run_id, item.rank, item.market_code, item.ticker, item.name,
+                    source_run_id, item.rank, item.market_code,
+                    normalize_ticker(item.ticker, item.market_code), item.name,
                     item.decision, item.grade, item.breakdown.replay, item.breakdown.replay,
                     item.breakdown.jp_radar, item.breakdown.market, item.breakdown.sector,
                     item.breakdown.risk, item.target_return, item.stop_return,
@@ -212,21 +221,31 @@ def _save_final_decisions(db_path: str, source_run_id: str, results: list[object
         conn.close()
 
 
-def _load_recommendations_for_run(db_path: str, run_id: str, limit: int) -> list[EventRecommendation]:
+def _load_recommendations_for_run(
+    db_path: str,
+    run_id: str,
+    limit: int,
+    market_code: str,
+) -> list[EventRecommendation]:
     path = Path(db_path)
     if not path.exists():
         return []
     conn = sqlite3.connect(str(path), timeout=30)
     conn.row_factory = sqlite3.Row
     try:
+        name_map = build_name_map(conn, market_code)
         rows = conn.execute(
-            "SELECT payload_json FROM daily_recommendations WHERE run_id=? ORDER BY rank_no LIMIT ?",
+            "SELECT ticker, name, payload_json FROM daily_recommendations WHERE run_id=? ORDER BY rank_no LIMIT ?",
             (run_id, limit),
         ).fetchall()
         recommendations: list[EventRecommendation] = []
         for row in rows:
             try:
-                recommendations.append(_recommendation_from_payload(json.loads(str(row["payload_json"]))))
+                payload = json.loads(str(row["payload_json"]))
+                code = normalize_ticker(row["ticker"], market_code)
+                payload["ticker"] = code
+                payload["name"] = resolve_name(code, row["name"] or payload.get("name"), name_map, market_code)
+                recommendations.append(_recommendation_from_payload(payload))
             except (TypeError, ValueError, KeyError, json.JSONDecodeError):
                 continue
         return recommendations

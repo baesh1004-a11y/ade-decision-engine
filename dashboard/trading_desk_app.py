@@ -11,7 +11,7 @@ from trading.order_service import TradingOrderService
 def run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="ADE Trading Desk", page_icon="₩", layout="wide")
+    st.set_page_config(page_title="ADE 한국 주문관리", page_icon="💳", layout="wide")
     st.markdown(
         """
         <style>
@@ -20,7 +20,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         .hero{padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}
         .hero h1{margin:3px 0}.hero p{margin:5px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
         </style>
-        <div class="hero"><div class="eyebrow">ADE · HUMAN APPROVED EXECUTION</div><h1>KIS Trading Desk</h1><p>주문 요청 → 사용자 승인 → KIS 전송 → 체결 확인 → 보유종목 동기화 → 손절·익절 감시</p></div>
+        <div class="hero"><div class="eyebrow">ADE · 사용자 승인 주문</div><h1>한국 주문관리</h1><p>최종 종합판단 → 주문 요청 → 사용자 승인 → KIS 전송 → 체결 확인 → 보유종목 관리</p></div>
         """,
         unsafe_allow_html=True,
     )
@@ -38,12 +38,15 @@ def run(db_path: str = "datahub/market.db") -> None:
     service = TradingOrderService(db_path)
     try:
         recommendations = service.latest_recommendations(30)
-        st.markdown("### 1. 추천종목에서 주문 요청 생성")
+        st.markdown("### 1. 종합판단 결과에서 주문 요청 생성")
         if not recommendations:
-            st.warning("저장된 추천 결과가 없습니다. Daily Center에서 추천을 먼저 생성하세요.")
+            st.warning("주문 가능한 최종 판단 결과가 없습니다. 먼저 '한국 종합판단'을 실행하세요.")
         else:
-            labels = [f"#{r['rank_no']} {r['name'] or r['ticker']} ({r['ticker']}) · {r['decision']}" for r in recommendations]
-            index = st.selectbox("추천종목", range(len(recommendations)), format_func=lambda i: labels[i])
+            labels = [
+                f"#{r['rank_no']} {r['name'] or r['ticker']} ({r['ticker']}) · {r['decision']} · {float(r['meta_score']):.2f}점"
+                for r in recommendations
+            ]
+            index = st.selectbox("최종 매수 후보", range(len(recommendations)), format_func=lambda i: labels[i])
             selected = recommendations[index]
             c1, c2, c3, c4 = st.columns(4)
             side = c1.selectbox("주문 방향", ["BUY", "SELL"])
@@ -129,13 +132,13 @@ def run(db_path: str = "datahub/market.db") -> None:
             keep = [c for c in ["captured_at", "broker_order_id", "ticker", "side", "ordered_quantity", "filled_quantity", "filled_price", "status"] if c in executions.columns]
             st.dataframe(executions[keep], use_container_width=True, hide_index=True)
 
-        st.caption("손절·익절 감시는 자동 매도를 직접 전송하지 않고 승인 대기 매도요청을 생성합니다. 최종 주문은 반드시 사용자 승인 후 전송됩니다.")
+        st.caption("손절·익절 감시는 자동 매도를 직접 전송하지 않고 승인 대기 매도요청만 생성합니다.")
     finally:
         service.close()
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ADE KIS Trading Desk")
+    parser = argparse.ArgumentParser(description="ADE 한국 주문관리")
     parser.add_argument("--db", default="datahub/market.db")
     args = parser.parse_args()
     run(args.db)

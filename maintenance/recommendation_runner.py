@@ -46,7 +46,11 @@ def start_job(
     *,
     top_n: int,
     weekly_pool_n: int,
+    candidate_years: int,
+    use_recent_replay: bool,
+    use_weekly_filter: bool,
     min_weekly_similarity: float,
+    use_sto_filter: bool,
     min_sto_similarity: float,
 ) -> bool:
     with _LOCK:
@@ -73,26 +77,23 @@ def start_job(
             )
 
             def on_progress(progress: dict[str, object]) -> None:
-                status = {
-                    "state": "RUNNING",
-                    "running": True,
-                    **progress,
-                }
+                status = {"state": "RUNNING", "running": True, **progress}
                 with _LOCK:
                     if market_code in _JOBS:
                         _JOBS[market_code]["status"] = status
                 _write_status(market_code, status)
 
             try:
-                with manager.acquire(
-                    f"{market_code.upper()}_MANUAL_RECOMMENDATION",
-                    wait=False,
-                ):
+                with manager.acquire(f"{market_code.upper()}_MANUAL_RECOMMENDATION", wait=False):
                     result = service.run(
                         "MANUAL",
                         top_n=top_n,
                         weekly_pool_n=weekly_pool_n,
+                        candidate_years=candidate_years,
+                        use_recent_replay=use_recent_replay,
+                        use_weekly_filter=use_weekly_filter,
                         min_weekly_similarity=min_weekly_similarity,
+                        use_sto_filter=use_sto_filter,
                         min_sto_similarity=min_sto_similarity,
                         progress_callback=on_progress,
                         cancel_check=cancel_event.is_set,
@@ -102,11 +103,7 @@ def start_job(
                     "running": False,
                     "stage": result.status,
                     "progress": 1.0 if result.status == "COMPLETED" else 0.0,
-                    "message": (
-                        "추천 생성이 완료되었습니다."
-                        if result.status == "COMPLETED"
-                        else "사용자 요청으로 추천 생성을 중단했습니다."
-                    ),
+                    "message": "추천 생성이 완료되었습니다." if result.status == "COMPLETED" else "사용자 요청으로 추천 생성을 중단했습니다.",
                     "run_id": result.run_id,
                     "recommendation_count": result.recommendation_count,
                     "elapsed_seconds": result.elapsed_seconds,
@@ -132,16 +129,8 @@ def start_job(
                     _JOBS[market_code]["status"] = final
             _write_status(market_code, final)
 
-        thread = threading.Thread(
-            target=worker,
-            name=f"ade-{market_code}-recommendation",
-            daemon=True,
-        )
-        _JOBS[market_code] = {
-            "thread": thread,
-            "cancel_event": cancel_event,
-            "status": initial,
-        }
+        thread = threading.Thread(target=worker, name=f"ade-{market_code}-recommendation", daemon=True)
+        _JOBS[market_code] = {"thread": thread, "cancel_event": cancel_event, "status": initial}
         thread.start()
         return True
 
@@ -153,13 +142,11 @@ def cancel_job(market_code: str) -> bool:
             return False
         job["cancel_event"].set()
         status = dict(job.get("status", {}))
-        status.update(
-            {
-                "state": "CANCELLING",
-                "running": True,
-                "message": "현재 비교 작업을 마친 뒤 안전하게 중단합니다.",
-            }
-        )
+        status.update({
+            "state": "CANCELLING",
+            "running": True,
+            "message": "현재 비교 작업을 마친 뒤 안전하게 중단합니다.",
+        })
         job["status"] = status
     _write_status(market_code, status)
     return True

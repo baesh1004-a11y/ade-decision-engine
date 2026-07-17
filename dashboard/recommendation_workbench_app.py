@@ -16,18 +16,18 @@ def run() -> None:
     st.set_page_config(page_title="AI 의사결정 엔진 대시보드", page_icon="🧠", layout="wide")
     _style(st)
 
-    header_left, header_right = st.columns([5, 1])
-    with header_left:
+    title_col, market_col = st.columns([5, 1])
+    with title_col:
         st.markdown(
             """
             <div class="page-title">
               <h1>AI 의사결정 엔진 대시보드</h1>
-              <p>추천 생성부터 근거 비교, 검증, 주문 실행, 성과 관리까지 한눈에 확인합니다.</p>
+              <p>주봉 유사도로 순위를 정하고 STO는 통과 여부만 검증합니다.</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
-    with header_right:
+    with market_col:
         market = st.segmented_control(
             "시장",
             options=["kr", "us"],
@@ -46,10 +46,10 @@ def run() -> None:
     try:
         recommendations, run_info = _latest_recommendations(conn, profile.code)
         validations = _latest_validations(conn)
-        order_summary = _order_summary(conn)
+        orders = _order_summary(conn)
         runtime = get_status(profile.code)
 
-        _render_kpis(st, recommendations, validations, order_summary, run_info)
+        _render_kpis(st, recommendations, validations, orders, run_info)
         _render_generation_controls(st, profile, runtime)
 
         if not recommendations:
@@ -63,22 +63,19 @@ def run() -> None:
         historical = _pattern_bars(conn, pattern)
         validation = validations.get(str(selected["ticker"]))
 
-        step1, step2, step3, step4 = st.columns([1.22, 1.55, 1.08, 1.32], gap="medium")
+        step1, step2, step3, step4 = st.columns([1.25, 1.55, 1.05, 1.2], gap="medium")
         with step1:
-            _step_title(st, 1, "추천 생성", "AI가 과거 급등 패턴과 유사한 종목을 선별합니다.")
+            _step_title(st, 1, "추천 생성", "주봉 유사도 순으로 추천합니다.")
             _recommendation_table(st, recommendations, selected)
-
         with step2:
-            _step_title(st, 2, "추천 근거 비교", "현재 종목과 대표 과거 사례를 같은 120일 축에서 비교합니다.")
+            _step_title(st, 2, "추천 근거 비교", "현재와 과거 급등 직전 120일을 비교합니다.")
             _comparison_panel(st, selected, current, historical, pattern, payload)
-
         with step3:
-            _step_title(st, 3, "추천 검증", "시장·업종·위험 요인을 체크리스트로 검증합니다.")
+            _step_title(st, 3, "추천 검증", "STO 통과와 시장·업종·위험을 확인합니다.")
             _validation_panel(st, selected, validation)
-
         with step4:
-            _step_title(st, 4, "주문 관리", "검증을 통과한 종목을 사용자 승인 후 주문합니다.")
-            _order_panel(st, selected, profile.code, validation, order_summary)
+            _step_title(st, 4, "주문 관리", "사용자 승인 후 주문합니다.")
+            _order_panel(st, selected, profile.code, validation, orders)
 
         bottom_left, bottom_center, bottom_right = st.columns([1.4, 1, 1], gap="medium")
         with bottom_left:
@@ -89,7 +86,7 @@ def run() -> None:
             _reason_panel(st, payload, pattern)
         with bottom_right:
             _panel_title(st, "보유 및 성과 관리")
-            _performance_panel(st, conn, order_summary)
+            _performance_panel(st, conn, orders)
     finally:
         conn.close()
 
@@ -97,13 +94,13 @@ def run() -> None:
 def _render_kpis(st, recommendations, validations, orders, run_info) -> None:
     buy_count = sum(1 for row in validations.values() if str(row.get("decision")) == "FINAL BUY")
     watch_count = sum(1 for row in validations.values() if str(row.get("decision")) == "BUY WATCH")
-    avg_similarity = (
-        sum(float(row["final_similarity"]) for row in recommendations) / len(recommendations)
+    avg_weekly = (
+        sum(float(row["weekly_similarity"]) for row in recommendations) / len(recommendations)
         if recommendations else 0.0
     )
     cards = [
         ("오늘 추천 종목", f"{len(recommendations)}개", "최신 추천 실행"),
-        ("평균 유사도", f"{avg_similarity:.1f}%", "주봉 60% + STO 40%"),
+        ("평균 주봉 유사도", f"{avg_weekly:.1f}%", "추천 순위 기준"),
         ("매수 검토", f"{buy_count}개", "검증 통과 후보"),
         ("관찰 종목", f"{watch_count}개", "추가 확인 필요"),
         ("주문 대기", f"{orders['pending']}건", "승인 전 요청"),
@@ -120,11 +117,11 @@ def _render_kpis(st, recommendations, validations, orders, run_info) -> None:
 def _render_generation_controls(st, profile, runtime) -> None:
     with st.expander("추천 생성 설정", expanded=False):
         c1, c2, c3, c4, c5, c6 = st.columns([1, 1, 1, 1, 1, 1.4])
-        years = c1.number_input("과거 기간(년)", 1, 10, 2, key=f"wb2_{profile.code}_years")
-        pool = c2.number_input("과거 패턴 수", 10, 1000, 100, 10, key=f"wb2_{profile.code}_pool")
-        weekly = c3.number_input("최소 주봉", 0.0, 100.0, 85.0, 1.0, key=f"wb2_{profile.code}_weekly")
-        sto = c4.number_input("최소 STO", 0.0, 100.0, 85.0, 1.0, key=f"wb2_{profile.code}_sto")
-        top_n = c5.number_input("추천 수", 1, 50, 20, key=f"wb2_{profile.code}_top")
+        years = c1.number_input("과거 기간(년)", 1, 10, 2, key=f"wb3_{profile.code}_years")
+        pool = c2.number_input("과거 패턴 수", 10, 1000, 100, 10, key=f"wb3_{profile.code}_pool")
+        weekly = c3.number_input("최소 주봉", 0.0, 100.0, 85.0, 1.0, key=f"wb3_{profile.code}_weekly")
+        sto = c4.number_input("STO 통과 기준", 0.0, 100.0, 85.0, 1.0, key=f"wb3_{profile.code}_sto")
+        top_n = c5.number_input("추천 수", 1, 50, 20, key=f"wb3_{profile.code}_top")
         running = bool(runtime.get("running"))
         if c6.button("추천 생성 및 저장", type="primary", use_container_width=True, disabled=running):
             if start_job(
@@ -140,28 +137,29 @@ def _render_generation_controls(st, profile, runtime) -> None:
                 min_sto_similarity=float(sto),
             ):
                 st.rerun()
+        st.info("추천 순위는 주봉 유사도만 사용합니다. STO는 기준 이상인지 통과 여부만 확인합니다.")
         if running:
             st.progress(float(runtime.get("progress", 0.0) or 0.0), text=str(runtime.get("message", "추천 계산 중")))
 
 
 def _selected_recommendation(st, recommendations, market: str):
-    key = f"workbench_grid_selected_{market}"
+    key = f"workbench_selected_{market}"
     tickers = [str(row["ticker"]) for row in recommendations]
     if st.session_state.get(key) not in tickers:
         st.session_state[key] = tickers[0]
     labels = {
-        str(row["ticker"]): f"#{int(row['rank_no'])}  {_row_name(row)} ({row['ticker']})"
+        str(row["ticker"]): f"#{int(row['rank_no'])} {_row_name(row)} ({row['ticker']})"
         for row in recommendations
     }
-    selected_ticker = st.selectbox(
+    ticker = st.selectbox(
         "분석 종목 선택",
         tickers,
         index=tickers.index(st.session_state[key]),
         format_func=lambda value: labels[value],
-        key=f"workbench_grid_selectbox_{market}",
+        key=f"workbench_select_{market}",
     )
-    st.session_state[key] = selected_ticker
-    return next(row for row in recommendations if str(row["ticker"]) == selected_ticker)
+    st.session_state[key] = ticker
+    return next(row for row in recommendations if str(row["ticker"]) == ticker)
 
 
 def _recommendation_table(st, recommendations, selected) -> None:
@@ -173,10 +171,10 @@ def _recommendation_table(st, recommendations, selected) -> None:
             "": "▶" if ticker == selected_ticker else "",
             "순위": int(row["rank_no"]),
             "종목명": _row_name(row),
-            "종목코드": ticker,
-            "최종": round(float(row["final_similarity"]), 1),
+            "코드": ticker,
             "주봉": round(float(row["weekly_similarity"]), 1),
             "STO": round(float(row["sto_similarity"]), 1),
+            "STO 통과": "PASS",
         })
     st.dataframe(
         pd.DataFrame(rows),
@@ -187,10 +185,10 @@ def _recommendation_table(st, recommendations, selected) -> None:
             "": st.column_config.TextColumn("", width="small"),
             "순위": st.column_config.NumberColumn("순위", width="small"),
             "종목명": st.column_config.TextColumn("종목명", width="medium"),
-            "종목코드": st.column_config.TextColumn("코드", width="small"),
-            "최종": st.column_config.NumberColumn("최종", format="%.1f%%"),
+            "코드": st.column_config.TextColumn("코드", width="small"),
             "주봉": st.column_config.NumberColumn("주봉", format="%.1f%%"),
             "STO": st.column_config.NumberColumn("STO", format="%.1f%%"),
+            "STO 통과": st.column_config.TextColumn("STO", width="small"),
         },
     )
 
@@ -206,17 +204,17 @@ def _comparison_panel(st, selected, current, historical, pattern, payload) -> No
         st.caption("현재 120일 vs 과거 120일")
         st.plotly_chart(_price_chart(current, historical, selected, pattern), use_container_width=True, config={"displayModeBar": False})
     with sto_col:
-        st.caption("STO 120일 비교")
+        st.caption("STO 흐름 비교")
         st.plotly_chart(_sto_chart(current, historical), use_container_width=True, config={"displayModeBar": False})
     metrics = st.columns(4, gap="small")
     values = [
-        ("최종", float(selected["final_similarity"])),
-        ("주봉", float(selected["weekly_similarity"])),
-        ("STO", float(selected["sto_similarity"])),
-        ("사례", len(payload.get("replay_matches") or [])),
+        ("순위점수", float(selected["weekly_similarity"]), "%"),
+        ("주봉", float(selected["weekly_similarity"]), "%"),
+        ("STO", float(selected["sto_similarity"]), "%"),
+        ("사례", len(payload.get("replay_matches") or []), "건"),
     ]
-    for col, (label, value) in zip(metrics, values):
-        display = f"{value:.1f}%" if label != "사례" else f"{int(value)}건"
+    for col, (label, value, suffix) in zip(metrics, values):
+        display = f"{value:.1f}{suffix}" if suffix == "%" else f"{int(value)}{suffix}"
         col.markdown(f'<div class="mini-card"><span>{label}</span><b>{display}</b></div>', unsafe_allow_html=True)
 
 
@@ -228,7 +226,8 @@ def _validation_panel(st, selected, validation) -> None:
     risk = float(validation.get("risk_score", 0)) if validation else 0
     st.markdown(f'<div class="validation-result"><span>검증 결과</span><strong>{label}</strong></div>', unsafe_allow_html=True)
     checks = [
-        ("패턴 유사도", f"{float(selected['final_similarity']):.1f}%", "good"),
+        ("주봉 순위점수", f"{float(selected['weekly_similarity']):.1f}%", "good"),
+        ("STO 필터", "PASS", "good"),
         ("시장 레이더", _status_text(market), _tone(market)),
         ("업종 레이더", _status_text(sector), _tone(sector)),
         ("위험 관리", _risk_text(risk), _risk_tone(risk)),
@@ -253,7 +252,7 @@ def _order_panel(st, selected, market: str, validation, orders) -> None:
     c2.metric("검증 상태", "완료" if validation else "대기")
     target = "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py"
     st.page_link(target, label="주문관리 열기", icon="🛒", use_container_width=True)
-    st.caption("실제 주문 전송은 주문관리 화면에서 사용자가 최종 승인합니다.")
+    st.caption("실제 주문은 주문관리 화면에서 최종 승인합니다.")
 
 
 def _evidence_table(st, conn, payload) -> None:
@@ -315,9 +314,7 @@ def _row_name(row) -> str:
         return str(direct).strip()
     payload = _safe_json(row["payload_json"] if "payload_json" in row.keys() else None)
     payload_name = payload.get("name")
-    if payload_name and str(payload_name).strip():
-        return str(payload_name).strip()
-    return str(row["ticker"])
+    return str(payload_name).strip() if payload_name and str(payload_name).strip() else str(row["ticker"])
 
 
 def _latest_recommendations(conn, market):
@@ -351,7 +348,9 @@ def _latest_validations(conn):
 def _order_summary(conn):
     if not _table_exists(conn, "trade_order_requests"):
         return {"pending": 0}
-    row = conn.execute("SELECT COUNT(*) AS count FROM trade_order_requests WHERE status IN ('PENDING','READY','APPROVED')").fetchone()
+    row = conn.execute(
+        "SELECT COUNT(*) AS count FROM trade_order_requests WHERE status IN ('PENDING_APPROVAL','PENDING','READY','APPROVED')"
+    ).fetchone()
     return {"pending": int(row["count"] or 0)}
 
 
@@ -428,19 +427,11 @@ def _count_rows(conn, candidates):
 
 
 def _status_text(score):
-    if score >= 70:
-        return "양호"
-    if score >= 45:
-        return "보통"
-    return "주의"
+    return "양호" if score >= 70 else "보통" if score >= 45 else "주의"
 
 
 def _risk_text(score):
-    if score >= 70:
-        return "낮음"
-    if score >= 45:
-        return "보통"
-    return "높음"
+    return "낮음" if score >= 70 else "보통" if score >= 45 else "높음"
 
 
 def _tone(score):
@@ -448,38 +439,29 @@ def _tone(score):
 
 
 def _risk_tone(score):
-    return "good" if score >= 70 else "warn" if score >= 45 else "bad"
+    return _tone(score)
 
 
 def _style(st) -> None:
     st.markdown(
         """
         <style>
-        :root{--navy:#09243d;--blue:#2778da;--ink:#152b42;--muted:#718397;--line:#dbe6ef;--panel:#ffffff;--bg:#f4f8fc;--green:#16a36a;--amber:#d79518;--red:#e55353}
+        :root{--navy:#09243d;--blue:#2778da;--ink:#152b42;--muted:#718397;--line:#dbe6ef;--panel:#fff;--green:#16a36a;--amber:#d79518;--red:#e55353}
         .stApp{background:linear-gradient(135deg,#f8fbfe,#eef4fa 55%,#fbfdff);color:var(--ink)}
         .block-container{max-width:1900px;padding:.7rem 1.2rem 2rem}
-        [data-testid="stSidebar"]{background:linear-gradient(180deg,#08223a,#0c2c49);border-right:1px solid rgba(255,255,255,.08)}
+        [data-testid="stSidebar"]{background:linear-gradient(180deg,#08223a,#0c2c49)}
         [data-testid="stSidebar"] *{color:#edf7ff!important}
-        [data-testid="stSidebar"] a{border-radius:10px;margin:3px 7px;padding:9px 11px}
-        [data-testid="stSidebar"] a[aria-current="page"]{background:linear-gradient(135deg,#164c80,#1d629e)}
-        .page-title h1{margin:0;font-size:28px;letter-spacing:-.04em}.page-title p{margin:2px 0 10px;color:var(--muted)}
-        .kpi-card{min-height:105px;padding:16px 17px;border-radius:16px;background:var(--panel);border:1px solid var(--line);box-shadow:0 7px 23px rgba(35,72,105,.06)}
-        .kpi-card span,.kpi-card small{display:block;color:var(--muted)}.kpi-card span{font-size:13px;font-weight:750}.kpi-card strong{display:block;font-size:25px;margin:8px 0 4px;letter-spacing:-.04em;color:#12304f}.kpi-card small{font-size:11px}
-        .step-header{display:flex;gap:10px;align-items:flex-start;padding:13px 14px;margin-top:14px;border:1px solid var(--line);border-radius:14px 14px 0 0;background:linear-gradient(135deg,#fff,#f2f7fc)}
-        .step-header>span{display:flex;align-items:center;justify-content:center;width:29px;height:29px;border-radius:8px;background:linear-gradient(135deg,#3b8beb,#1767c6);color:white;font-weight:900}.step-header b{display:block;font-size:17px;color:#165ea9}.step-header small{display:block;margin-top:3px;color:var(--muted);line-height:1.25}
-        .panel-title{margin-top:15px;padding:12px 14px;border-radius:13px 13px 0 0;background:white;border:1px solid var(--line);font-size:17px;font-weight:850;color:#174f84}
-        .selected-stock{display:flex;justify-content:space-between;padding:10px 12px;margin:9px 0;border-radius:11px;background:#eef6ff}.selected-stock b{font-size:17px}.selected-stock span{color:var(--muted)}
-        .mini-card{padding:10px 11px;border-radius:11px;background:white;border:1px solid var(--line)}.mini-card span{display:block;color:var(--muted);font-size:11px}.mini-card b{display:block;font-size:17px;margin-top:3px}
-        .validation-result{padding:18px;border-radius:14px;background:linear-gradient(135deg,#eefaf5,#fff);border:1px solid #bfe8d5;text-align:center;margin:10px 0}.validation-result span{display:block;color:var(--muted)}.validation-result strong{display:block;font-size:27px;color:var(--green);margin-top:5px}
-        .validation-row{display:flex;justify-content:space-between;padding:12px 13px;border-radius:11px;background:white;border:1px solid var(--line);margin-bottom:8px}.validation-row span{font-weight:850}.good{color:var(--green)}.warn{color:var(--amber)}.bad{color:var(--red)}
-        .order-highlight{padding:18px;border-radius:14px;background:linear-gradient(135deg,#eef5ff,#fff);border:1px solid #cddff3;margin:10px 0}.order-highlight span,.order-highlight b,.order-highlight strong{display:block}.order-highlight span{font-size:17px;font-weight:850}.order-highlight b{color:var(--muted);margin:3px 0 12px}.order-highlight strong{font-size:21px;color:#1673d1}
-        .reason-item{padding:11px 12px;border-radius:10px;background:white;border:1px solid var(--line);margin-bottom:7px;color:#334d65}
-        .performance-card{padding:16px;border-radius:13px;background:white;border:1px solid var(--line);margin:10px 0}.performance-card span,.performance-card small{display:block;color:var(--muted)}.performance-card b{display:block;font-size:22px;margin:5px 0}
-        div[data-testid="stDataFrame"]{border-radius:0 0 13px 13px;overflow:hidden;border:1px solid var(--line);box-shadow:0 6px 20px rgba(35,72,105,.05)}
-        div[data-testid="stMetric"]{background:white;border:1px solid var(--line);padding:10px 12px;border-radius:12px}
-        div[data-testid="stButton"] button{border-radius:11px!important;font-weight:800}
-        div[data-testid="stSelectbox"]{margin-top:5px}
-        @media(max-width:1200px){.block-container{padding:.6rem}.kpi-card strong{font-size:20px}.step-header small{display:none}}
+        .page-title h1{margin:0;font-size:28px}.page-title p{margin:2px 0 10px;color:var(--muted)}
+        .kpi-card{min-height:105px;padding:16px;border-radius:16px;background:var(--panel);border:1px solid var(--line);box-shadow:0 7px 23px rgba(35,72,105,.06)}
+        .kpi-card span,.kpi-card small{display:block;color:var(--muted)}.kpi-card strong{display:block;font-size:25px;margin:8px 0 4px}
+        .step-header{display:flex;gap:10px;padding:13px 14px;margin-top:14px;border:1px solid var(--line);border-radius:14px 14px 0 0;background:linear-gradient(135deg,#fff,#f2f7fc)}
+        .step-header>span{display:flex;align-items:center;justify-content:center;width:29px;height:29px;border-radius:8px;background:#2778da;color:white;font-weight:900}.step-header b{display:block;color:#165ea9}.step-header small{display:block;color:var(--muted)}
+        .panel-title{margin-top:15px;padding:12px 14px;border-radius:13px 13px 0 0;background:white;border:1px solid var(--line);font-weight:850;color:#174f84}
+        .selected-stock{display:flex;justify-content:space-between;padding:10px 12px;margin:9px 0;border-radius:11px;background:#eef6ff}.selected-stock span{color:var(--muted)}
+        .mini-card,.validation-result,.order-highlight,.performance-card,.reason-item{padding:11px 12px;border-radius:11px;background:white;border:1px solid var(--line);margin-bottom:8px}
+        .mini-card span,.validation-result span{display:block;color:var(--muted);font-size:11px}.mini-card b,.validation-result strong{display:block;font-size:17px;margin-top:3px}
+        .validation-row{display:flex;justify-content:space-between;padding:11px 12px;margin-top:7px;border-radius:10px;background:white;border:1px solid var(--line)}
+        .good{color:var(--green);font-weight:850}.warn{color:var(--amber);font-weight:850}.bad{color:var(--red);font-weight:850}
         </style>
         """,
         unsafe_allow_html=True,

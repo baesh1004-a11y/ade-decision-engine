@@ -51,7 +51,7 @@ def run() -> None:
           <div>
             <div class="eyebrow">ADE · {profile.code.upper()} AI PATTERN LAB</div>
             <h1>급등직전 120일 패턴 탐색</h1>
-            <p>현재 차트와 과거 FAST·QUICK·SWING·POSITION 급등직전 패턴을 직접 비교합니다.</p>
+            <p>합성점수 대신 차트·STO·상승속도·근거 사례를 분리해 직접 판단합니다.</p>
           </div>
           <div class="hero-badge">{profile.name}</div>
         </section>
@@ -122,18 +122,18 @@ def run() -> None:
         historical_structure = json.loads(str(pattern["sto_json"]))
         class_distribution = Counter(str(row["surge_class"]) for _, row in enriched)
         confidence = _confidence_score(match, pattern, enriched)
-        overall = _overall_score(match, pattern, confidence, len(enriched))
-        reasons = _recommendation_reasons(payload, match, pattern, confidence, overall, class_distribution)
+        statistics = _match_statistics(enriched)
+        reasons = _recommendation_reasons(payload, match, pattern, confidence, class_distribution, statistics)
+        warnings = _warning_flags(match, pattern, enriched, class_distribution, confidence)
 
         _render_decision_summary(
             st,
             selected,
             match,
             pattern,
-            overall,
             confidence,
             class_distribution,
-            reasons,
+            statistics,
             mobile,
         )
 
@@ -148,6 +148,8 @@ def run() -> None:
                 current_structure,
                 historical_structure,
                 reasons,
+                warnings,
+                enriched,
             )
         else:
             _render_desktop_layout(
@@ -161,6 +163,7 @@ def run() -> None:
                 historical_structure,
                 enriched,
                 reasons,
+                warnings,
             )
 
         with st.expander("전체 급등직전 패턴 라이브러리"):
@@ -177,7 +180,7 @@ def _style(st) -> None:
     st.markdown(
         """
         <style>
-        :root{--ink:#14283d;--muted:#6d8092;--line:rgba(72,119,160,.16);--blue:#2f80ed;--glass:rgba(255,255,255,.80)}
+        :root{--ink:#14283d;--muted:#6d8092;--line:rgba(72,119,160,.16);--blue:#2f80ed;--glass:rgba(255,255,255,.80);--green:#16845b;--amber:#b97b13;--red:#bb4b4b}
         .stApp{background:radial-gradient(circle at 10% 0%,rgba(112,184,255,.20),transparent 28%),linear-gradient(135deg,#f8fbfe,#eef5fb 52%,#fbfdff);color:var(--ink)}
         .block-container{max-width:1680px;padding-top:1rem;padding-bottom:3rem}
         [data-testid="stSidebar"]{background:linear-gradient(180deg,rgba(249,252,255,.98),rgba(232,242,251,.98));border-right:1px solid var(--line)}
@@ -187,10 +190,15 @@ def _style(st) -> None:
         .hero-badge{padding:12px 18px;border-radius:999px;background:rgba(47,128,237,.09);color:#246aa8;font-weight:850;border:1px solid rgba(47,128,237,.14)}
         .summary-card{padding:18px 20px;border-radius:21px;background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(239,248,255,.86));border:1px solid var(--line);box-shadow:0 11px 30px rgba(50,93,130,.07);height:100%}
         .summary-card .label{font-size:11px;color:var(--muted);font-weight:800;letter-spacing:.08em;text-transform:uppercase}
-        .summary-card .value{font-size:29px;font-weight:900;letter-spacing:-.045em;margin-top:6px}.summary-card .sub{color:var(--muted);font-size:12px;margin-top:3px}
-        .overall-card{padding:22px;border-radius:24px;background:linear-gradient(145deg,rgba(225,242,255,.96),rgba(255,255,255,.93));border:1px solid rgba(47,128,237,.20);box-shadow:0 16px 42px rgba(42,101,151,.12)}
-        .overall-score{font-size:56px;font-weight:950;line-height:1;color:#176fc1;letter-spacing:-.06em}
-        .reason-box{padding:16px 18px;border-radius:18px;background:rgba(255,255,255,.75);border:1px solid var(--line);margin-bottom:8px;color:#28445d}
+        .summary-card .value{font-size:28px;font-weight:900;letter-spacing:-.045em;margin-top:6px}.summary-card .sub{color:var(--muted);font-size:12px;margin-top:3px}
+        .decision-card{padding:23px;border-radius:24px;background:linear-gradient(145deg,rgba(225,242,255,.96),rgba(255,255,255,.94));border:1px solid rgba(47,128,237,.20);box-shadow:0 16px 42px rgba(42,101,151,.12);height:100%}
+        .decision-value{font-size:34px;font-weight:950;line-height:1.1;color:#176fc1;letter-spacing:-.05em;margin:6px 0}
+        .reason-box{padding:15px 17px;border-radius:17px;background:rgba(255,255,255,.77);border:1px solid var(--line);margin-bottom:8px;color:#28445d}
+        .warning-box{padding:14px 16px;border-radius:16px;background:rgba(255,247,231,.86);border:1px solid rgba(185,123,19,.22);margin-bottom:8px;color:#76500f}
+        .pass-box{padding:14px 16px;border-radius:16px;background:rgba(235,250,244,.86);border:1px solid rgba(22,132,91,.20);margin-bottom:8px;color:#176344}
+        .check-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}
+        .check-item{padding:13px 14px;border-radius:15px;background:rgba(255,255,255,.72);border:1px solid var(--line)}
+        .check-item b{display:block;margin-bottom:3px}.check-item span{font-size:12px;color:var(--muted)}
         div[data-testid="stButton"] button{min-height:82px;border-radius:19px!important;text-align:left!important;justify-content:flex-start!important;padding:13px 15px!important;background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(239,247,255,.88))!important;border:1px solid var(--line)!important;box-shadow:0 8px 22px rgba(56,100,139,.06)!important;font-weight:800!important;white-space:pre-line!important}
         div[data-testid="stButton"] button[kind="primary"]{background:linear-gradient(135deg,#dceeff,#f3f9ff)!important;border-color:rgba(47,128,237,.38)!important;color:#145f9f!important;box-shadow:0 11px 28px rgba(47,128,237,.13)!important}
         div[data-testid="stMetric"]{background:var(--glass);border:1px solid var(--line);padding:14px 16px;border-radius:18px}
@@ -199,7 +207,8 @@ def _style(st) -> None:
         h3{letter-spacing:-.03em;color:#18344d;margin-top:1.2rem!important}
         @media(max-width:900px){
           .block-container{padding:.65rem .65rem 2rem}.hero{padding:20px;border-radius:21px}.hero h1{font-size:27px}.hero p{font-size:13px}.hero-badge{display:none}
-          .summary-card{padding:15px}.summary-card .value{font-size:24px}.overall-score{font-size:47px}
+          .summary-card{padding:15px}.summary-card .value{font-size:24px}.decision-value{font-size:30px}
+          .check-grid{grid-template-columns:1fr}
           div[data-testid="stButton"] button{min-height:72px!important;font-size:.88rem!important}
           [data-testid="stSidebar"]{min-width:250px}
         }
@@ -279,41 +288,46 @@ def _pattern_cards(st, enriched: list[tuple[dict[str, object], sqlite3.Row]], mo
     return next(pair for pair in enriched if str(pair[1]["pattern_id"]) == st.session_state[key])
 
 
-def _render_decision_summary(st, selected, match, pattern, overall, confidence, distribution, reasons, mobile) -> None:
-    st.markdown("### AI 의사결정 요약")
+def _render_decision_summary(st, selected, match, pattern, confidence, distribution, statistics, mobile) -> None:
+    st.markdown("### 현재 판단")
+    confidence_label = _confidence_label(confidence, int(statistics["sample_count"]))
+    decision = str(selected["decision"])
+    decision_korean = "추천" if decision == "RECOMMEND" else "관심 관찰"
+
     if mobile:
         st.markdown(
             f"""
-            <div class="overall-card">
-              <div class="eyebrow">OVERALL SCORE</div>
-              <div class="overall-score">{overall:.0f}</div>
-              <b>{selected['name'] or selected['ticker']}</b> · {pattern['surge_class']} · {int(pattern['target_hit_day'])}일 내 30% 도달 패턴<br>
-              <span style="color:#6d8092">Confidence {confidence:.0f} · 차트 {float(match.get('weekly_similarity',0)):.1f}% · STO {float(match.get('sto_similarity',0)):.1f}%</span>
+            <div class="decision-card">
+              <div class="eyebrow">CURRENT DECISION</div>
+              <div class="decision-value">{decision_korean}</div>
+              <b>{selected['name'] or selected['ticker']}</b> · {pattern['surge_class']} 유형<br>
+              <span style="color:#6d8092">차트 {float(match.get('weekly_similarity',0)):.1f}% · STO {float(match.get('sto_similarity',0)):.1f}% · 근거 {int(statistics['sample_count'])}건 · 신뢰도 {confidence_label}</span>
             </div>
             """,
             unsafe_allow_html=True,
         )
         return
 
-    left, right = st.columns([1.15, 3.85], gap="large")
+    left, right = st.columns([1.2, 3.8], gap="large")
     left.markdown(
         f"""
-        <div class="overall-card">
-          <div class="eyebrow">OVERALL SCORE</div>
-          <div class="overall-score">{overall:.0f}</div>
+        <div class="decision-card">
+          <div class="eyebrow">CURRENT DECISION</div>
+          <div class="decision-value">{decision_korean}</div>
           <b>{selected['name'] or selected['ticker']}</b><br>
-          <span style="color:#6d8092">Replay Confidence {confidence:.0f}</span>
+          <span style="color:#6d8092">Replay 신뢰도 {confidence_label} · {confidence:.0f}</span>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    cards = right.columns(4)
+    cards = right.columns(5)
     mix = " · ".join(f"{name} {distribution.get(name, 0)}" for name in ["FAST", "QUICK", "SWING", "POSITION"])
     values = [
-        ("급등 유형", str(pattern["surge_class"]), f"30% 도달 {int(pattern['target_hit_day'])}일"),
-        ("차트 유사도", f"{float(match.get('weekly_similarity', 0)):.1f}%", "최근 120거래일"),
+        ("차트 유사도", f"{float(match.get('weekly_similarity', 0)):.1f}%", "기준 85% 이상"),
         ("STO 유사도", f"{float(match.get('sto_similarity', 0)):.1f}%", "단·중·장 3계층"),
-        ("근거 사례", f"{sum(distribution.values())}건", mix),
+        ("급등 속도", str(pattern["surge_class"]), f"대표 사례 {int(pattern['target_hit_day'])}일"),
+        ("근거 사례", f"{int(statistics['sample_count'])}건", mix),
+        ("과거 평균", f"{float(statistics['avg_hit_day']):.1f}일", f"최대상승 평균 +{float(statistics['avg_return']):.1f}%"),
     ]
     for col, (label, value, sub) in zip(cards, values):
         col.markdown(
@@ -322,21 +336,31 @@ def _render_decision_summary(st, selected, match, pattern, overall, confidence, 
         )
 
 
-def _render_desktop_layout(st, current, historical, selected, pattern, match, current_structure, historical_structure, enriched, reasons) -> None:
-    main, side = st.columns([3.8, 1.2], gap="large")
+def _render_desktop_layout(st, current, historical, selected, pattern, match, current_structure, historical_structure, enriched, reasons, warnings) -> None:
+    main, side = st.columns([3.75, 1.25], gap="large")
     with main:
         st.markdown("### 현재 차트 vs 과거 급등직전 패턴")
         st.plotly_chart(_comparison_chart(current, historical, selected, pattern, 610), use_container_width=True, config={"displayModeBar": False})
     with side:
-        st.markdown("### 추천 근거")
-        for reason in reasons[:6]:
-            st.markdown(f'<div class="reason-box">{reason}</div>', unsafe_allow_html=True)
+        _render_judgment_checklist(st, match, pattern, enriched)
+        st.markdown("### 주의사항")
+        if warnings:
+            for warning in warnings:
+                st.markdown(f'<div class="warning-box">{warning}</div>', unsafe_allow_html=True)
+        else:
+            st.markdown('<div class="pass-box">현재 설정 기준에서 특별한 경고가 없습니다.</div>', unsafe_allow_html=True)
 
-    sto_col, path_col = st.columns([2.3, 1], gap="large")
-    with sto_col:
-        _render_sto_flow(st, current, historical, height=390)
+    reason_col, path_col = st.columns([2.1, 1], gap="large")
+    with reason_col:
+        st.markdown("### 추천 근거")
+        for reason in reasons[:7]:
+            st.markdown(f'<div class="reason-box">{reason}</div>', unsafe_allow_html=True)
     with path_col:
-        _render_path_panel(st, pattern, height=390)
+        _render_path_panel(st, pattern, height=360)
+
+    st.markdown("### STO 120일 흐름 비교")
+    st.plotly_chart(_sto_flow_chart(current, historical, 420), use_container_width=True, config={"displayModeBar": False})
+    st.caption("실선은 현재 종목, 점선은 과거 급등직전 패턴입니다. 단기·중기·장기 STO의 진행 방향을 함께 확인합니다.")
 
     detail_left, detail_right = st.columns([1.25, 1], gap="large")
     with detail_left:
@@ -345,7 +369,7 @@ def _render_desktop_layout(st, current, historical, selected, pattern, match, cu
         _render_source_panel(st, pattern)
 
 
-def _render_mobile_layout(st, current, historical, selected, pattern, match, current_structure, historical_structure, reasons) -> None:
+def _render_mobile_layout(st, current, historical, selected, pattern, match, current_structure, historical_structure, reasons, warnings, enriched) -> None:
     st.markdown("### 현재 vs 과거 패턴")
     st.plotly_chart(_comparison_chart(current, historical, selected, pattern, 420), use_container_width=True, config={"displayModeBar": False})
 
@@ -354,18 +378,51 @@ def _render_mobile_layout(st, current, historical, selected, pattern, match, cur
     metrics[1].metric("STO 유사도", f"{float(match.get('sto_similarity', 0)):.1f}%")
     metrics = st.columns(2)
     metrics[0].metric("급등 유형", str(pattern["surge_class"]))
-    metrics[1].metric("30% 최초 도달", f"{int(pattern['target_hit_day'])}일")
+    metrics[1].metric("근거 사례", f"{len(enriched)}건")
+
+    _render_judgment_checklist(st, match, pattern, enriched)
+
+    if warnings:
+        with st.expander("주의사항", expanded=True):
+            for warning in warnings:
+                st.warning(warning)
 
     st.markdown("### STO 120일 흐름")
     st.plotly_chart(_sto_flow_chart(current, historical, 390), use_container_width=True, config={"displayModeBar": False})
 
     with st.expander("추천 근거", expanded=True):
-        for reason in reasons[:6]:
+        for reason in reasons[:7]:
             st.markdown(f"- {reason}")
     with st.expander("과거 상승 경로"):
         _render_path_panel(st, pattern, height=300)
     with st.expander("패턴 출처"):
         _render_source_panel(st, pattern)
+
+
+def _render_judgment_checklist(st, match, pattern, enriched) -> None:
+    chart = float(match.get("weekly_similarity", 0))
+    sto = float(match.get("sto_similarity", 0))
+    sample_count = len(enriched)
+    speed = str(pattern["surge_class"])
+    speed_text = {
+        "FAST": "1주 이내형",
+        "QUICK": "2주 이내형",
+        "SWING": "3주 이내형",
+        "POSITION": "4주 이내형",
+    }.get(speed, speed)
+    evidence_text = "충분" if sample_count >= 3 else "보통" if sample_count == 2 else "부족"
+    st.markdown("### 판단 체크리스트")
+    st.markdown(
+        f"""
+        <div class="check-grid">
+          <div class="check-item"><b>{'통과' if chart >= 85 else '미달'} · 차트</b><span>{chart:.1f}% / 기준 85%</span></div>
+          <div class="check-item"><b>{'통과' if sto >= 85 else '미달'} · STO</b><span>{sto:.1f}% / 기준 85%</span></div>
+          <div class="check-item"><b>{speed_text}</b><span>30% 최초 도달 {int(pattern['target_hit_day'])}일</span></div>
+          <div class="check-item"><b>근거 {evidence_text}</b><span>유사 과거 사례 {sample_count}건</span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _comparison_chart(current: pd.DataFrame, historical: pd.DataFrame, selected, pattern, height: int) -> go.Figure:
@@ -423,12 +480,6 @@ def _sto_flow_chart(current: pd.DataFrame, historical: pd.DataFrame, height: int
     return figure
 
 
-def _render_sto_flow(st, current, historical, height: int) -> None:
-    st.markdown("### STO 120일 흐름 비교")
-    st.plotly_chart(_sto_flow_chart(current, historical, height), use_container_width=True, config={"displayModeBar": False})
-    st.caption("실선은 현재 종목, 점선은 과거 급등직전 패턴입니다. 단기·중기·장기 STO를 같은 시간축에서 비교합니다.")
-
-
 def _render_path_panel(st, pattern, height: int) -> None:
     st.markdown("### 과거 급등 경로")
     path = pd.DataFrame({
@@ -473,14 +524,6 @@ def _render_source_panel(st, pattern) -> None:
     st.dataframe(pd.DataFrame(rows, columns=["항목", "값"]), use_container_width=True, hide_index=True, height=300)
 
 
-def _overall_score(match: dict[str, object], pattern: sqlite3.Row, confidence: float, sample_count: int) -> float:
-    chart = float(match.get("weekly_similarity", 0))
-    sto = float(match.get("sto_similarity", 0))
-    speed = float(pattern["speed_weight"] or 0) * 100.0
-    evidence = min(100.0, 55.0 + sample_count * 9.0)
-    return round(min(99.0, chart * 0.35 + sto * 0.30 + speed * 0.15 + evidence * 0.20), 1)
-
-
 def _confidence_score(match: dict[str, object], pattern: sqlite3.Row, enriched) -> float:
     chart = float(match.get("weekly_similarity", 0))
     sto = float(match.get("sto_similarity", 0))
@@ -489,14 +532,33 @@ def _confidence_score(match: dict[str, object], pattern: sqlite3.Row, enriched) 
     return min(99.0, max(0.0, min(chart, sto) * 0.9 + sample_bonus + speed_bonus))
 
 
-def _recommendation_reasons(payload, match, pattern, confidence, overall, distribution) -> list[str]:
+def _confidence_label(confidence: float, sample_count: int) -> str:
+    if sample_count >= 3 and confidence >= 85:
+        return "높음"
+    if sample_count >= 2 and confidence >= 78:
+        return "보통"
+    return "낮음"
+
+
+def _match_statistics(enriched) -> dict[str, float]:
+    hit_days = [float(pattern["target_hit_day"] or 0) for _, pattern in enriched]
+    returns = [float(pattern["surge_return_pct"] or 0) for _, pattern in enriched]
+    return {
+        "sample_count": float(len(enriched)),
+        "avg_hit_day": sum(hit_days) / len(hit_days) if hit_days else 0.0,
+        "avg_return": sum(returns) / len(returns) if returns else 0.0,
+    }
+
+
+def _recommendation_reasons(payload, match, pattern, confidence, distribution, statistics) -> list[str]:
     reasons = [
-        f"Overall Score {overall:.1f}점, Replay Confidence {confidence:.1f}점입니다.",
-        f"현재 120일 차트가 과거 급등직전 패턴과 {float(match.get('weekly_similarity', 0)):.1f}% 유사합니다.",
+        f"현재 120일 차트가 대표 급등직전 패턴과 {float(match.get('weekly_similarity', 0)):.1f}% 유사합니다.",
         f"STO 단기·중기·장기 구조 유사도는 {float(match.get('sto_similarity', 0)):.1f}%입니다.",
-        f"대표 사례는 {pattern['surge_class']} 유형으로 {int(pattern['target_hit_day'])}거래일 만에 30%에 도달했습니다.",
-        "매칭 분포: " + " · ".join(f"{name} {distribution.get(name, 0)}건" for name in ["FAST", "QUICK", "SWING", "POSITION"]),
-        f"대표 과거 사례의 해당 기간 최대상승률은 +{float(pattern['surge_return_pct']):.1f}%입니다.",
+        f"대표 사례는 {pattern['surge_class']} 유형이며 {int(pattern['target_hit_day'])}거래일 만에 30%에 도달했습니다.",
+        f"유사한 과거 사례는 {int(statistics['sample_count'])}건이며 평균 30% 도달 기간은 {float(statistics['avg_hit_day']):.1f}거래일입니다.",
+        f"매칭 사례의 평균 최대상승률은 +{float(statistics['avg_return']):.1f}%입니다.",
+        "유형 분포: " + " · ".join(f"{name} {distribution.get(name, 0)}건" for name in ["FAST", "QUICK", "SWING", "POSITION"]),
+        f"Replay 근거 신뢰도는 {_confidence_label(confidence, int(statistics['sample_count']))} 수준입니다.",
     ]
     stored = payload.get("reasons") or []
     for item in stored:
@@ -504,6 +566,26 @@ def _recommendation_reasons(payload, match, pattern, confidence, overall, distri
         if text not in reasons:
             reasons.append(text)
     return reasons
+
+
+def _warning_flags(match, pattern, enriched, distribution, confidence) -> list[str]:
+    warnings: list[str] = []
+    chart = float(match.get("weekly_similarity", 0))
+    sto = float(match.get("sto_similarity", 0))
+    sample_count = len(enriched)
+    if sample_count <= 1:
+        warnings.append("과거 매칭 사례가 1건뿐이므로 반복 가능성을 판단하기 어렵습니다.")
+    elif sample_count == 2:
+        warnings.append("과거 매칭 사례가 2건으로 아직 충분한 표본은 아닙니다.")
+    if min(chart, sto) < 88:
+        warnings.append("차트 또는 STO 유사도가 최소 기준 85%에 가까워 강한 일치로 보기는 어렵습니다.")
+    if str(pattern["surge_class"]) == "POSITION":
+        warnings.append("대표 패턴이 POSITION 유형이므로 실제 상승까지 최대 4주가 걸릴 수 있습니다.")
+    if distribution.get("FAST", 0) + distribution.get("QUICK", 0) == 0:
+        warnings.append("매칭 사례에 FAST·QUICK 유형이 없어 단기 급등 근거가 약합니다.")
+    if confidence < 78:
+        warnings.append("Replay 근거 신뢰도가 낮아 추가 확인 없이 매수 판단하기에는 부족합니다.")
+    return warnings
 
 
 def _enrich_matches(conn: sqlite3.Connection, matches, classes: list[str]):

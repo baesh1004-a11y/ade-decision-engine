@@ -13,16 +13,16 @@ from recommendation.daily_service import DailyRecommendationService
 def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
     if not diagnostics:
         return
-    st.markdown("#### 단계별 통과 현황")
+    st.markdown("#### 단계별 분석 결과")
     rows = [
-        ("과거 급등 패턴 로드", diagnostics.get("patterns_loaded", 0), "선택한 Replay 기간에서 불러온 과거 패턴"),
-        ("정상 패턴 준비", diagnostics.get("patterns_prepared", 0), "형태 데이터가 정상인 과거 패턴"),
+        ("과거 급등직전 패턴", diagnostics.get("patterns_loaded", 0), "선택 기간과 패턴 풀에 포함된 과거 정답 패턴"),
+        ("정상 패턴", diagnostics.get("patterns_prepared", 0), "주봉·STO 데이터가 정상인 패턴"),
         ("분석 대상 종목", diagnostics.get("symbols_total", 0), "현재 활성화된 전체 종목"),
-        ("120일 데이터 확보", diagnostics.get("symbols_with_120d", 0), "최근 120거래일 데이터가 충분한 종목"),
-        ("주봉 기준 통과", diagnostics.get("chart_pass_comparisons", 0), "주봉 옵션 기준을 통과한 종목-패턴 비교"),
-        ("STO 기준 통과", diagnostics.get("sto_pass_comparisons", 0), "STO 옵션 기준까지 통과한 종목-패턴 비교"),
-        ("매칭 종목", diagnostics.get("symbols_with_matches", 0), "최소 1개 이상 과거 패턴과 매칭된 종목"),
-        ("저장된 추천", diagnostics.get("final_recommendations", 0), "추천종목으로 저장된 최종 상위 종목"),
+        ("120일 데이터 확보", diagnostics.get("symbols_with_120d", 0), "최근 120거래일 비교가 가능한 종목"),
+        ("주봉 기준 통과", diagnostics.get("weekly_pass_comparisons", 0), "주봉 최소 유사도를 통과한 종목-패턴 비교"),
+        ("STO 기준 통과", diagnostics.get("sto_pass_comparisons", 0), "STO 최소 유사도까지 통과한 종목-패턴 비교"),
+        ("매칭 종목", diagnostics.get("symbols_with_matches", 0), "과거 급등직전 패턴과 하나 이상 매칭된 종목"),
+        ("최종 추천", diagnostics.get("final_recommendations", 0), "최종 유사도 순으로 저장된 종목"),
     ]
     st.dataframe(pd.DataFrame(rows, columns=["단계", "통과 수", "의미"]), use_container_width=True, hide_index=True)
 
@@ -30,20 +30,14 @@ def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
 def _render_selected_options(st, values: dict[str, object]) -> None:
     if not values:
         return
-    labels = []
-    if values.get("use_recent_replay"):
-        labels.append(f"최근 {values.get('replay_years', values.get('candidate_years', 2))}년 Replay")
-    else:
-        labels.append("전체 Replay")
-    if values.get("use_weekly_filter"):
-        labels.append(f"주봉 {float(values.get('min_weekly_similarity', 0)):.0f}% 이상")
-    else:
-        labels.append("주봉 기준 미적용")
-    if values.get("use_sto_filter"):
-        labels.append(f"STO {float(values.get('min_sto_similarity', 0)):.0f}% 이상")
-    else:
-        labels.append("STO 기준 미적용")
-    st.caption("적용 옵션 · " + " / ".join(labels))
+    years = values.get("candidate_years", values.get("replay_years", 2))
+    pool = values.get("pattern_pool", values.get("weekly_pool_n", 100))
+    weekly = float(values.get("min_weekly_similarity", 0) or 0)
+    sto = float(values.get("min_sto_similarity", 0) or 0)
+    st.caption(
+        f"적용 기준 · 최근 {years}년 · 과거 패턴 {pool}개 · "
+        f"주봉 {weekly:.0f}% 이상 · STO {sto:.0f}% 이상 · 최종점수 주봉 60% + STO 40%"
+    )
 
 
 def run(market_code: str = "kr") -> None:
@@ -80,7 +74,7 @@ def run(market_code: str = "kr") -> None:
         <div class="hero">
           <div class="eyebrow">ADE {profile.code.upper()} PRE-SURGE RECOMMENDATION</div>
           <h1>{profile.name} 급등직전 120일 패턴 추천</h1>
-          <p>Replay 기간, 주봉 유사도, STO 3계층 유사도를 선택해 추천종목을 생성하고 저장합니다.</p>
+          <p>현재 종목의 최근 120거래일을 과거 실제 30% 급등 직전 120거래일과 비교합니다.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -111,18 +105,14 @@ def run(market_code: str = "kr") -> None:
         s4.metric("작업 상태", str(runtime.get("state", "IDLE")))
         st.caption(f"최근 자동 {latest_auto['finished_at'] if latest_auto else '없음'} · 최근 수동 {latest_manual['finished_at'] if latest_manual else '없음'}")
 
-        st.markdown("### 추천 옵션")
-        o1, o2, o3 = st.columns(3)
-        use_recent_replay = o1.checkbox("최근 Replay 이벤트만 사용", value=True, key=f"{profile.code}_recent_replay")
-        candidate_years = o1.number_input("Replay 기간(년)", min_value=1, max_value=10, value=2, step=1, disabled=not use_recent_replay, key=f"{profile.code}_replay_years")
-        use_weekly_filter = o2.checkbox("주봉 패턴 비교 적용", value=True, key=f"{profile.code}_weekly_on")
-        min_chart = o2.number_input("최소 주봉 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, disabled=not use_weekly_filter, key=f"{profile.code}_weekly")
-        use_sto_filter = o3.checkbox("STO 3계층 비교 적용", value=True, key=f"{profile.code}_sto_on")
-        min_sto = o3.number_input("최소 STO 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, disabled=not use_sto_filter, key=f"{profile.code}_sto")
-
-        c1, c2 = st.columns(2)
-        top_n = c1.number_input("저장할 추천종목 수", min_value=1, max_value=50, value=20, step=1, key=f"{profile.code}_top_n")
-        pattern_pool = c2.number_input("비교 패턴 풀", min_value=10, max_value=300, value=100, step=10, key=f"{profile.code}_weekly_pool")
+        st.markdown("### 추천 기준")
+        o1, o2, o3, o4 = st.columns(4)
+        candidate_years = o1.number_input("과거 패턴 기간(년)", min_value=1, max_value=10, value=2, step=1, key=f"{profile.code}_replay_years")
+        pattern_pool = o2.number_input("비교할 과거 패턴 수", min_value=10, max_value=1000, value=100, step=10, key=f"{profile.code}_weekly_pool")
+        min_chart = o3.number_input("최소 주봉 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_weekly")
+        min_sto = o4.number_input("최소 STO 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_sto")
+        top_n = st.number_input("저장할 추천종목 수", min_value=1, max_value=50, value=20, step=1, key=f"{profile.code}_top_n")
+        st.info("최종 유사도는 주봉 60% + STO 40%로 계산합니다. 급등 속도나 과거 수익률은 순위를 왜곡하지 않고 결과 설명에만 사용합니다.")
 
         running = bool(runtime.get("running"))
         start_col, refresh_col, stop_col = st.columns([4, 1.4, 1])
@@ -133,10 +123,10 @@ def run(market_code: str = "kr") -> None:
                 top_n=int(top_n),
                 weekly_pool_n=int(pattern_pool),
                 candidate_years=int(candidate_years),
-                use_recent_replay=bool(use_recent_replay),
-                use_weekly_filter=bool(use_weekly_filter),
+                use_recent_replay=True,
+                use_weekly_filter=True,
                 min_weekly_similarity=float(min_chart),
-                use_sto_filter=bool(use_sto_filter),
+                use_sto_filter=True,
                 min_sto_similarity=float(min_sto),
             )
             if started:
@@ -147,7 +137,7 @@ def run(market_code: str = "kr") -> None:
         if refresh_col.button("진행상태 새로고침", use_container_width=True, key=f"{profile.code}_refresh"):
             st.rerun()
 
-        if stop_col.button("■ 중단", use_container_width=True, key=f"{profile.code}_cancel", disabled=not running):
+        if stop_col.button("⏹️ 중단", use_container_width=True, key=f"{profile.code}_cancel", disabled=not running):
             if cancel_job(profile.code):
                 st.warning("중단 요청을 보냈습니다. 현재 비교 단위를 마친 뒤 안전하게 종료합니다.")
                 st.rerun()
@@ -165,7 +155,7 @@ def run(market_code: str = "kr") -> None:
             p3.metric("현재 매칭 종목", f"{int(diagnostics.get('symbols_with_matches', 0)):,}")
             _render_selected_options(st, diagnostics)
             _render_diagnostics(st, diagnostics)
-            st.caption("안정성을 위해 자동 새로고침 대신 진행상태 새로고침 버튼을 사용합니다. 추천 계산은 백그라운드에서 계속 진행됩니다.")
+            st.caption("추천 계산은 백그라운드에서 계속 진행됩니다. 진행상태 새로고침 버튼으로 확인하세요.")
         elif state == "COMPLETED":
             st.success(f"추천 완료 및 저장 · {int(live.get('recommendation_count', 0))}개 · {float(live.get('elapsed_seconds', 0.0)):.1f}초")
             _render_selected_options(st, live.get("diagnostics") or {})
@@ -194,7 +184,7 @@ def run(market_code: str = "kr") -> None:
             labels = {row["run_id"]: f"{row['started_at']} · {row['run_type']} · {row['status']} · {row['recommendation_count']}개" for row in selectable}
             selected = st.selectbox("상세 추천 결과", options=list(labels), format_func=lambda run_id: labels[run_id], key=f"{profile.code}_detail_run")
             selected_run = next(row for row in selectable if row["run_id"] == selected)
-            _render_selected_options(st, selected_run.get("parameters") or selected_run.get("diagnostics") or {})
+            _render_selected_options(st, selected_run.get("diagnostics") or selected_run.get("parameters") or {})
             _render_diagnostics(st, selected_run.get("diagnostics") or {})
             details = pd.DataFrame(service.recommendations_for_run(selected))
             if not details.empty:

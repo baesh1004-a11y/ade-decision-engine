@@ -10,7 +10,7 @@ from dashboard.system_status import inspect_market_db
 def main() -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="ADE Command Center", page_icon="◈", layout="wide")
+    st.set_page_config(page_title="ADE Command Center", page_icon="📊", layout="wide")
     st.markdown(
         """
         <style>
@@ -88,10 +88,10 @@ def main() -> None:
 
     st.markdown('<div class="section"><h2>Quick Access</h2><span>업무 흐름 중심</span></div>', unsafe_allow_html=True)
     q1, q2, q3, q4 = st.columns(4)
-    q1.page_link("pages/7_Daily_Center.py", label="KR Daily Recommendation", icon="▦")
-    q2.page_link("pages/10_US_Daily_Center.py", label="US Daily Recommendation", icon="▦")
-    q3.page_link("pages/9_Trading_Desk.py", label="KR Trading Desk", icon="₩")
-    q4.page_link("pages/12_US_Trading_Desk.py", label="US Trading Desk", icon="$")
+    q1.page_link("pages/7_Daily_Center.py", label="KR Daily Recommendation", icon="📈")
+    q2.page_link("pages/10_US_Daily_Center.py", label="US Daily Recommendation", icon="📊")
+    q3.page_link("pages/9_Trading_Desk.py", label="KR Trading Desk", icon="💳")
+    q4.page_link("pages/12_US_Trading_Desk.py", label="US Trading Desk", icon="💵")
 
 
 def _summary_counts() -> tuple[int, int, int]:

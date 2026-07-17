@@ -114,6 +114,9 @@ class DailyRecommendationService:
         min_weekly_similarity: float = 85.0,
         min_sto_similarity: float = 85.0,
         replay_top_n: int = 5,
+        use_recent_replay: bool = True,
+        use_weekly_filter: bool = True,
+        use_sto_filter: bool = True,
         progress_callback: ProgressCallback | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> RecommendationRunResult:
@@ -137,7 +140,11 @@ class DailyRecommendationService:
             "speed_weights": {"FAST": 1.0, "QUICK": 0.9, "SWING": 0.8, "POSITION": 0.7},
             "top_n": top_n,
             "weekly_pool_n": weekly_pool_n,
+            "candidate_years": candidate_years,
+            "use_recent_replay": use_recent_replay,
+            "use_weekly_filter": use_weekly_filter,
             "min_weekly_similarity": min_weekly_similarity,
+            "use_sto_filter": use_sto_filter,
             "min_sto_similarity": min_sto_similarity,
             "replay_top_n": replay_top_n,
         }
@@ -170,6 +177,9 @@ class DailyRecommendationService:
                     min_weekly_similarity=min_weekly_similarity,
                     min_sto_similarity=min_sto_similarity,
                     replay_top_n=replay_top_n,
+                    use_recent_replay=use_recent_replay,
+                    use_weekly_filter=use_weekly_filter,
+                    use_sto_filter=use_sto_filter,
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
                 )
@@ -313,7 +323,7 @@ class DailyRecommendationService:
             """
             SELECT run_id, run_type, trading_date, started_at, finished_at, status,
                    recommendation_count, elapsed_seconds, report_path, error_message,
-                   diagnostics_json
+                   parameters_json, diagnostics_json
             FROM recommendation_runs
             ORDER BY started_at DESC
             LIMIT ?
@@ -323,11 +333,16 @@ class DailyRecommendationService:
         result: list[dict[str, object]] = []
         for row in rows:
             item = dict(row)
-            raw = item.pop("diagnostics_json", None)
+            raw_diagnostics = item.pop("diagnostics_json", None)
+            raw_parameters = item.pop("parameters_json", None)
             try:
-                item["diagnostics"] = json.loads(raw) if raw else {}
+                item["diagnostics"] = json.loads(raw_diagnostics) if raw_diagnostics else {}
             except json.JSONDecodeError:
                 item["diagnostics"] = {}
+            try:
+                item["parameters"] = json.loads(raw_parameters) if raw_parameters else {}
+            except json.JSONDecodeError:
+                item["parameters"] = {}
             result.append(item)
         return result
 

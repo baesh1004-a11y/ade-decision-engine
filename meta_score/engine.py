@@ -19,22 +19,22 @@ SIGNAL_SCORE = {
 
 
 class MetaScoreEngine:
-    """Fixed-weight final decision layer.
+    """Final decision layer for the official ADE workflow.
 
-    Weights:
-      Replay 30%, Prediction 25%, JP Radar 20%,
-      Market 10%, Sector 10%, Risk 5%.
+    Flow:
+      saved pre-surge recommendation -> AI Radar context -> final decision
 
-    This module never modifies the recommendation engine. It only consumes its
-    output and returns a ranked final-decision view.
+    The recommendation engine already represents the chart-pattern decision.
+    Therefore this layer does not rerun another recommender and does not require
+    the legacy seven-day prediction output.
     """
 
     WEIGHTS = {
-        "replay": 0.30,
-        "prediction": 0.25,
+        "replay": 0.60,
+        "prediction": 0.00,
         "jp_radar": 0.20,
         "market": 0.10,
-        "sector": 0.10,
+        "sector": 0.05,
         "risk": 0.05,
     }
 
@@ -46,8 +46,7 @@ class MetaScoreEngine:
         results: list[MetaScoreResult] = []
         for item in recommendations:
             market_code = str(getattr(item, "market", "kr")).lower()
-            replay_score = self._clamp(float(getattr(item, "final_similarity", 0.0) or 0.0))
-            prediction_score = self._prediction_score(getattr(item, "prediction", None))
+            pattern_score = self._clamp(float(getattr(item, "final_similarity", 0.0) or 0.0))
             risk_score = self._risk_score(item)
 
             market_sector = self._market_sector(market_code, str(getattr(item, "ticker", "")))
@@ -55,23 +54,31 @@ class MetaScoreEngine:
             market_signal = getattr(market_radar, "combined_signal", "HOLD") if market_radar is not None else "HOLD"
             market_score = SIGNAL_SCORE.get(market_signal, 60.0)
 
-            sector_code = self._sector_code(str(getattr(item, "ticker", "")), str(getattr(item, "name", "") or ""), market_sector)
+            sector_code = self._sector_code(
+                str(getattr(item, "ticker", "")),
+                str(getattr(item, "name", "") or ""),
+                market_sector,
+            )
             sector_radar = self._radar(sector_code)
             sector_signal = getattr(sector_radar, "combined_signal", market_signal) if sector_radar is not None else market_signal
             sector_score = SIGNAL_SCORE.get(sector_signal, market_score)
+            radar_score = round((market_score + sector_score) / 2.0, 2)
 
-            jp_radar_score = round((market_score + sector_score) / 2.0, 2)
             meta = round(
-                replay_score * self.WEIGHTS["replay"]
-                + prediction_score * self.WEIGHTS["prediction"]
-                + jp_radar_score * self.WEIGHTS["jp_radar"]
+                pattern_score * self.WEIGHTS["replay"]
+                + radar_score * self.WEIGHTS["jp_radar"]
                 + market_score * self.WEIGHTS["market"]
                 + sector_score * self.WEIGHTS["sector"]
                 + risk_score * self.WEIGHTS["risk"],
                 2,
             )
-            prediction = getattr(item, "prediction", None)
-            reasons = self._reasons(item, replay_score, prediction_score, market_signal, sector_signal, risk_score, meta)
+            reasons = self._reasons(
+                pattern_score,
+                market_signal,
+                sector_signal,
+                risk_score,
+                meta,
+            )
             results.append(
                 MetaScoreResult(
                     rank=0,
@@ -82,18 +89,18 @@ class MetaScoreEngine:
                     meta_score=meta,
                     grade=self._grade(meta),
                     breakdown=MetaScoreBreakdown(
-                        replay=round(replay_score, 2),
-                        prediction=round(prediction_score, 2),
-                        jp_radar=round(jp_radar_score, 2),
+                        replay=round(pattern_score, 2),
+                        prediction=0.0,
+                        jp_radar=round(radar_score, 2),
                         market=round(market_score, 2),
                         sector=round(sector_score, 2),
                         risk=round(risk_score, 2),
                     ),
-                    seven_day_up_probability=getattr(prediction, "seven_day_up_probability", None) if prediction is not None else None,
-                    seven_day_expected_return=getattr(prediction, "seven_day_expected_return", None) if prediction is not None else None,
-                    expected_peak_day=getattr(prediction, "expected_peak_day", None) if prediction is not None else None,
-                    target_return=getattr(prediction, "target_return", None) if prediction is not None else None,
-                    stop_return=getattr(prediction, "stop_return", None) if prediction is not None else None,
+                    seven_day_up_probability=None,
+                    seven_day_expected_return=None,
+                    expected_peak_day=None,
+                    target_return=None,
+                    stop_return=None,
                     jp_radar_signal=f"{market_signal} / {sector_signal}",
                     market_signal=market_signal,
                     sector_signal=sector_signal,
@@ -101,7 +108,11 @@ class MetaScoreEngine:
                 )
             )
 
-        ranked = sorted(results, key=lambda x: (x.meta_score, x.breakdown.prediction, x.breakdown.replay), reverse=True)
+        ranked = sorted(
+            results,
+            key=lambda x: (x.meta_score, x.breakdown.replay, x.breakdown.jp_radar),
+            reverse=True,
+        )
         return [replace(item, rank=index) for index, item in enumerate(ranked, start=1)]
 
     def _radar(self, sector_code: str):
@@ -115,26 +126,9 @@ class MetaScoreEngine:
         return result
 
     @staticmethod
-    def _prediction_score(prediction: object | None) -> float:
-        if prediction is None:
-            return 0.0
-        probability = float(getattr(prediction, "seven_day_up_probability", 0.0) or 0.0)
-        expected = float(getattr(prediction, "seven_day_expected_return", 0.0) or 0.0)
-        max_return = float(getattr(prediction, "expected_max_return_7d", 0.0) or 0.0)
-        expected_component = max(0.0, min(100.0, 50.0 + expected * 8.0))
-        max_component = max(0.0, min(100.0, max_return * 10.0))
-        return max(0.0, min(100.0, probability * 0.60 + expected_component * 0.25 + max_component * 0.15))
-
-    @staticmethod
     def _risk_score(item: object) -> float:
-        prediction = getattr(item, "prediction", None)
-        if prediction is not None:
-            mdd = float(getattr(prediction, "expected_mdd_7d", 0.0) or 0.0)
-            stop = float(getattr(prediction, "stop_return", 0.0) or 0.0)
-        else:
-            mdd = float(getattr(item, "matched_max_drawdown", 0.0) or 0.0)
-            stop = 0.0
-        penalty = abs(min(0.0, mdd)) * 4.0 + abs(min(0.0, stop)) * 2.0
+        drawdown = float(getattr(item, "matched_max_drawdown", 0.0) or 0.0)
+        penalty = abs(min(0.0, drawdown)) * 4.0
         return max(0.0, min(100.0, 100.0 - penalty))
 
     @staticmethod
@@ -157,9 +151,10 @@ class MetaScoreEngine:
 
     @staticmethod
     def _decision(meta: float, market_signal: str, sector_signal: str) -> str:
-        if meta >= 85 and market_signal not in {"SELL", "STRONG SELL"} and sector_signal not in {"SELL", "STRONG SELL"}:
+        blocked = {"SELL", "STRONG SELL"}
+        if meta >= 85 and market_signal not in blocked and sector_signal not in blocked:
             return "FINAL BUY"
-        if meta >= 75:
+        if meta >= 75 and market_signal != "STRONG SELL" and sector_signal != "STRONG SELL":
             return "BUY WATCH"
         if meta >= 60:
             return "HOLD"
@@ -178,22 +173,14 @@ class MetaScoreEngine:
         return "D"
 
     @staticmethod
-    def _reasons(item: object, replay: float, prediction: float, market: str, sector: str, risk: float, meta: float) -> list[str]:
-        prediction_obj = getattr(item, "prediction", None)
-        reasons = [
-            f"Replay 최종 유사도 {replay:.2f}점",
-            f"7일 예측 환산점수 {prediction:.2f}점",
-            f"시장 JP Radar {market}",
-            f"업종 JP Radar {sector}",
+    def _reasons(pattern: float, market: str, sector: str, risk: float, meta: float) -> list[str]:
+        return [
+            f"급등직전 120일 패턴 유사도 {pattern:.2f}점",
+            f"시장 AI 레이더 {market}",
+            f"업종 AI 레이더 {sector}",
             f"위험관리 점수 {risk:.2f}점",
-            f"고정 가중치 통합점수 {meta:.2f}점",
+            f"최종 통합점수 {meta:.2f}점",
         ]
-        if prediction_obj is not None:
-            reasons.append(
-                f"7일 상승확률 {float(getattr(prediction_obj, 'seven_day_up_probability', 0.0) or 0.0):.1f}%, "
-                f"기대수익 {float(getattr(prediction_obj, 'seven_day_expected_return', 0.0) or 0.0):+.2f}%"
-            )
-        return reasons
 
     @staticmethod
     def _clamp(value: float) -> float:

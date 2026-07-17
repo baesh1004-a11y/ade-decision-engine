@@ -23,7 +23,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         .hero{padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}
         .hero h1{margin:3px 0}.hero p{margin:5px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
         </style>
-        <div class="hero"><div class="eyebrow">ADE · 최신 추천 실행 연계</div><h1>한국 주문관리</h1><p>통합 추천 워크벤치의 최신 완료 실행 → 추천 검증 → 주문 요청 → 사용자 승인 → KIS 전송</p></div>
+        <div class="hero"><div class="eyebrow">ADE · 동일 추천 실행 연계</div><h1>한국 주문관리</h1><p>통합 추천 워크벤치의 최신 완료 run_id → 같은 run_id 검증 → 주문 요청 → 사용자 승인 → KIS 전송</p></div>
         """,
         unsafe_allow_html=True,
     )
@@ -39,15 +39,16 @@ def run(db_path: str = "datahub/market.db") -> None:
         st.info("현재 KIS 모의투자 주문 모드입니다.")
 
     service = TradingOrderService(db_path)
+    current_run_id: str | None = None
     try:
         recommendations = service.latest_recommendations(30)
         st.markdown("### 1. 최신 추천 실행에서 주문 요청 생성")
         if not recommendations:
-            st.warning("최신 완료 추천 결과가 없습니다. 먼저 '한국 추천종목' 또는 '통합 추천 워크벤치'에서 추천을 생성하세요.")
+            st.warning("최신 완료 추천 결과가 없습니다. 먼저 추천 생성을 완료하세요.")
         else:
-            run_id = str(recommendations[0]["run_id"])
+            current_run_id = str(recommendations[0]["run_id"])
             run_finished = str(recommendations[0].get("run_finished_at") or "-")
-            st.caption(f"연결 실행 ID: {run_id} · 완료 시각: {run_finished} · 통합 워크벤치와 동일한 최신 완료 실행")
+            st.caption(f"연결 실행 ID: {current_run_id} · 완료 시각: {run_finished} · 통합 워크벤치와 동일한 완료 실행")
 
             labels = [
                 f"#{r['rank_no']} {r['name'] or r['ticker']} ({r['ticker']}) · "
@@ -74,10 +75,12 @@ def run(db_path: str = "datahub/market.db") -> None:
             if selected_from_workbench and str(selected["ticker"]) == selected_from_workbench:
                 st.success(f"통합 추천 워크벤치에서 선택한 종목 {selected['name'] or selected['ticker']}이 연결되었습니다.")
             if not validated:
-                st.warning("이 최신 추천 실행은 아직 추천 검증이 완료되지 않았습니다. 검증 후 주문 요청을 만들 수 있습니다.")
-                st.page_link("pages/2_Meta_Score.py", label="한국 추천 검증 열기", icon="✅", use_container_width=True)
+                st.warning("이 추천 실행은 아직 같은 run_id로 검증되지 않았습니다. 검증 완료 전에는 주문 요청을 만들 수 없습니다.")
+                st.page_link("pages/2_Meta_Score.py", label="이 실행을 한국 추천 검증", icon="✅", use_container_width=True)
             elif not eligible:
                 st.warning(f"현재 검증 결과는 {_decision_label(decision)}이므로 매수 주문 대상이 아닙니다.")
+            else:
+                st.success(f"동일 실행 검증 완료 · {_decision_label(decision)} · 주문 요청 가능")
 
             c1, c2, c3, c4 = st.columns(4)
             side = c1.selectbox("주문 방향", ["BUY", "SELL"])
@@ -88,44 +91,57 @@ def run(db_path: str = "datahub/market.db") -> None:
             target = r1.number_input("익절 기준 수익률(%)", value=float(selected.get("target_return") or 0.0), step=0.1)
             stop = r2.number_input("손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0), step=0.1)
 
-            request_allowed = validated and (eligible or side == "SELL")
+            request_allowed = validated and (eligible if side == "BUY" else True)
             if st.button("주문 요청 만들기", type="primary", use_container_width=True, disabled=not request_allowed):
-                request_id = service.create_request(
-                    ticker=str(selected["ticker"]),
-                    name=selected.get("name"),
-                    side=side,
-                    quantity=int(quantity),
-                    order_type=order_type,
-                    limit_price=None if order_type == "MARKET" else float(limit_price),
-                    target_return=float(target),
-                    stop_return=float(stop),
-                    source_run_id=run_id,
-                    source_rank=int(selected["rank_no"]),
-                )
-                st.success(f"주문 요청 생성: {request_id}. 아직 KIS로 전송되지 않았습니다.")
+                try:
+                    request_id = service.create_request(
+                        ticker=str(selected["ticker"]),
+                        name=selected.get("name"),
+                        side=side,
+                        quantity=int(quantity),
+                        order_type=order_type,
+                        limit_price=None if order_type == "MARKET" else float(limit_price),
+                        target_return=float(target),
+                        stop_return=float(stop),
+                        source_run_id=current_run_id,
+                        source_rank=int(selected["rank_no"]),
+                    )
+                    st.success(f"주문 요청 생성: {request_id}. 아직 KIS로 전송되지 않았습니다.")
+                except Exception as exc:
+                    st.error(f"주문 요청 생성 실패: {exc}")
 
-        st.markdown("### 2. 사용자 승인 후 KIS 주문 전송")
+        st.markdown("### 2. 현재 추천 실행의 승인 대기 주문")
         requests = service.pending_requests(100)
-        pending = [r for r in requests if r["status"] == "PENDING_APPROVAL"]
-        if not pending:
-            st.caption("승인 대기 주문이 없습니다.")
+        current_pending = [
+            r for r in requests
+            if r["status"] == "PENDING_APPROVAL"
+            and current_run_id is not None
+            and str(r.get("source_run_id") or "") == current_run_id
+        ]
+        legacy_pending = [r for r in requests if r["status"] == "PENDING_APPROVAL" and r not in current_pending]
+
+        if not current_pending:
+            st.caption("현재 연결된 추천 실행에서 승인 대기 중인 주문이 없습니다.")
         else:
             request_index = st.selectbox(
-                "승인 대기 주문",
-                range(len(pending)),
-                format_func=lambda i: f"{pending[i]['name'] or pending[i]['ticker']} · {pending[i]['ticker']} {pending[i]['side']} {pending[i]['quantity']}주",
+                "현재 실행 승인 대기 주문",
+                range(len(current_pending)),
+                format_func=lambda i: f"#{current_pending[i].get('source_rank') or '-'} {current_pending[i]['name'] or current_pending[i]['ticker']} · {current_pending[i]['ticker']} {current_pending[i]['side']} {current_pending[i]['quantity']}주",
             )
-            row = pending[request_index]
+            row = current_pending[request_index]
             expected = f"{row['ticker']} {row['side']} {row['quantity']}주 승인"
             st.code(expected)
             approval = st.text_input("위 승인 문구를 정확히 입력")
-            confirm = st.checkbox("종목·방향·수량·주문유형을 직접 확인했습니다.")
+            confirm = st.checkbox("종목·방향·수량·주문유형·추천 실행 ID를 직접 확인했습니다.")
             if st.button("승인하고 KIS로 전송", disabled=not confirm, type="primary"):
                 try:
                     result = service.approve_and_send(str(row["request_id"]), approval)
                     st.success(f"주문 전송 결과: {result.get('message')} · 주문번호 {result.get('order_id')}")
                 except Exception as exc:
                     st.error(f"주문 전송 실패: {exc}")
+
+        if legacy_pending:
+            st.warning(f"이전 추천 실행의 승인 대기 주문이 {len(legacy_pending)}건 있습니다. 현재 실행 승인 목록에는 섞지 않고 아래 이력에서만 표시합니다.")
 
         st.markdown("### 3. 주문 결과·체결 확인")
         a, b, c = st.columns(3)
@@ -165,7 +181,7 @@ def run(db_path: str = "datahub/market.db") -> None:
             keep = [c for c in ["captured_at", "broker_order_id", "ticker", "side", "ordered_quantity", "filled_quantity", "filled_price", "status"] if c in executions.columns]
             st.dataframe(executions[keep], use_container_width=True, hide_index=True)
 
-        st.caption("손절·익절 감시는 자동 매도를 직접 전송하지 않고 승인 대기 매도요청만 생성합니다.")
+        st.caption("이전 실행의 주문은 이력으로 보존하지만 현재 실행 승인 목록에는 포함하지 않습니다.")
     finally:
         service.close()
 

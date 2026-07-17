@@ -172,7 +172,6 @@ class TradingOrderService:
             sync.close()
 
     def monitor_risk(self, *, create_sell_requests: bool = False) -> list[dict[str, object]]:
-        """Detect stop/take-profit triggers; optional SELL requests still need approval."""
         actions: list[dict[str, object]] = []
         for pos in self.sync_positions():
             rule = self.conn.execute(
@@ -220,18 +219,27 @@ class TradingOrderService:
         return [dict(row) for row in rows]
 
     def latest_recommendations(self, limit: int = 30) -> list[dict[str, object]]:
+        """Return only candidates that completed the final-decision stage."""
+        table = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='final_decisions'"
+        ).fetchone()
+        if table is None:
+            return []
         run = self.conn.execute(
-            "SELECT run_id FROM recommendation_runs WHERE status='COMPLETED' ORDER BY started_at DESC LIMIT 1"
+            "SELECT source_run_id FROM final_decisions ORDER BY created_at DESC, rank_no LIMIT 1"
         ).fetchone()
         if run is None:
             return []
         rows = self.conn.execute(
             """
-            SELECT run_id, rank_no, ticker, name, decision, target_return, stop_return,
-                   seven_day_up_probability, seven_day_expected_return
-            FROM daily_recommendations WHERE run_id=? ORDER BY rank_no LIMIT ?
+            SELECT source_run_id AS run_id, rank_no, ticker, name, decision,
+                   grade, meta_score, target_return, stop_return
+            FROM final_decisions
+            WHERE source_run_id=? AND decision IN ('FINAL BUY', 'BUY WATCH')
+            ORDER BY rank_no
+            LIMIT ?
             """,
-            (run["run_id"], int(limit)),
+            (run["source_run_id"], int(limit)),
         ).fetchall()
         return [dict(row) for row in rows]
 

@@ -3,8 +3,6 @@ from __future__ import annotations
 import streamlit as st
 
 
-# 업무 흐름을 그대로 따라가도록 메뉴를 구성한다.
-# 추천 생성 → 유사 패턴 확인 → 종합 판단 → 주문 → 성과 확인
 PAGES = {
     "홈": [
         st.Page("ade_home.py", title="종합 상황판", icon="🏠", default=True),
@@ -15,9 +13,9 @@ PAGES = {
     ],
     "2. 분석 및 판단": [
         st.Page("pages/13_Surge_Pattern_Lab.py", title="급등 패턴 비교", icon="📈"),
+        st.Page("pages/5_JP_Radar_Live.py", title="AI 레이더", icon="🎯"),
         st.Page("pages/2_Meta_Score.py", title="한국 종합판단", icon="🧠"),
         st.Page("pages/11_US_Meta_Score.py", title="미국 종합판단", icon="📊"),
-        st.Page("pages/5_JP_Radar_Live.py", title="AI 레이더", icon="🎯"),
     ],
     "3. 주문 실행": [
         st.Page("pages/9_Trading_Desk.py", title="한국 주문관리", icon="💳"),

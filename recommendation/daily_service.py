@@ -4,13 +4,20 @@ import json
 import sqlite3
 import threading
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
 from report.recommendation_html_report import render_recommendation_html
-from surge.multi_horizon import MultiHorizonSurgePatternRecommender
+from surge.interactive_recommender import (
+    InteractiveSurgePatternRecommender,
+    RecommendationCancelled,
+)
+
+ProgressCallback = Callable[[dict[str, object]], None]
+CancelCheck = Callable[[], bool]
 
 
 @dataclass(frozen=True)
@@ -24,6 +31,7 @@ class RecommendationRunResult:
     report_path: str
     status: str
     error_message: str | None = None
+    diagnostics: dict[str, object] | None = None
 
 
 class DailyRecommendationService:
@@ -51,11 +59,18 @@ class DailyRecommendationService:
                 elapsed_seconds REAL,
                 report_path TEXT,
                 parameters_json TEXT NOT NULL,
+                diagnostics_json TEXT,
                 error_message TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
             """
         )
+        columns = {
+            str(row[1])
+            for row in self.conn.execute("PRAGMA table_info(recommendation_runs)").fetchall()
+        }
+        if "diagnostics_json" not in columns:
+            self.conn.execute("ALTER TABLE recommendation_runs ADD COLUMN diagnostics_json TEXT")
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS daily_recommendations (
@@ -99,6 +114,8 @@ class DailyRecommendationService:
         min_weekly_similarity: float = 85.0,
         min_sto_similarity: float = 85.0,
         replay_top_n: int = 5,
+        progress_callback: ProgressCallback | None = None,
+        cancel_check: CancelCheck | None = None,
     ) -> RecommendationRunResult:
         normalized_type = run_type.strip().upper()
         if normalized_type not in {"AUTO", "MANUAL"}:
@@ -141,10 +158,11 @@ class DailyRecommendationService:
         self.conn.commit()
 
         timer = perf_counter()
+        diagnostics: dict[str, object] = {}
         try:
-            engine = MultiHorizonSurgePatternRecommender(self.db_path)
+            engine = InteractiveSurgePatternRecommender(self.db_path)
             try:
-                recommendations = engine.recommend(
+                recommendations, diagnostics = engine.recommend_interactive(
                     candidate_years=candidate_years,
                     lookback_months=lookback_months,
                     top_n=top_n,
@@ -152,6 +170,8 @@ class DailyRecommendationService:
                     min_weekly_similarity=min_weekly_similarity,
                     min_sto_similarity=min_sto_similarity,
                     replay_top_n=replay_top_n,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
                 )
             finally:
                 engine.close()
@@ -199,7 +219,7 @@ class DailyRecommendationService:
                 """
                 UPDATE recommendation_runs
                 SET finished_at=?, status='COMPLETED', recommendation_count=?,
-                    elapsed_seconds=?, report_path=?
+                    elapsed_seconds=?, report_path=?, diagnostics_json=?
                 WHERE run_id=?
                 """,
                 (
@@ -207,6 +227,7 @@ class DailyRecommendationService:
                     len(recommendations),
                     elapsed,
                     str(report_path),
+                    json.dumps(diagnostics, ensure_ascii=False),
                     run_id,
                 ),
             )
@@ -220,6 +241,39 @@ class DailyRecommendationService:
                 elapsed_seconds=elapsed,
                 report_path=str(report_path),
                 status="COMPLETED",
+                diagnostics=diagnostics,
+            )
+        except RecommendationCancelled as exc:
+            finished = datetime.now()
+            elapsed = perf_counter() - timer
+            diagnostics["cancelled"] = True
+            self.conn.execute(
+                """
+                UPDATE recommendation_runs
+                SET finished_at=?, status='CANCELLED', elapsed_seconds=?,
+                    diagnostics_json=?, error_message=?
+                WHERE run_id=?
+                """,
+                (
+                    finished.isoformat(timespec="seconds"),
+                    elapsed,
+                    json.dumps(diagnostics, ensure_ascii=False),
+                    str(exc),
+                    run_id,
+                ),
+            )
+            self.conn.commit()
+            return RecommendationRunResult(
+                run_id=run_id,
+                run_type=normalized_type,
+                started_at=started.isoformat(timespec="seconds"),
+                finished_at=finished.isoformat(timespec="seconds"),
+                recommendation_count=0,
+                elapsed_seconds=elapsed,
+                report_path="",
+                status="CANCELLED",
+                error_message=str(exc),
+                diagnostics=diagnostics,
             )
         except Exception as exc:
             finished = datetime.now()
@@ -227,10 +281,16 @@ class DailyRecommendationService:
             self.conn.execute(
                 """
                 UPDATE recommendation_runs
-                SET finished_at=?, status='FAILED', elapsed_seconds=?, error_message=?
+                SET finished_at=?, status='FAILED', elapsed_seconds=?, diagnostics_json=?, error_message=?
                 WHERE run_id=?
                 """,
-                (finished.isoformat(timespec="seconds"), elapsed, str(exc), run_id),
+                (
+                    finished.isoformat(timespec="seconds"),
+                    elapsed,
+                    json.dumps(diagnostics, ensure_ascii=False),
+                    str(exc),
+                    run_id,
+                ),
             )
             self.conn.commit()
             raise
@@ -252,14 +312,24 @@ class DailyRecommendationService:
         rows = self.conn.execute(
             """
             SELECT run_id, run_type, trading_date, started_at, finished_at, status,
-                   recommendation_count, elapsed_seconds, report_path, error_message
+                   recommendation_count, elapsed_seconds, report_path, error_message,
+                   diagnostics_json
             FROM recommendation_runs
             ORDER BY started_at DESC
             LIMIT ?
             """,
             (int(limit),),
         ).fetchall()
-        return [dict(row) for row in rows]
+        result: list[dict[str, object]] = []
+        for row in rows:
+            item = dict(row)
+            raw = item.pop("diagnostics_json", None)
+            try:
+                item["diagnostics"] = json.loads(raw) if raw else {}
+            except json.JSONDecodeError:
+                item["diagnostics"] = {}
+            result.append(item)
+        return result
 
     def recommendations_for_run(self, run_id: str) -> list[dict[str, object]]:
         rows = self.conn.execute(

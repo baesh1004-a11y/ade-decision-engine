@@ -5,9 +5,27 @@ from pathlib import Path
 import pandas as pd
 
 from dashboard.system_status import inspect_market_db
-from maintenance.job_manager import ADEJobManager
+from maintenance.recommendation_runner import cancel_job, get_status, start_job
 from markets.profiles import get_market_profile
 from recommendation.daily_service import DailyRecommendationService
+
+
+def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
+    if not diagnostics:
+        return
+    st.markdown("#### 단계별 통과 현황")
+    rows = [
+        ("과거 급등 패턴 로드", diagnostics.get("patterns_loaded", 0), "비교에 불러온 전체 과거 패턴"),
+        ("정상 패턴 준비", diagnostics.get("patterns_prepared", 0), "형태 데이터가 정상인 과거 패턴"),
+        ("분석 대상 종목", diagnostics.get("symbols_total", 0), "현재 활성화된 전체 종목"),
+        ("120일 데이터 확보", diagnostics.get("symbols_with_120d", 0), "최근 120거래일 데이터가 충분한 종목"),
+        ("차트 기준 통과", diagnostics.get("chart_pass_comparisons", 0), "차트 유사도 기준을 넘긴 종목-패턴 비교 건수"),
+        ("STO 기준 통과", diagnostics.get("sto_pass_comparisons", 0), "차트와 STO 기준을 모두 넘긴 비교 건수"),
+        ("매칭 종목", diagnostics.get("symbols_with_matches", 0), "최소 1개 이상 과거 패턴과 매칭된 종목"),
+        ("최종 추천", diagnostics.get("final_recommendations", 0), "최종 순위 상위 추천 종목"),
+    ]
+    frame = pd.DataFrame(rows, columns=["단계", "통과 수", "의미"])
+    st.dataframe(frame, use_container_width=True, hide_index=True)
 
 
 def run(market_code: str = "kr") -> None:
@@ -44,23 +62,19 @@ def run(market_code: str = "kr") -> None:
         <div class="hero">
           <div class="eyebrow">ADE {profile.code.upper()} PRE-SURGE RECOMMENDATION</div>
           <h1>{profile.name} 급등직전 120일 패턴 추천</h1>
-          <p>현재 최근 120거래일을 과거 5거래일 30% 급등 직전 패턴과 비교합니다.</p>
+          <p>현재 최근 120거래일을 과거 5~20거래일 내 30% 급등 직전 패턴과 비교합니다.</p>
         </div>
         """,
         unsafe_allow_html=True,
     )
 
     service = DailyRecommendationService(profile.db_path)
-    manager = ADEJobManager(
-        lock_path=f"output/{profile.code}_recommendation.lock",
-        status_path=f"output/{profile.code}_job_status.json",
-    )
     try:
         readiness = inspect_market_db(profile.db_path, profile.code)
         runs = service.latest_runs(50)
         latest_auto = next((row for row in runs if row["run_type"] == "AUTO"), None)
         latest_manual = next((row for row in runs if row["run_type"] == "MANUAL"), None)
-        job_status = manager.current_status() or {}
+        runtime = get_status(profile.code)
 
         a, b, c, d = st.columns(4)
         a.metric("운영 준비", "READY" if readiness.ready else "NOT READY")
@@ -88,9 +102,12 @@ def run(market_code: str = "kr") -> None:
         s1, s2, s3, s4 = st.columns(4)
         s1.metric("자동 스케줄", profile.scheduler_time)
         s2.metric("오늘 자동 완료", "YES" if service.auto_completed_today() else "NO")
-        s3.metric("현재 작업", str(job_status.get("job_name", "없음")))
-        s4.metric("작업 상태", str(job_status.get("state", "IDLE")))
-        st.caption(f"최근 자동 {latest_auto['finished_at'] if latest_auto else '없음'} · 최근 수동 {latest_manual['finished_at'] if latest_manual else '없음'}")
+        s3.metric("현재 작업", str(runtime.get("stage", "없음")))
+        s4.metric("작업 상태", str(runtime.get("state", "IDLE")))
+        st.caption(
+            f"최근 자동 {latest_auto['finished_at'] if latest_auto else '없음'} · "
+            f"최근 수동 {latest_manual['finished_at'] if latest_manual else '없음'}"
+        )
 
         st.markdown("### 장중 수동 추천")
         c1, c2, c3, c4 = st.columns(4)
@@ -99,36 +116,74 @@ def run(market_code: str = "kr") -> None:
         min_chart = c3.number_input("최소 차트 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_weekly")
         min_sto = c4.number_input("최소 STO 3계층 유사도", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"{profile.code}_sto")
 
-        if st.button(
+        running = bool(runtime.get("running"))
+        start_col, stop_col = st.columns([4, 1])
+        if start_col.button(
             f"{profile.name} 급등 가능 추천종목 생성",
             type="primary",
             use_container_width=True,
             key=f"{profile.code}_run",
-            disabled=not readiness.ready,
+            disabled=not readiness.ready or running,
         ):
-            with st.status(f"{profile.name} 급등직전 패턴 매칭을 시작했습니다...", expanded=True) as status:
-                try:
-                    with manager.acquire(
-                        f"{profile.code.upper()}_MANUAL_RECOMMENDATION",
-                        wait=True,
-                        timeout_seconds=6 * 60 * 60,
-                    ):
-                        result = service.run(
-                            "MANUAL",
-                            top_n=int(top_n),
-                            weekly_pool_n=int(pattern_pool),
-                            min_weekly_similarity=float(min_chart),
-                            min_sto_similarity=float(min_sto),
-                        )
-                    status.update(label="급등직전 패턴 추천 완료", state="complete", expanded=False)
-                    st.success(f"{result.recommendation_count}개 추천 · {result.elapsed_seconds:.1f}초 · {result.run_id}")
-                    st.page_link("pages/13_Surge_Pattern_Lab.py", label="추천종목과 과거 급등직전 차트 비교하기")
-                    if Path(result.report_path).exists():
-                        st.caption(f"HTML 보고서: {result.report_path}")
-                    st.rerun()
-                except Exception as exc:
-                    status.update(label="급등직전 패턴 추천 실패", state="error", expanded=True)
-                    st.error(str(exc))
+            started = start_job(
+                profile.code,
+                profile.db_path,
+                top_n=int(top_n),
+                weekly_pool_n=int(pattern_pool),
+                min_weekly_similarity=float(min_chart),
+                min_sto_similarity=float(min_sto),
+            )
+            if started:
+                st.rerun()
+            else:
+                st.warning("이미 추천 작업이 실행 중입니다.")
+
+        if stop_col.button(
+            "■ 중단",
+            use_container_width=True,
+            key=f"{profile.code}_cancel",
+            disabled=not running,
+        ):
+            if cancel_job(profile.code):
+                st.warning("중단 요청을 보냈습니다. 현재 비교 단위를 마친 뒤 안전하게 종료합니다.")
+                st.rerun()
+
+        def render_runtime() -> None:
+            live = get_status(profile.code)
+            state = str(live.get("state", "IDLE"))
+            if state in {"STARTING", "RUNNING", "CANCELLING"}:
+                progress = float(live.get("progress", 0.0) or 0.0)
+                st.progress(progress, text=str(live.get("message", "분석 중...")))
+                current = int(live.get("current", 0) or 0)
+                total = int(live.get("total", 0) or 0)
+                p1, p2, p3 = st.columns(3)
+                p1.metric("현재 단계", str(live.get("stage", "분석")))
+                p2.metric("진행", f"{current:,} / {total:,}" if total else "준비 중")
+                diagnostics = live.get("diagnostics") or {}
+                p3.metric("현재 매칭 종목", f"{int(diagnostics.get('symbols_with_matches', 0)):,}")
+                _render_diagnostics(st, diagnostics)
+            elif state == "COMPLETED":
+                st.success(
+                    f"추천 완료 · {int(live.get('recommendation_count', 0))}개 · "
+                    f"{float(live.get('elapsed_seconds', 0.0)):.1f}초"
+                )
+                _render_diagnostics(st, live.get("diagnostics") or {})
+            elif state == "CANCELLED":
+                st.warning("추천 생성이 사용자 요청으로 중단되었습니다.")
+                _render_diagnostics(st, live.get("diagnostics") or {})
+            elif state == "FAILED":
+                st.error(str(live.get("error_message") or "추천 생성에 실패했습니다."))
+
+        if hasattr(st, "fragment"):
+            @st.fragment(run_every=1.0)
+            def live_panel() -> None:
+                render_runtime()
+
+            live_panel()
+        else:
+            render_runtime()
+            if running and st.button("진행 상태 새로고침", key=f"{profile.code}_refresh"):
+                st.rerun()
 
         st.divider()
         st.markdown("### 추천 생성 이력")
@@ -137,7 +192,12 @@ def run(market_code: str = "kr") -> None:
             st.info(f"{profile.name}에 저장된 추천 실행 이력이 없습니다.")
             return
 
-        run_df = pd.DataFrame(runs)
+        run_df = pd.DataFrame(
+            [
+                {key: value for key, value in row.items() if key != "diagnostics"}
+                for row in runs
+            ]
+        )
         st.dataframe(
             run_df,
             use_container_width=True,
@@ -148,11 +208,11 @@ def run(market_code: str = "kr") -> None:
             },
         )
 
-        completed = [row for row in runs if row["status"] == "COMPLETED"]
-        if completed:
+        selectable = [row for row in runs if row["status"] in {"COMPLETED", "CANCELLED"}]
+        if selectable:
             labels = {
-                row["run_id"]: f"{row['started_at']} · {row['run_type']} · {row['recommendation_count']}개"
-                for row in completed
+                row["run_id"]: f"{row['started_at']} · {row['run_type']} · {row['status']} · {row['recommendation_count']}개"
+                for row in selectable
             }
             selected = st.selectbox(
                 "상세 추천 결과",
@@ -160,10 +220,15 @@ def run(market_code: str = "kr") -> None:
                 format_func=lambda run_id: labels[run_id],
                 key=f"{profile.code}_detail_run",
             )
+            selected_run = next(row for row in selectable if row["run_id"] == selected)
+            _render_diagnostics(st, selected_run.get("diagnostics") or {})
             details = pd.DataFrame(service.recommendations_for_run(selected))
             if not details.empty:
                 st.dataframe(details, use_container_width=True, hide_index=True)
                 st.page_link("pages/13_Surge_Pattern_Lab.py", label="선택 추천 결과 차트 비교")
+            report_path = selected_run.get("report_path")
+            if report_path and Path(str(report_path)).exists():
+                st.caption(f"HTML 보고서: {report_path}")
     finally:
         service.close()
 

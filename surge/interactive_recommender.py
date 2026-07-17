@@ -20,13 +20,15 @@ class RecommendationCancelled(RuntimeError):
 class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
     """Official ADE pre-surge recommender.
 
-    One clear rule:
-    compare every active symbol's latest 120 sessions with historical
-    120-session patterns immediately preceding a real +30% surge.
-    """
+    Ranking rule:
+    1. Compare every active symbol's latest 120 sessions with historical
+       120-session patterns immediately preceding a real +30% surge.
+    2. Require both weekly-shape and STO minimum thresholds.
+    3. Rank passed candidates only by weekly-shape similarity.
 
-    WEEKLY_WEIGHT = 0.60
-    STO_WEIGHT = 0.40
+    ``final_similarity`` remains in the stored model for schema compatibility,
+    but it now mirrors ``weekly_similarity`` and is not a composite score.
+    """
 
     def recommend_interactive(
         self,
@@ -98,15 +100,15 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
 
         symbols = self._active_symbols(market)
         diagnostics: dict[str, object] = {
-            "algorithm": "pre-surge-120d-simple-v1",
+            "algorithm": "pre-surge-120d-weekly-rank-sto-filter-v2",
+            "ranking_score": "weekly_similarity",
+            "sto_role": "minimum-threshold-filter",
             "market": market,
             "candidate_years": candidate_years,
             "replay_cutoff": cutoff,
             "pattern_pool": pattern_limit,
             "min_weekly_similarity": float(min_weekly_similarity),
             "min_sto_similarity": float(min_sto_similarity),
-            "weekly_weight": self.WEEKLY_WEIGHT,
-            "sto_weight": self.STO_WEIGHT,
             "patterns_loaded": len(patterns),
             "patterns_prepared": len(prepared),
             "symbols_total": len(symbols),
@@ -150,10 +152,9 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     continue
                 diagnostics["sto_pass_comparisons"] = int(diagnostics["sto_pass_comparisons"]) + 1
 
-                final_score = (
-                    weekly_score * self.WEEKLY_WEIGHT
-                    + sto_score * self.STO_WEIGHT
-                )
+                # Schema compatibility: final_similarity is the ranking score,
+                # and the ranking score is now weekly similarity only.
+                ranking_score = weekly_score
                 match = ReplayMatch(
                     event_id=str(row["pattern_id"]),
                     event_date=str(row["surge_start_date"]),
@@ -162,7 +163,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     name=row["name"],
                     weekly_similarity=weekly_score,
                     sto_similarity=sto_score,
-                    final_similarity=final_score,
+                    final_similarity=ranking_score,
                     max_return=float(row["surge_return_pct"]),
                     max_drawdown=None,
                     equivalent_week_index=25,
@@ -170,12 +171,11 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     weeks_compared=26,
                     future_weeks_available=max(1, int(row["surge_horizon_days"]) // 5),
                 )
-                candidate_matches.append((final_score, row, match))
+                candidate_matches.append((ranking_score, row, match))
 
             candidate_matches.sort(
                 key=lambda item: (
                     item[0],
-                    item[2].weekly_similarity,
                     item[2].sto_similarity,
                     item[2].max_return or 0.0,
                 ),
@@ -185,8 +185,9 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             if selected:
                 diagnostics["symbols_with_matches"] = int(diagnostics["symbols_with_matches"]) + 1
                 matches = [item[2] for item in selected]
-                best_score, best_row, best = selected[0]
-                average_score = sum(item.final_similarity for item in matches) / len(matches)
+                best_score, _best_row, best = selected[0]
+                average_weekly = sum(item.weekly_similarity for item in matches) / len(matches)
+                average_sto = sum(item.sto_similarity for item in matches) / len(matches)
                 average_surge = sum(float(item.max_return or 0.0) for item in matches) / len(matches)
                 average_days = sum(
                     float(row["target_hit_day"] or row["surge_horizon_days"])
@@ -195,10 +196,10 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
 
                 reasons = [
                     "현재 최근 120거래일을 과거 실제 급등 직전 120거래일과 비교",
-                    f"최종 유사도 = 주봉 60% + STO 40%: {best_score:.2f}%",
-                    f"주봉 {best.weekly_similarity:.2f}% · STO {best.sto_similarity:.2f}%",
+                    f"추천 순위 점수는 주봉 유사도 단일 기준: {best_score:.2f}%",
+                    f"STO는 최소 {min_sto_similarity:.1f}% 통과 필터이며 대표 사례 STO는 {best.sto_similarity:.2f}%",
                     f"가장 유사한 과거 사례: {best.ticker} · {best.event_date}",
-                    f"상위 {len(matches)}개 사례 평균 유사도 {average_score:.2f}%",
+                    f"상위 {len(matches)}개 사례 평균 주봉 {average_weekly:.2f}% · 평균 STO {average_sto:.2f}%",
                     f"평균 30% 도달기간 {average_days:.1f}거래일 · 평균 최대상승 {average_surge:+.2f}%",
                 ]
                 recommendation = EventRecommendation(
@@ -211,7 +212,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     matched_event_date=best.event_date,
                     weekly_similarity=best.weekly_similarity,
                     sto_similarity=best.sto_similarity,
-                    final_similarity=best.final_similarity,
+                    final_similarity=best.weekly_similarity,
                     matched_max_return=best.max_return,
                     matched_max_drawdown=None,
                     decision="RECOMMEND",
@@ -219,16 +220,15 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     replay_matches=matches,
                     prediction=None,
                 )
-                ranked_results.append((best_score, average_score, recommendation))
+                ranked_results.append((best.weekly_similarity, average_weekly, recommendation))
 
             publish("MATCH", symbol_index, len(symbols), f"{ticker} 분석 완료", ticker=ticker, diagnostics=diagnostics.copy())
 
-        publish("RANK", 0, 1, "유사도가 높은 종목 순으로 정렬하고 있습니다.", diagnostics=diagnostics.copy())
+        publish("RANK", 0, 1, "주봉 유사도가 높은 종목 순으로 정렬하고 있습니다.", diagnostics=diagnostics.copy())
         ranked_results.sort(
             key=lambda item: (
                 item[0],
                 item[1],
-                item[2].weekly_similarity,
                 item[2].sto_similarity,
             ),
             reverse=True,

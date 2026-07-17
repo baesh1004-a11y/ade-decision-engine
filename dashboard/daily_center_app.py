@@ -125,7 +125,7 @@ def run(market_code: str = "kr") -> None:
         pattern_pool = c2.number_input("비교 패턴 풀", min_value=10, max_value=300, value=100, step=10, key=f"{profile.code}_weekly_pool")
 
         running = bool(runtime.get("running"))
-        start_col, stop_col = st.columns([4, 1])
+        start_col, refresh_col, stop_col = st.columns([4, 1.4, 1])
         if start_col.button(f"{profile.name} 추천종목 생성 및 저장", type="primary", use_container_width=True, key=f"{profile.code}_run", disabled=not readiness.ready or running):
             started = start_job(
                 profile.code,
@@ -144,42 +144,37 @@ def run(market_code: str = "kr") -> None:
             else:
                 st.warning("이미 추천 작업이 실행 중입니다.")
 
+        if refresh_col.button("진행상태 새로고침", use_container_width=True, key=f"{profile.code}_refresh"):
+            st.rerun()
+
         if stop_col.button("■ 중단", use_container_width=True, key=f"{profile.code}_cancel", disabled=not running):
             if cancel_job(profile.code):
                 st.warning("중단 요청을 보냈습니다. 현재 비교 단위를 마친 뒤 안전하게 종료합니다.")
                 st.rerun()
 
-        def render_runtime() -> None:
-            live = get_status(profile.code)
-            state = str(live.get("state", "IDLE"))
-            if state in {"STARTING", "RUNNING", "CANCELLING"}:
-                st.progress(float(live.get("progress", 0.0) or 0.0), text=str(live.get("message", "분석 중...")))
-                current = int(live.get("current", 0) or 0)
-                total = int(live.get("total", 0) or 0)
-                p1, p2, p3 = st.columns(3)
-                p1.metric("현재 단계", str(live.get("stage", "분석")))
-                p2.metric("진행", f"{current:,} / {total:,}" if total else "준비 중")
-                diagnostics = live.get("diagnostics") or {}
-                p3.metric("현재 매칭 종목", f"{int(diagnostics.get('symbols_with_matches', 0)):,}")
-                _render_selected_options(st, diagnostics)
-                _render_diagnostics(st, diagnostics)
-            elif state == "COMPLETED":
-                st.success(f"추천 완료 및 저장 · {int(live.get('recommendation_count', 0))}개 · {float(live.get('elapsed_seconds', 0.0)):.1f}초")
-                _render_selected_options(st, live.get("diagnostics") or {})
-                _render_diagnostics(st, live.get("diagnostics") or {})
-            elif state == "CANCELLED":
-                st.warning("추천 생성이 사용자 요청으로 중단되었습니다.")
-                _render_diagnostics(st, live.get("diagnostics") or {})
-            elif state == "FAILED":
-                st.error(str(live.get("error_message") or "추천 생성에 실패했습니다."))
-
-        if hasattr(st, "fragment"):
-            @st.fragment(run_every=1.0)
-            def live_panel() -> None:
-                render_runtime()
-            live_panel()
-        else:
-            render_runtime()
+        live = get_status(profile.code)
+        state = str(live.get("state", "IDLE"))
+        if state in {"STARTING", "RUNNING", "CANCELLING"}:
+            st.progress(float(live.get("progress", 0.0) or 0.0), text=str(live.get("message", "분석 중...")))
+            current = int(live.get("current", 0) or 0)
+            total = int(live.get("total", 0) or 0)
+            p1, p2, p3 = st.columns(3)
+            p1.metric("현재 단계", str(live.get("stage", "분석")))
+            p2.metric("진행", f"{current:,} / {total:,}" if total else "준비 중")
+            diagnostics = live.get("diagnostics") or {}
+            p3.metric("현재 매칭 종목", f"{int(diagnostics.get('symbols_with_matches', 0)):,}")
+            _render_selected_options(st, diagnostics)
+            _render_diagnostics(st, diagnostics)
+            st.caption("안정성을 위해 자동 새로고침 대신 진행상태 새로고침 버튼을 사용합니다. 추천 계산은 백그라운드에서 계속 진행됩니다.")
+        elif state == "COMPLETED":
+            st.success(f"추천 완료 및 저장 · {int(live.get('recommendation_count', 0))}개 · {float(live.get('elapsed_seconds', 0.0)):.1f}초")
+            _render_selected_options(st, live.get("diagnostics") or {})
+            _render_diagnostics(st, live.get("diagnostics") or {})
+        elif state == "CANCELLED":
+            st.warning("추천 생성이 사용자 요청으로 중단되었습니다.")
+            _render_diagnostics(st, live.get("diagnostics") or {})
+        elif state == "FAILED":
+            st.error(str(live.get("error_message") or "추천 생성에 실패했습니다."))
 
         st.divider()
         st.markdown("### 저장된 추천 이력")

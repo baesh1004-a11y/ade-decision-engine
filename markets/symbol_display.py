@@ -20,7 +20,11 @@ def normalize_ticker(value: object, market: str = "kr") -> str:
 
 
 def build_name_map(conn: sqlite3.Connection, market: str = "kr") -> dict[str, str]:
-    """Collect the best available company names from known universe tables."""
+    """Collect company names in authoritative priority order.
+
+    Earlier sources are more authoritative and are never overwritten by lower
+    priority historical tables.
+    """
     result: dict[str, str] = {}
     tables = {
         str(row[0])
@@ -30,9 +34,9 @@ def build_name_map(conn: sqlite3.Connection, market: str = "kr") -> dict[str, st
         ("stock_universe", "ticker", "name"),
         ("kr_universe", "ticker", "name"),
         ("us_universe", "symbol", "name"),
-        ("replay_events", "ticker", "name"),
-        ("surge_patterns", "ticker", "name"),
         ("daily_recommendations", "ticker", "name"),
+        ("surge_patterns", "ticker", "name"),
+        ("replay_events", "ticker", "name"),
         ("final_decisions", "ticker", "name"),
     ]
     for table, ticker_col, name_col in candidates:
@@ -55,8 +59,8 @@ def build_name_map(conn: sqlite3.Connection, market: str = "kr") -> dict[str, st
         ).fetchall():
             ticker = normalize_ticker(row[0], market)
             name = str(row[1] or "").strip()
-            if ticker and name and name != ticker:
-                result[ticker] = name
+            if ticker and name and name != ticker and not name.isdigit():
+                result.setdefault(ticker, name)
     return result
 
 

@@ -1,3 +1,5 @@
 from dashboard.recommendation_workbench_v2_app import run
+from dashboard.sto_similarity_status import render_sto_similarity_status
 
 run()
+render_sto_similarity_status()

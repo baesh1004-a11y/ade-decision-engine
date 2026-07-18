@@ -24,7 +24,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         """
         <div class="live-hero">
           <div><div class="eyebrow">ADE INTRADAY CONTROL</div><h1>추천종목 · 보유종목 실시간 모니터</h1>
-          <p>최신 완료 추천은 그대로 유지하고, 자동 갱신에서는 KIS 현재가만 다시 조회합니다.</p></div>
+          <p>최신 완료 추천은 그대로 유지하고, 사용자가 자동 갱신을 켠 경우에만 KIS 현재가를 다시 조회합니다.</p></div>
           <div class="live-badge"><span></span> KIS PAPER MONITOR</div>
         </div>
         """,
@@ -32,9 +32,9 @@ def run(db_path: str = "datahub/market.db") -> None:
     )
 
     c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
-    interval = c1.selectbox("갱신주기", [5, 10, 20, 30, 60], index=1, format_func=lambda x: f"{x}초")
-    auto = c2.toggle("자동 갱신", value=True)
-    top_n = c3.number_input("모니터 추천 수", min_value=1, max_value=50, value=10, step=1)
+    interval = c1.selectbox("갱신주기", [10, 20, 30, 60], index=0, format_func=lambda x: f"{x}초")
+    auto = c2.toggle("자동 갱신", value=False)
+    top_n = c3.number_input("모니터 추천 수", min_value=1, max_value=20, value=10, step=1)
     reload_latest = c4.button("최신 완료 추천 불러오기", type="primary", use_container_width=True)
 
     recommendations, run_info, name_map = _load_stored_recommendations(db_path, int(top_n))

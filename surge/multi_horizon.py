@@ -13,7 +13,7 @@ from surge.pattern_engine import PATTERN_VERSION, SurgeBuildStats, SurgePatternR
 from weekly.shape_similarity import WeeklyShape, WeeklyShapeSimilarityEngine
 
 
-MULTI_PATTERN_VERSION = "pre-surge-120d-multi-horizon-v2"
+MULTI_PATTERN_VERSION = "pre-surge-120d-multi-horizon-v3-sto-trajectory"
 
 SURGE_CLASSES = (
     ("FAST", 5, 1.00),
@@ -139,7 +139,6 @@ class MultiHorizonSurgePatternBuilder:
                     "pattern_end_date": str(pd.Timestamp(window.iloc[-1]["Date"]).date()),
                     "surge_start_date": str(hit["start_date"]),
                     "surge_peak_date": str(hit["peak_date"]),
-                    # legacy compatibility: this column previously meant only 5-day return
                     "surge_return_5d": float(hit["surge_return_pct"]),
                     "observation_days": int(hit["start_index"]) - event_index,
                     "weekly_shape_json": json.dumps(weekly.to_dict(), ensure_ascii=False),
@@ -293,7 +292,7 @@ class MultiHorizonSurgePatternRecommender:
         ).fetchall()
         if not patterns:
             raise RuntimeError(
-                "다중기간 급등직전 패턴 DB가 없습니다. run_build_surge_patterns.py --full을 실행하세요."
+                "STO 궤적 비교용 급등직전 패턴 DB가 없습니다. run_build_surge_patterns.py --full을 다시 실행하세요."
             )
         prepared = [self._prepare_pattern(row) for row in patterns]
         prepared = [item for item in prepared if item is not None]
@@ -324,7 +323,7 @@ class MultiHorizonSurgePatternRecommender:
                     name=row["name"],
                     weekly_similarity=chart_score,
                     sto_similarity=sto_score,
-                    final_similarity=raw_similarity,
+                    final_similarity=weighted_score,
                     max_return=float(row["surge_return_pct"]),
                     max_drawdown=None,
                     equivalent_week_index=25,
@@ -335,16 +334,22 @@ class MultiHorizonSurgePatternRecommender:
                 candidate_matches.append((weighted_score, row, match))
 
             candidate_matches.sort(
-                key=lambda item: (item[0], item[2].final_similarity, item[2].max_return or 0.0),
+                key=lambda item: (
+                    item[0],
+                    item[2].weekly_similarity,
+                    item[2].sto_similarity,
+                    item[2].max_return or 0.0,
+                ),
                 reverse=True,
             )
             selected = candidate_matches[:replay_top_n]
             if not selected:
                 continue
+
             matches = [item[2] for item in selected]
             best_weighted, best_row, best = selected[0]
             average_surge = sum(float(item.max_return or 0.0) for item in matches) / len(matches)
-            class_counts: dict[str, int] = {name: 0 for name, _, _ in SURGE_CLASSES}
+            class_counts: dict[str, int] = {}
             weighted_days = 0.0
             total_weight = 0.0
             for _, row, _ in selected:
@@ -359,7 +364,7 @@ class MultiHorizonSurgePatternRecommender:
             )
             reasons = [
                 "현재 최근 120거래일을 과거 다중기간 급등직전 120일 패턴과 비교",
-                f"차트 유사도 {best.weekly_similarity:.2f}% · STO 3계층 유사도 {best.sto_similarity:.2f}%",
+                f"차트 유사도 {best.weekly_similarity:.2f}% · STO 3계층 궤적 유사도 {best.sto_similarity:.2f}%",
                 f"Top1 유형 {best_row['surge_class']} · 30% 최초 도달 {int(best_row['target_hit_day'])}거래일",
                 f"속도 가중점수 {best_weighted:.2f} · 예상 30% 도달 {expected_days:.1f}거래일",
                 f"매칭 {len(matches)}건 · 유형분포 {distribution}",

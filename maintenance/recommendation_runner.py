@@ -11,10 +11,16 @@ from recommendation.daily_service import DailyRecommendationService
 
 _LOCK = threading.Lock()
 _JOBS: dict[str, dict[str, Any]] = {}
+_ACTIVE_STATES = {"STARTING", "RUNNING", "CANCELLING"}
+_STALE_AFTER_SECONDS = 300
 
 
 def _status_path(market_code: str) -> Path:
     return Path(f"output/{market_code}_recommendation_runtime.json")
+
+
+def _lock_path(market_code: str) -> Path:
+    return Path(f"output/{market_code}_recommendation.lock")
 
 
 def _write_status(market_code: str, payload: dict[str, object]) -> None:
@@ -22,6 +28,36 @@ def _write_status(market_code: str, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {**payload, "updated_at": datetime.now().isoformat(timespec="seconds")}
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _recover_stale_status(market_code: str, payload: dict[str, object]) -> dict[str, object]:
+    state = str(payload.get("state") or "IDLE")
+    if state not in _ACTIVE_STATES:
+        payload["running"] = False
+        return payload
+
+    updated_at = str(payload.get("updated_at") or "")
+    try:
+        age = (datetime.now() - datetime.fromisoformat(updated_at)).total_seconds()
+    except (TypeError, ValueError):
+        age = _STALE_AFTER_SECONDS + 1
+
+    lock_exists = _lock_path(market_code).exists()
+    if not lock_exists or age > _STALE_AFTER_SECONDS:
+        recovered = {
+            **payload,
+            "state": "STALE",
+            "stage": "STALE",
+            "running": False,
+            "progress": 0.0,
+            "message": "이전 추천 작업이 비정상 종료되어 상태를 복구했습니다.",
+            "error_message": "활성 작업 스레드 또는 유효한 잠금 파일을 찾지 못했습니다.",
+        }
+        _write_status(market_code, recovered)
+        return recovered
+
+    payload["running"] = True
+    return payload
 
 
 def get_status(market_code: str) -> dict[str, object]:
@@ -34,7 +70,8 @@ def get_status(market_code: str) -> dict[str, object]:
     path = _status_path(market_code)
     if path.exists():
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return _recover_stale_status(market_code, payload)
         except (OSError, json.JSONDecodeError):
             pass
     return {"state": "IDLE", "running": False, "progress": 0.0}

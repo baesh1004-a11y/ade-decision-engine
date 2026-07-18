@@ -7,7 +7,9 @@ import pandas as pd
 from dashboard.system_status import inspect_market_db
 from maintenance.recommendation_runner import cancel_job, get_status, start_job
 from markets.profiles import get_market_profile
+from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from recommendation.daily_service import DailyRecommendationService
+from recommendation.run_context import latest_completed_run
 
 
 def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
@@ -70,8 +72,15 @@ def run(market_code: str = "kr") -> None:
     try:
         readiness = inspect_market_db(profile.db_path, profile.code)
         runs = service.latest_runs(50)
-        completed_runs = [row for row in runs if row["status"] == "COMPLETED"]
-        latest_completed = completed_runs[0] if completed_runs else None
+        completed_runs = [
+            row for row in runs
+            if row["status"] == "COMPLETED" and int(row.get("recommendation_count") or 0) > 0
+        ]
+        common_latest = latest_completed_run(service.conn, profile.code)
+        latest_completed = next(
+            (row for row in completed_runs if common_latest and row["run_id"] == common_latest["run_id"]),
+            completed_runs[0] if completed_runs else None,
+        )
         latest_auto = next((row for row in completed_runs if row["run_type"] == "AUTO"), None)
         latest_manual = next((row for row in completed_runs if row["run_type"] == "MANUAL"), None)
         runtime = get_status(profile.code)
@@ -140,13 +149,15 @@ def run(market_code: str = "kr") -> None:
             st.success(f"추천 완료 및 저장 · {int(live.get('recommendation_count', 0))}개 · {float(live.get('elapsed_seconds', 0.0)):.1f}초")
         elif state == "CANCELLED":
             st.warning("추천 생성이 사용자 요청으로 중단되었습니다. 아래 상세 결과에는 완료 실행만 표시합니다.")
+        elif state == "STALE":
+            st.warning(str(live.get("message") or "이전 작업 상태를 복구했습니다."))
         elif state == "FAILED":
             st.error(str(live.get("error_message") or "추천 생성에 실패했습니다."))
 
         st.divider()
         st.markdown("### 완료된 추천 이력")
         if not completed_runs:
-            st.info(f"{profile.name}에 완료된 추천 실행 이력이 없습니다.")
+            st.info(f"{profile.name}에 추천 결과가 저장된 완료 실행 이력이 없습니다.")
             return
         run_df = pd.DataFrame([{key: value for key, value in row.items() if key not in {"diagnostics", "parameters"}} for row in completed_runs])
         st.dataframe(run_df, use_container_width=True, hide_index=True)
@@ -168,8 +179,18 @@ def run(market_code: str = "kr") -> None:
         _render_diagnostics(st, selected_run.get("diagnostics") or {})
         details = pd.DataFrame(service.recommendations_for_run(selected_run_id))
         if not details.empty:
+            name_map = build_name_map(service.conn, profile.code)
+            details["종목코드"] = details["ticker"].map(lambda value: normalize_ticker(value, profile.code))
+            details["종목명"] = details.apply(
+                lambda row: resolve_name(row.get("ticker"), row.get("name"), name_map, profile.code), axis=1
+            )
+            details["종목"] = details.apply(
+                lambda row: display_symbol(row.get("종목명"), row.get("종목코드"), profile.code), axis=1
+            )
             rename = {"final_similarity": "순위점수(주봉)", "weekly_similarity": "주봉 유사도", "sto_similarity": "STO 유사도"}
-            st.dataframe(details.rename(columns=rename), use_container_width=True, hide_index=True)
+            preferred = ["rank_no", "종목", "종목코드", "종목명", "주봉 유사도", "STO 유사도", "decision"]
+            shown = details.rename(columns=rename)
+            st.dataframe(shown[[column for column in preferred if column in shown.columns]], use_container_width=True, hide_index=True)
             st.page_link("pages/14_Recommendation_Workbench.py", label="동일 실행을 통합 추천 워크벤치에서 보기", icon="📊")
         report_path = selected_run.get("report_path")
         if report_path and Path(str(report_path)).exists():

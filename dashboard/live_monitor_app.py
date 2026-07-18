@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import argparse
+import json
+import sqlite3
 from datetime import datetime
+from types import SimpleNamespace
 
 import pandas as pd
 
 from dashboard.data import PaperDashboardData
+from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from monitoring.live_monitor import ADELiveMonitor
-from recommendation.event_recommender import RecentMoneyEventRecommender
+from recommendation.run_context import load_latest_context
 
 
 def run(db_path: str = "datahub/market.db") -> None:
@@ -20,7 +24,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         """
         <div class="live-hero">
           <div><div class="eyebrow">ADE INTRADAY CONTROL</div><h1>추천종목 · 보유종목 실시간 모니터</h1>
-          <p>장 마감 후 생성된 ADE 추천은 유지하고, 장중에는 KIS 현재가로 추천종목과 보유종목만 재평가합니다.</p></div>
+          <p>최신 완료 추천은 그대로 유지하고, 자동 갱신에서는 KIS 현재가만 다시 조회합니다.</p></div>
           <div class="live-badge"><span></span> KIS PAPER MONITOR</div>
         </div>
         """,
@@ -30,30 +34,34 @@ def run(db_path: str = "datahub/market.db") -> None:
     c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
     interval = c1.selectbox("갱신주기", [5, 10, 20, 30, 60], index=1, format_func=lambda x: f"{x}초")
     auto = c2.toggle("자동 갱신", value=True)
-    top_n = c3.number_input("추천 수", min_value=1, max_value=20, value=10, step=1)
-    regenerate = c4.button("추천목록 다시 생성", type="primary")
+    top_n = c3.number_input("모니터 추천 수", min_value=1, max_value=50, value=10, step=1)
+    reload_latest = c4.button("최신 완료 추천 불러오기", type="primary", use_container_width=True)
 
-    if regenerate or "live_recommendations" not in st.session_state:
-        with st.spinner("ADE 추천 및 7일 예측 계산 중..."):
-            engine = RecentMoneyEventRecommender(db_path=db_path)
-            try:
-                st.session_state["live_recommendations"] = engine.recommend(top_n=int(top_n), replay_top_n=5)
-            finally:
-                engine.close()
-
-    recommendations = st.session_state.get("live_recommendations", [])
+    recommendations, run_info, name_map = _load_stored_recommendations(db_path, int(top_n))
+    if reload_latest:
+        st.session_state.pop("live_monitor_first", None)
+        st.rerun()
 
     data = PaperDashboardData(db_path)
     try:
         positions = data.load_positions()
     finally:
         data.close()
+    positions = _normalize_positions(positions, name_map)
+
+    if run_info:
+        st.caption(
+            f"연결 실행 ID: {run_info['run_id']} · 완료 시각: {run_info.get('finished_at') or '-'} · "
+            f"추천 계산은 반복하지 않고 현재가만 갱신합니다."
+        )
+    else:
+        st.warning("저장된 최신 완료 추천 실행이 없습니다. 먼저 통합 추천 워크벤치에서 추천을 생성하세요.")
 
     info1, info2, info3, info4 = st.columns(4)
     info1.metric("추천 모니터", len(recommendations))
     info2.metric("보유 모니터", len(positions))
     info3.metric("가격 소스", "KIS → 로컬 fallback")
-    info4.metric("마지막 화면 갱신", datetime.now().strftime("%H:%M:%S"))
+    info4.metric("화면 진입 시각", datetime.now().strftime("%H:%M:%S"))
 
     def monitor_body() -> None:
         monitor = ADELiveMonitor(db_path=db_path, prefer_kis=True)
@@ -68,6 +76,15 @@ def run(db_path: str = "datahub/market.db") -> None:
             return
 
         frame = pd.DataFrame([row.to_dict() for row in rows])
+        if not frame.empty:
+            frame["ticker"] = frame["ticker"].map(lambda value: normalize_ticker(value, "kr"))
+            frame["name"] = frame.apply(
+                lambda row: resolve_name(row.get("ticker"), row.get("name"), name_map, "kr"), axis=1
+            )
+            frame["symbol"] = frame.apply(
+                lambda row: display_symbol(row.get("name"), row.get("ticker"), "kr"), axis=1
+            )
+
         alerts = int((frame["status"] == "ALERT").sum())
         buy_zones = int((frame["status"] == "BUY ZONE").sum())
         watch = int(frame["status"].isin(["WATCH"]).sum())
@@ -85,13 +102,18 @@ def run(db_path: str = "datahub/market.db") -> None:
         st.markdown("### 실시간 판단표")
         display = frame.rename(
             columns={
-                "kind": "구분", "market": "시장", "ticker": "종목코드", "name": "종목명",
+                "kind": "구분", "market": "시장", "symbol": "종목", "ticker": "종목코드", "name": "종목명",
                 "price": "현재가", "change_rate": "장중등락률", "reference_price": "평균단가",
                 "pnl_rate": "보유수익률", "seven_day_up_probability": "7일상승확률",
                 "seven_day_expected_return": "7일기대수익", "prediction_grade": "예측등급",
                 "status": "상태", "reason": "판단이유", "source": "가격소스", "updated_at": "갱신시각",
             }
         )
+        preferred = [
+            "구분", "시장", "종목", "종목코드", "종목명", "현재가", "장중등락률", "평균단가",
+            "보유수익률", "7일상승확률", "7일기대수익", "예측등급", "상태", "판단이유", "가격소스", "갱신시각",
+        ]
+        display = display[[column for column in preferred if column in display.columns]]
         st.dataframe(
             display,
             use_container_width=True,
@@ -116,6 +138,8 @@ def run(db_path: str = "datahub/market.db") -> None:
             st.markdown("### 보유종목 장중 체크")
             _cards(st, pos_df)
 
+        st.caption(f"현재가 마지막 갱신: {datetime.now().strftime('%H:%M:%S')}")
+
     if auto and hasattr(st, "fragment"):
         @st.fragment(run_every=f"{int(interval)}s")
         def auto_fragment() -> None:
@@ -129,6 +153,56 @@ def run(db_path: str = "datahub/market.db") -> None:
             monitor_body()
 
 
+def _load_stored_recommendations(db_path: str, top_n: int):
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        context = load_latest_context(conn, "kr", limit=top_n)
+        name_map = build_name_map(conn, "kr")
+        if context is None:
+            return [], {}, name_map
+        items = []
+        for row in context.recommendations[:top_n]:
+            code = normalize_ticker(row.get("ticker"), "kr")
+            name = resolve_name(code, row.get("name"), name_map, "kr")
+            prediction = _prediction_from_payload(row.get("payload_json"))
+            items.append(SimpleNamespace(market="kr", ticker=code, name=name, prediction=prediction))
+        return items, {
+            "run_id": context.run_id,
+            "finished_at": context.finished_at,
+            "run_type": context.run_type,
+        }, name_map
+    finally:
+        conn.close()
+
+
+def _prediction_from_payload(raw: object):
+    try:
+        payload = json.loads(str(raw)) if raw else {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    prediction = payload.get("prediction")
+    if not isinstance(prediction, dict):
+        return None
+    return SimpleNamespace(
+        seven_day_up_probability=prediction.get("seven_day_up_probability"),
+        seven_day_expected_return=prediction.get("seven_day_expected_return"),
+        grade=prediction.get("grade"),
+    )
+
+
+def _normalize_positions(frame: pd.DataFrame, name_map: dict[str, str]) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    result = frame.copy()
+    if "ticker" in result.columns:
+        result["ticker"] = result["ticker"].map(lambda value: normalize_ticker(value, "kr"))
+        result["name"] = result.apply(
+            lambda row: resolve_name(row.get("ticker"), row.get("name"), name_map, "kr"), axis=1
+        )
+    return result
+
+
 def _cards(st: object, frame: pd.DataFrame) -> None:
     if frame.empty:
         st.caption("대상 없음")
@@ -138,10 +212,11 @@ def _cards(st: object, frame: pd.DataFrame) -> None:
         css = "alert" if status == "ALERT" else "buy-zone" if status == "BUY ZONE" else "watch" if status == "WATCH" else "normal"
         pnl = row.get("pnl_rate")
         pnl_text = "" if pd.isna(pnl) else f" · 보유 {float(pnl):+.2f}%"
+        symbol = display_symbol(row.get("name"), row.get("ticker"), "kr")
         st.markdown(
             f"""
             <div class="monitor-card {css}">
-              <div><b>{row.get('name') or row['ticker']}</b><small>{str(row['market']).upper()}:{row['ticker']} · {row['source']}</small></div>
+              <div><b>{symbol}</b><small>{str(row['market']).upper()} · {row['source']}</small></div>
               <div class="price">{float(row['price']):,.0f}원 <span>{float(row['change_rate']):+.2f}%{pnl_text}</span></div>
               <div class="reason">{row['reason']}</div>
             </div>

@@ -35,28 +35,20 @@ def run(db_path: str = "datahub/market.db") -> None:
     service = TradingOrderService(db_path)
     try:
         recommendations = service.latest_recommendations(50)
-        st.markdown("### 1. 추천 종목 주문 리스트")
+        st.markdown("### 1. 추천 Watch List")
         if not recommendations:
             st.warning("최신 완료 추천 결과가 없습니다. 먼저 통합 추천 워크벤치에서 추천을 생성하세요.")
         else:
             run_id = str(recommendations[0]["run_id"])
             run_finished = str(recommendations[0].get("run_finished_at") or "-")
             st.caption(
-                f"연결 실행 ID: {run_id} · 완료 시각: {run_finished} · "
-                "최신 실행의 모든 추천 종목을 주문 리스트에 포함합니다."
-            )
-
-            order_list = _order_list_frame(recommendations)
-            st.dataframe(
-                order_list,
-                use_container_width=True,
-                hide_index=True,
-                height=min(700, 42 + len(order_list) * 35),
+                f"추천 완료: {run_finished} · "
+                "왼쪽 목록에서 종목을 선택하면 오른쪽 차트와 분석·주문 화면이 함께 바뀝니다."
             )
 
             labels = [
                 f"#{r['rank_no']} {display_symbol(r.get('name'), r['ticker'], 'kr')} · "
-                f"주봉 {float(r['weekly_similarity']):.2f}% · {_decision_label(str(r['decision']))}"
+                f"{_decision_label(str(r['decision']))}"
                 for r in recommendations
             ]
             selected_from_workbench = normalize_ticker(st.session_state.get("workbench_selected_kr") or "", "kr")
@@ -64,26 +56,47 @@ def run(db_path: str = "datahub/market.db") -> None:
                 (i for i, row in enumerate(recommendations) if normalize_ticker(row["ticker"], "kr") == selected_from_workbench),
                 0,
             )
-            index = st.selectbox(
-                "주문·차트 확인 종목",
-                range(len(recommendations)),
-                index=default_index,
-                format_func=lambda i: labels[i],
-                key="trading_order_selected_kr",
-            )
+
+            watch_column, detail_column = st.columns([1, 3], gap="large")
+            with watch_column:
+                st.markdown("#### 추천 종목")
+                index = st.radio(
+                    "추천 종목 선택",
+                    range(len(recommendations)),
+                    index=default_index,
+                    format_func=lambda i: labels[i],
+                    key="trading_order_selected_kr",
+                    label_visibility="collapsed",
+                )
+                st.caption(f"총 {len(recommendations)}개 추천 종목")
+
             selected = recommendations[index]
             selected_code = normalize_ticker(selected["ticker"], "kr")
             selected_label = display_symbol(selected.get("name"), selected_code, "kr")
             st.session_state["workbench_selected_kr"] = selected_code
 
-            _render_live_chart(st, db_path, selected_code, selected_label)
-            _render_analysis_actions(st, selected, selected_code)
+            with detail_column:
+                _render_selected_summary(st, selected, selected_label)
+                _render_live_chart(st, db_path, selected_code, selected_label)
+                _render_analysis_actions(st, selected, selected_code)
+
+            st.divider()
             _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 
         _render_pending_approval(st, service, recommendations)
         _render_execution_and_history(st, service)
     finally:
         service.close()
+
+
+def _render_selected_summary(st, selected: dict, label: str) -> None:
+    st.markdown(f"### {label}")
+    decision = str(selected.get("decision") or "UNVALIDATED")
+    cols = st.columns(4)
+    cols[0].metric("추천 순위", f"{int(selected.get('rank_no') or 0)}위")
+    cols[1].metric("주봉 유사도", f"{float(selected.get('weekly_similarity') or 0.0):.2f}%")
+    cols[2].metric("STO", f"{float(selected.get('sto_similarity') or 0.0):.2f}%")
+    cols[3].metric("검증 조언", _decision_label(decision))
 
 
 def _order_list_frame(recommendations: list[dict]) -> pd.DataFrame:
@@ -373,8 +386,10 @@ def _style(st) -> None:
         .block-container{max-width:1800px;padding-top:1rem}
         .hero{padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}
         .hero h1{margin:3px 0}.hero p{margin:5px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
+        div[role="radiogroup"]{gap:.35rem}
+        div[role="radiogroup"] label{padding:.55rem .7rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.7)}
         </style>
-        <div class="hero"><div class="eyebrow">ADE · 추천 전 종목 주문 연계</div><h1>한국 주문관리</h1><p>추천 리스트 → 현재 차트 → JP Radar·검증 조언 → 일반 주문 → 사용자 승인 → KIS 전송</p></div>
+        <div class="hero"><div class="eyebrow">ADE · 추천 전 종목 주문 연계</div><h1>한국 주문관리</h1><p>추천 Watch List → 선택 종목 차트·분석 → 일반 주문 → 사용자 승인 → KIS 전송</p></div>
         """,
         unsafe_allow_html=True,
     )

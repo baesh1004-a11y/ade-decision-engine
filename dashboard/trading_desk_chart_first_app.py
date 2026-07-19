@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from broker.kis_market_data import kis_market_data_from_env
 from dashboard.trading_desk_app import (
     _decision_label,
     _render_execution_and_history,
@@ -142,7 +143,7 @@ def _yahoo_candidates(ticker: str) -> list[str]:
     return [f"{code}.KS", f"{code}.KQ"]
 
 
-def _load_live_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
+def _load_fallback_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
     try:
         import yfinance as yf
 
@@ -158,7 +159,7 @@ def _load_live_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
                 )
                 normalized = _normalize_yahoo_frame(frame)
                 if not normalized.empty:
-                    return normalized, f"Yahoo Finance 5분봉 ({yahoo_ticker})"
+                    return normalized, f"Yahoo Finance 5분봉 ({yahoo_ticker}) · KIS 조회 실패 시 대체"
             except Exception:
                 continue
     except ImportError:
@@ -176,16 +177,40 @@ def _load_live_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
                ORDER BY trade_date DESC LIMIT 120""",
             (code, f"{code}.KS", f"{code}.KQ"),
         ).fetchall()
-        return pd.DataFrame([dict(row) for row in reversed(rows)]), "내부 최신 저장 시세"
+        return pd.DataFrame([dict(row) for row in reversed(rows)]), "내부 최신 저장 시세 · KIS 조회 실패 시 대체"
     finally:
         conn.close()
 
 
+def _load_live_market_data(st, db_path: str, ticker: str) -> tuple[pd.DataFrame, dict[str, object], str, str | None]:
+    code = normalize_ticker(ticker, "kr")
+
+    @st.cache_resource(show_spinner=False)
+    def _kis_client():
+        return kis_market_data_from_env()
+
+    try:
+        client = _kis_client()
+        bars = client.get_intraday_bars(code, include_previous=True)
+        quote = client.get_current_quote(code)
+        if not bars.empty:
+            return bars, quote, "한국투자증권 KIS 장중 분봉", None
+        error = "KIS 분봉 응답이 비어 있습니다."
+    except Exception as exc:
+        quote = {}
+        error = str(exc)
+
+    fallback_bars, fallback_source = _load_fallback_bars(db_path, ticker)
+    return fallback_bars, quote, fallback_source, error
+
+
 def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) -> None:
     st.markdown(f"### 현재 차트 · {label}")
-    bars, source = _load_live_bars(db_path, ticker)
+    bars, quote, source, kis_error = _load_live_market_data(st, db_path, ticker)
     if bars.empty:
         st.warning("현재 차트 데이터를 불러오지 못했습니다.")
+        if kis_error:
+            st.caption(f"KIS 조회 오류: {kis_error}")
         return
 
     chart_column, quote_column = st.columns([4, 1], gap="medium")
@@ -197,22 +222,31 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) ->
         )
 
     latest = bars.iloc[-1]
-    previous_close = float(bars.iloc[-2]["Close"]) if len(bars) > 1 else float(latest["Close"])
-    current_price = float(latest["Close"])
-    change = current_price - previous_close
-    change_rate = (change / previous_close * 100.0) if previous_close else 0.0
+    current_price = float(quote.get("current_price") or latest["Close"])
+    change = float(quote.get("change") or 0.0)
+    change_rate = float(quote.get("change_rate") or 0.0)
+    high = float(quote.get("high") or latest["High"])
+    low = float(quote.get("low") or latest["Low"])
+    volume = float(quote.get("volume") or latest.get("Volume") or 0.0)
+    ask_price = float(quote.get("ask_price") or 0.0)
+    bid_price = float(quote.get("bid_price") or 0.0)
 
     with quote_column:
         st.markdown("#### 실시간 시세")
         st.metric("현재가", _format_price(current_price), f"{change:+,.0f}원 ({change_rate:+.2f}%)")
-        st.metric("고가", _format_price(float(latest["High"])))
-        st.metric("저가", _format_price(float(latest["Low"])))
-        st.metric("거래량", f"{float(latest.get('Volume') or 0):,.0f}")
+        st.metric("고가", _format_price(high))
+        st.metric("저가", _format_price(low))
+        st.metric("누적 거래량", f"{volume:,.0f}")
         st.markdown("#### 매수·매도 호가")
-        st.info("실시간 호가 API 미연동")
-        st.caption("호가 데이터가 연결되면 이 영역에 최우선 매도·매수호가를 표시합니다.")
+        if ask_price > 0 or bid_price > 0:
+            st.metric("최우선 매도", _format_price(ask_price) if ask_price > 0 else "미제공")
+            st.metric("최우선 매수", _format_price(bid_price) if bid_price > 0 else "미제공")
+        else:
+            st.info("현재가 응답에 호가가 포함되지 않았습니다.")
 
-    st.caption(f"시세 출처: {source} · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
+    st.caption(f"시세 출처: {source} · 차트와 우측 현재가는 같은 KIS 종목 데이터를 우선 사용합니다.")
+    if kis_error:
+        st.warning(f"KIS 차트 조회 실패로 대체 데이터를 표시했습니다: {kis_error}")
 
 
 def _render_radar_panel(st, selected: dict, ticker: str) -> None:

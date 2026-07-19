@@ -4,7 +4,7 @@ from dataclasses import replace
 from typing import Iterable, Mapping
 
 from meta_score.models import MetaScoreBreakdown, MetaScoreResult
-from meta_score.validation_context import NEUTRAL_VALIDATION_CONTEXT, ValidationContext
+from meta_score.validation_context import EnvironmentAdvisor, NEUTRAL_VALIDATION_CONTEXT, ValidationContext
 
 
 SIGNAL_SCORE = {
@@ -19,11 +19,11 @@ SIGNAL_SCORE = {
 
 
 class MetaScoreEngine:
-    """Apply one user-requested advice result without creating a second ranking score.
+    """Apply one integrated environment-advice result without a second ranking score.
 
-    The pattern similarity produced by Daily Center remains the only ranking
-    score. Overall market, selected sector and stock risk arrive together from
-    EnvironmentAdvisor. This engine only applies those advice inputs.
+    Callers should normally inject ``validation_contexts``. For legacy call sites that
+    omit it, the engine now computes the real market, sector and stock-risk contexts
+    instead of silently using neutral HOLD/HOLD/100 defaults.
     """
 
     def score(
@@ -31,9 +31,18 @@ class MetaScoreEngine:
         recommendations: Iterable[object],
         validation_contexts: Mapping[str, ValidationContext] | None = None,
     ) -> list[MetaScoreResult]:
-        contexts = validation_contexts or {}
+        items = list(recommendations)
+        if validation_contexts is None:
+            advisor = EnvironmentAdvisor()
+            contexts = {
+                str(getattr(item, "ticker", "")): advisor.analyze(item)
+                for item in items
+            }
+        else:
+            contexts = dict(validation_contexts)
+
         results: list[MetaScoreResult] = []
-        for item in recommendations:
+        for item in items:
             market_code = str(getattr(item, "market", "kr")).lower()
             ticker = str(getattr(item, "ticker", ""))
             pattern_score = self._clamp(float(getattr(item, "final_similarity", 0.0) or 0.0))
@@ -56,8 +65,6 @@ class MetaScoreEngine:
                     ticker=ticker,
                     name=getattr(item, "name", None),
                     decision=decision,
-                    # Legacy field: no composite score. It mirrors the original
-                    # recommendation pattern similarity for DB compatibility.
                     meta_score=round(pattern_score, 2),
                     grade=self._grade(pattern_score),
                     breakdown=MetaScoreBreakdown(

@@ -77,8 +77,8 @@ def run(db_path: str = "datahub/market.db") -> None:
 
             with detail_column:
                 _render_selected_summary(st, selected, selected_label)
-                _render_live_chart(st, db_path, selected_code, selected_label)
                 _render_analysis_actions(st, selected, selected_code)
+                _render_live_chart(st, db_path, selected_code, selected_label)
 
             st.divider()
             _render_order_form(st, service, selected, selected_code, selected_label, run_id)
@@ -124,8 +124,6 @@ def _render_live_chart(st, db_path: str, ticker: str, label: str) -> None:
         return
     st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
     st.caption(f"시세 출처: {source} · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
-    if st.button("현재 차트 새로고침", use_container_width=True, key=f"refresh_chart_{ticker}"):
-        st.rerun()
 
 
 def _load_live_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
@@ -178,9 +176,9 @@ def _yahoo_ticker(ticker: str) -> str:
 
 
 def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
-    st.markdown("### 추천 분석 연결")
-    c1, c2 = st.columns(2)
-    if c1.button("JP Radar 확인", use_container_width=True, key=f"jp_radar_{ticker}"):
+    st.markdown("#### 판단 도구")
+    c1, c2, c3 = st.columns(3)
+    if c1.button("JP Radar", use_container_width=True, key=f"jp_radar_{ticker}"):
         recommendation = SimpleNamespace(
             market="kr",
             ticker=ticker,
@@ -191,8 +189,11 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
         context = EnvironmentAdvisor().analyze(recommendation)
         st.session_state[f"jp_radar_result_{ticker}"] = context
 
-    if c2.button("추천종목 검증 조언 확인", use_container_width=True, key=f"validation_{ticker}"):
+    if c2.button("추천 검증", use_container_width=True, key=f"validation_{ticker}"):
         st.session_state[f"validation_open_{ticker}"] = True
+
+    if c3.button("차트 새로고침", use_container_width=True, key=f"refresh_chart_{ticker}"):
+        st.rerun()
 
     radar = st.session_state.get(f"jp_radar_result_{ticker}")
     if radar is not None:
@@ -389,7 +390,7 @@ def _style(st) -> None:
         div[role="radiogroup"]{gap:.35rem}
         div[role="radiogroup"] label{padding:.55rem .7rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.7)}
         </style>
-        <div class="hero"><div class="eyebrow">ADE · 추천 전 종목 주문 연계</div><h1>한국 주문관리</h1><p>추천 Watch List → 선택 종목 차트·분석 → 일반 주문 → 사용자 승인 → KIS 전송</p></div>
+        <div class="hero"><div class="eyebrow">ADE · 추천 전 종목 주문 연계</div><h1>한국 주문관리</h1><p>추천 Watch List → 선택 종목 판단 도구·차트 → 일반 주문 → 사용자 승인 → KIS 전송</p></div>
         """,
         unsafe_allow_html=True,
     )

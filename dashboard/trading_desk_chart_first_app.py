@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 from dashboard.trading_desk_app import (
-    _ai_confidence,
     _decision_label,
     _load_live_bars,
-    _render_ai_confidence_card,
-    _render_analysis_actions,
     _render_execution_and_history,
     _render_order_form,
     _render_pending_approval,
@@ -18,6 +16,7 @@ from dashboard.trading_desk_app import (
 )
 from dashboard.charts import CHART_CONFIG, build_trading_chart
 from markets.symbol_display import display_symbol, normalize_ticker
+from meta_score.validation_context import EnvironmentAdvisor
 from trading.order_service import TradingOrderService
 
 
@@ -89,8 +88,6 @@ def _render_market_status(st) -> None:
 
 
 def _watch_hover_text(st, row: dict, ticker: str) -> str:
-    radar = st.session_state.get(f"jp_radar_result_{ticker}")
-    score, level, _, _, _ = _ai_confidence(row, radar)
     decision = _decision_label(str(row.get("decision") or "UNVALIDATED"))
     weekly = float(row.get("weekly_similarity") or 0.0)
     sto = float(row.get("sto_similarity") or 0.0)
@@ -108,6 +105,7 @@ def _watch_hover_text(st, row: dict, ticker: str) -> str:
     except (TypeError, ValueError):
         price_text = "차트 선택 후 확인"
 
+    radar = st.session_state.get(f"jp_radar_result_{ticker}")
     if radar is None:
         radar_text = "미실행"
     else:
@@ -117,7 +115,6 @@ def _watch_hover_text(st, row: dict, ticker: str) -> str:
 
     return (
         f"현재가: {price_text}\n"
-        f"AI 신뢰도: {score}점 ({level})\n"
         f"추천 등급: {decision}\n"
         f"주봉 유사도: {weekly:.1f}%\n"
         f"STO 유사도: {sto:.1f}%\n"
@@ -157,6 +154,70 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) ->
         st.caption("호가 데이터가 연결되면 이 영역에 최우선 매도·매수호가를 표시합니다.")
 
     st.caption(f"시세 출처: {source} · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
+
+
+def _render_radar_panel(st, selected: dict, ticker: str) -> None:
+    st.markdown("#### JP Radar")
+    if st.button("JP Radar 실행", use_container_width=True, key=f"jp_radar_tab_{ticker}"):
+        recommendation = SimpleNamespace(
+            market="kr",
+            ticker=ticker,
+            name=selected.get("name"),
+            prediction=None,
+            matched_max_drawdown=float(selected.get("matched_max_drawdown") or 0.0),
+        )
+        st.session_state[f"jp_radar_result_{ticker}"] = EnvironmentAdvisor().analyze(recommendation)
+        st.rerun()
+
+    radar = st.session_state.get(f"jp_radar_result_{ticker}")
+    if radar is None:
+        st.info("JP Radar를 실행하면 전체 시장과 해당 업종의 환경 신호를 표시합니다.")
+        return
+
+    a, b = st.columns(2)
+    a.metric("전체 시장", str(getattr(radar, "market_signal", "-") or "-"))
+    b.metric("해당 업종", str(getattr(radar, "sector_signal", "-") or "-"))
+
+
+def _environment_label(value) -> str:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return "미확인"
+    if score >= 70:
+        return "양호"
+    if score >= 45:
+        return "중립"
+    return "주의"
+
+
+def _risk_level(value) -> str:
+    try:
+        score = float(value)
+    except (TypeError, ValueError):
+        return "미확인"
+    if score >= 70:
+        return "높음"
+    if score >= 45:
+        return "보통"
+    return "낮음"
+
+
+def _render_validation_panel(st, selected: dict) -> None:
+    decision = str(selected.get("decision") or "UNVALIDATED")
+    st.markdown("#### 추천 검증")
+    st.metric("검증 결과", _decision_label(decision))
+
+    cols = st.columns(3)
+    cols[0].metric("전체 시장 환경", _environment_label(selected.get("market_score")))
+    cols[1].metric("해당 업종 환경", _environment_label(selected.get("sector_score")))
+    cols[2].metric("종목 위험", _risk_level(selected.get("risk_score")))
+
+    if decision == "UNVALIDATED":
+        st.info("아직 저장된 검증 결과가 없습니다. 통합 추천 워크벤치에서 환경 검증을 실행하세요.")
+        st.page_link("pages/2_Meta_Score.py", label="추천 검증 화면 열기", icon="✅", use_container_width=True)
+    else:
+        st.caption("숫자 점수 대신 저장된 검증 결과와 정성적 환경 수준만 표시합니다.")
 
 
 def run(db_path: str = "datahub/market.db") -> None:
@@ -242,16 +303,11 @@ def run(db_path: str = "datahub/market.db") -> None:
             _render_selected_summary(st, selected, selected_label)
             _render_chart_with_quote_panel(st, db_path, selected_code, selected_label)
 
-            ai_tab, radar_tab, validation_tab, order_tab = st.tabs(
-                ["AI 신뢰도", "JP Radar", "추천 검증", "주문"]
-            )
-            with ai_tab:
-                _render_ai_confidence_card(st, selected, selected_code)
+            radar_tab, validation_tab, order_tab = st.tabs(["JP Radar", "추천 검증", "주문"])
             with radar_tab:
-                _render_analysis_actions(st, selected, selected_code)
+                _render_radar_panel(st, selected, selected_code)
             with validation_tab:
-                st.session_state[f"validation_open_{selected_code}"] = True
-                _render_analysis_actions(st, selected, selected_code)
+                _render_validation_panel(st, selected)
             with order_tab:
                 _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 

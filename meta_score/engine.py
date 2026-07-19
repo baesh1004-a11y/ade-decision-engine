@@ -19,11 +19,11 @@ SIGNAL_SCORE = {
 
 
 class MetaScoreEngine:
-    """Recommendation validation layer without a second composite score.
+    """Apply one user-requested advice result without creating a second ranking score.
 
     The pattern similarity produced by Daily Center remains the only ranking
-    score. Market and sector signals arrive together as one external environment
-    advice context. This engine does not execute JP Radar itself.
+    score. Overall market, selected sector and stock risk arrive together from
+    EnvironmentAdvisor. This engine only applies those advice inputs.
     """
 
     def score(
@@ -37,11 +37,11 @@ class MetaScoreEngine:
             market_code = str(getattr(item, "market", "kr")).lower()
             ticker = str(getattr(item, "ticker", ""))
             pattern_score = self._clamp(float(getattr(item, "final_similarity", 0.0) or 0.0))
-            risk_score = self._risk_score(item)
 
             context = contexts.get(ticker, NEUTRAL_VALIDATION_CONTEXT)
             market_signal = self._normalize_signal(context.market_signal)
             sector_signal = self._normalize_signal(context.sector_signal)
+            risk_score = self._clamp(float(context.risk_score))
             market_score = SIGNAL_SCORE[market_signal]
             sector_score = SIGNAL_SCORE[sector_signal]
             radar_score = round((market_score + sector_score) / 2.0, 2)
@@ -84,18 +84,6 @@ class MetaScoreEngine:
         return [replace(item, rank=index) for index, item in enumerate(ranked, start=1)]
 
     @staticmethod
-    def _risk_score(item: object) -> float:
-        prediction = getattr(item, "prediction", None)
-        if prediction is not None:
-            mdd = float(getattr(prediction, "expected_mdd_7d", 0.0) or 0.0)
-            stop = float(getattr(prediction, "stop_return", 0.0) or 0.0)
-        else:
-            mdd = float(getattr(item, "matched_max_drawdown", 0.0) or 0.0)
-            stop = 0.0
-        penalty = abs(min(0.0, mdd)) * 4.0 + abs(min(0.0, stop)) * 2.0
-        return max(0.0, min(100.0, 100.0 - penalty))
-
-    @staticmethod
     def _decision(pattern: float, market: str, sector: str, risk: float) -> str:
         blocked = {"SELL", "STRONG SELL"}
         if pattern >= 90 and market not in blocked and sector not in blocked and risk >= 60:
@@ -122,9 +110,8 @@ class MetaScoreEngine:
     def _reasons(pattern: float, market: str, sector: str, risk: float, decision: str) -> list[str]:
         return [
             f"급등직전 패턴 유사도 {pattern:.2f}% — 추천 순위의 유일한 점수",
-            f"시장·업종 환경 조언 — 전체 시장 {market}, 해당 업종 {sector}",
-            f"위험 상태 {'PASS' if risk >= 60 else '주의'} ({risk:.0f})",
-            f"검증 결과 {decision} — 별도 종합점수는 계산하지 않음",
+            f"통합 환경 조언 — 전체 시장 {market}, 해당 업종 {sector}, 종목 위험 {risk:.0f}",
+            f"조언 결과 {decision} — 별도 종합점수는 계산하지 않음",
         ]
 
     @staticmethod

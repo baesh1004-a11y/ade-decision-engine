@@ -11,3 +11,4 @@ yfinance
 tqdm
 requests
 python-dotenv
+websocket-client

@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Iterable
+from typing import Iterable, Mapping
 
-from jp_radar.engine import JPRadarEngine
 from meta_score.models import MetaScoreBreakdown, MetaScoreResult
+from meta_score.validation_context import NEUTRAL_VALIDATION_CONTEXT, ValidationContext
 
 
 SIGNAL_SCORE = {
@@ -22,34 +22,28 @@ class MetaScoreEngine:
     """Recommendation validation layer without a second composite score.
 
     The pattern similarity produced by Daily Center remains the only ranking
-    score. Market, sector and risk are independent validation gates and never
-    recalculate or dilute that score.
+    score. Market and sector analysis are separate stages. This engine only
+    consumes their final signals together with the recommendation risk input.
     """
 
-    def __init__(self) -> None:
-        self.radar_engine = JPRadarEngine()
-        self._radar_cache: dict[str, object] = {}
-
-    def score(self, recommendations: Iterable[object]) -> list[MetaScoreResult]:
+    def score(
+        self,
+        recommendations: Iterable[object],
+        validation_contexts: Mapping[str, ValidationContext] | None = None,
+    ) -> list[MetaScoreResult]:
+        contexts = validation_contexts or {}
         results: list[MetaScoreResult] = []
         for item in recommendations:
             market_code = str(getattr(item, "market", "kr")).lower()
+            ticker = str(getattr(item, "ticker", ""))
             pattern_score = self._clamp(float(getattr(item, "final_similarity", 0.0) or 0.0))
             risk_score = self._risk_score(item)
 
-            market_sector = self._market_sector(market_code, str(getattr(item, "ticker", "")))
-            market_radar = self._radar(market_sector)
-            market_signal = getattr(market_radar, "combined_signal", "HOLD") if market_radar else "HOLD"
-            market_score = SIGNAL_SCORE.get(market_signal, 60.0)
-
-            sector_code = self._sector_code(
-                str(getattr(item, "ticker", "")),
-                str(getattr(item, "name", "") or ""),
-                market_sector,
-            )
-            sector_radar = self._radar(sector_code)
-            sector_signal = getattr(sector_radar, "combined_signal", market_signal) if sector_radar else market_signal
-            sector_score = SIGNAL_SCORE.get(sector_signal, market_score)
+            context = contexts.get(ticker, NEUTRAL_VALIDATION_CONTEXT)
+            market_signal = self._normalize_signal(context.market_signal)
+            sector_signal = self._normalize_signal(context.sector_signal)
+            market_score = SIGNAL_SCORE[market_signal]
+            sector_score = SIGNAL_SCORE[sector_signal]
             radar_score = round((market_score + sector_score) / 2.0, 2)
             decision = self._decision(pattern_score, market_signal, sector_signal, risk_score)
 
@@ -59,7 +53,7 @@ class MetaScoreEngine:
                 MetaScoreResult(
                     rank=0,
                     market_code=market_code,
-                    ticker=str(getattr(item, "ticker", "")),
+                    ticker=ticker,
                     name=getattr(item, "name", None),
                     decision=decision,
                     # Legacy field: no composite score. It mirrors the original
@@ -88,16 +82,6 @@ class MetaScoreEngine:
 
         ranked = sorted(results, key=lambda x: (x.breakdown.replay, x.breakdown.risk), reverse=True)
         return [replace(item, rank=index) for index, item in enumerate(ranked, start=1)]
-
-    def _radar(self, sector_code: str):
-        if sector_code in self._radar_cache:
-            return self._radar_cache[sector_code]
-        try:
-            result = self.radar_engine.analyze(sector_code, refresh=False)
-        except Exception:
-            result = None
-        self._radar_cache[sector_code] = result
-        return result
 
     @staticmethod
     def _risk_score(item: object) -> float:
@@ -138,27 +122,16 @@ class MetaScoreEngine:
     def _reasons(pattern: float, market: str, sector: str, risk: float, decision: str) -> list[str]:
         return [
             f"급등직전 패턴 유사도 {pattern:.2f}% — 추천 순위의 유일한 점수",
-            f"시장 상태 {market} — 독립 검증 항목",
-            f"업종 상태 {sector} — 독립 검증 항목",
+            f"시장 상태 {market} — 외부 시장 분석 결과",
+            f"업종 상태 {sector} — 외부 업종 분석 결과",
             f"위험 상태 {'PASS' if risk >= 60 else '주의'} ({risk:.0f})",
             f"검증 결과 {decision} — 별도 종합점수는 계산하지 않음",
         ]
 
     @staticmethod
-    def _market_sector(market_code: str, ticker: str) -> str:
-        if market_code in {"us", "usa", "nasdaq", "nyse"}:
-            return "nasdaq30"
-        if ticker.endswith(".KQ"):
-            return "kosdaq50"
-        return "kospi50"
-
-    @staticmethod
-    def _sector_code(ticker: str, name: str, default_market: str) -> str:
-        if any(keyword in name for keyword in ("조선", "해양", "중공업")):
-            return "ship"
-        if any(keyword in name for keyword in ("바이오", "제약", "셀트리온", "에이비엘", "알테오젠")):
-            return "bio"
-        return default_market
+    def _normalize_signal(value: str) -> str:
+        signal = str(value or "HOLD").upper().strip()
+        return signal if signal in SIGNAL_SCORE else "HOLD"
 
     @staticmethod
     def _clamp(value: float) -> float:

@@ -80,6 +80,7 @@ def run(db_path: str = "datahub/market.db") -> None:
 
             with detail_column:
                 _render_selected_summary(st, selected, selected_label)
+                _render_ai_confidence_card(st, selected, selected_code)
                 _render_analysis_actions(st, selected, selected_code)
                 _render_live_chart(st, db_path, selected_code, selected_label)
 
@@ -143,6 +144,106 @@ def _render_selected_summary(st, selected: dict, label: str) -> None:
     cols[1].metric("주봉 유사도", f"{float(selected.get('weekly_similarity') or 0.0):.2f}%")
     cols[2].metric("STO", f"{float(selected.get('sto_similarity') or 0.0):.2f}%")
     cols[3].metric("검증 조언", _decision_label(decision))
+
+
+def _render_ai_confidence_card(st, selected: dict, ticker: str) -> None:
+    score, level, tone, opinion, factors = _ai_confidence(selected, st.session_state.get(f"jp_radar_result_{ticker}"))
+    rows = "".join(
+        f'<div class="confidence-row"><span>{label}</span><strong>{value}</strong><span class="signal {signal}">●</span></div>'
+        for label, value, signal in factors
+    )
+    st.markdown(
+        f"""
+        <div class="confidence-card {tone}">
+          <div class="confidence-head">
+            <div>
+              <div class="confidence-eyebrow">AI 종합 판단 보조</div>
+              <div class="confidence-title">{_confidence_icon(tone)} AI 신뢰도 · {level}</div>
+            </div>
+            <div class="confidence-score">{score}<span>점</span></div>
+          </div>
+          <div class="confidence-grid">{rows}</div>
+          <div class="confidence-opinion"><strong>AI 종합 의견</strong><br>{opinion}</div>
+          <div class="confidence-note">기존 추천·검증 데이터를 요약한 참고 지표이며 투자 판단이나 주문 승인을 대신하지 않습니다.</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _ai_confidence(selected: dict, radar) -> tuple[int, str, str, str, list[tuple[str, str, str]]]:
+    weekly = _clamp_score(selected.get("weekly_similarity"))
+    sto = _clamp_score(selected.get("sto_similarity"))
+    market = _clamp_score(selected.get("market_score"), default=50.0)
+    sector = _clamp_score(selected.get("sector_score"), default=50.0)
+    risk = _clamp_score(selected.get("risk_score"), default=50.0)
+
+    radar_score = 50.0
+    radar_label = "미확인"
+    if radar is not None:
+        market_signal = str(getattr(radar, "market_signal", "") or "")
+        sector_signal = str(getattr(radar, "sector_signal", "") or "")
+        radar_text = f"{market_signal} {sector_signal}".lower()
+        if any(token in radar_text for token in ("강세", "positive", "bull", "양호")):
+            radar_score, radar_label = 80.0, "강세"
+        elif any(token in radar_text for token in ("약세", "negative", "bear", "주의")):
+            radar_score, radar_label = 30.0, "약세"
+        else:
+            radar_score, radar_label = 55.0, "중립"
+
+    score = round(
+        weekly * 0.28
+        + sto * 0.22
+        + market * 0.16
+        + sector * 0.14
+        + risk * 0.15
+        + radar_score * 0.05
+    )
+
+    decision = str(selected.get("decision") or "UNVALIDATED")
+    if decision == "FINAL BUY":
+        score = min(100, score + 5)
+    elif decision in {"HOLD", "PASS"}:
+        score = max(0, score - 10)
+    elif decision == "UNVALIDATED":
+        score = min(score, 69)
+
+    if score >= 80:
+        level, tone = "매우 높음", "high"
+        opinion = "현재 데이터는 적극적인 매수 검토가 가능한 구간을 가리킵니다. 주문 전 차트와 검증 조언을 함께 확인하세요."
+    elif score >= 65:
+        level, tone = "높음", "good"
+        opinion = "긍정 신호가 우세하지만 일부 조건 확인이 필요합니다. 분할 접근과 위험 기준 확인이 적절합니다."
+    elif score >= 45:
+        level, tone = "보통", "neutral"
+        opinion = "신호가 혼재되어 있습니다. 추가 검증 전에는 관찰 중심 접근이 적절합니다."
+    else:
+        level, tone = "낮음", "low"
+        opinion = "위험 또는 약한 신호가 우세합니다. 현재는 관망과 재검증을 우선하는 편이 안전합니다."
+
+    factors = [
+        ("주봉 유사도", f"{weekly:.0f}%", _signal_class(weekly)),
+        ("STO", f"{sto:.0f}%", _signal_class(sto)),
+        ("JP Radar", radar_label, _signal_class(radar_score)),
+        ("시장·업종", f"{(market + sector) / 2:.0f}점", _signal_class((market + sector) / 2)),
+        ("리스크", _risk_label(risk), _signal_class(risk)),
+    ]
+    return score, level, tone, opinion, factors
+
+
+def _clamp_score(value, default: float = 0.0) -> float:
+    try:
+        return max(0.0, min(100.0, float(value)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _signal_class(score: float) -> str:
+    return "high" if score >= 70 else "mid" if score >= 45 else "low"
+
+
+def _confidence_icon(tone: str) -> str:
+    return {"high": "🟢", "good": "🔵", "neutral": "🟠", "low": "🔴"}.get(tone, "⚪")
 
 
 def _render_live_chart(st, db_path: str, ticker: str, label: str) -> None:
@@ -214,6 +315,7 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
             matched_max_drawdown=float(selected.get("matched_max_drawdown") or 0.0),
         )
         st.session_state[f"jp_radar_result_{ticker}"] = EnvironmentAdvisor().analyze(recommendation)
+        st.rerun()
 
     if c2.button("추천 검증", use_container_width=True, key=f"validation_{ticker}"):
         st.session_state[f"validation_open_{ticker}"] = True
@@ -458,6 +560,17 @@ def _style(st) -> None:
         .status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}
         .status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}
         .status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
+        .confidence-card{margin:12px 0 16px;padding:17px 19px;border-radius:18px;background:rgba(255,255,255,.9);border:1px solid rgba(72,145,210,.24);box-shadow:0 10px 28px rgba(64,106,147,.09)}
+        .confidence-card.high{border-left:6px solid #26a269}.confidence-card.good{border-left:6px solid #3479b9}.confidence-card.neutral{border-left:6px solid #d28b26}.confidence-card.low{border-left:6px solid #c43d36}
+        .confidence-head{display:flex;align-items:center;justify-content:space-between;gap:18px}
+        .confidence-eyebrow{font-size:.76rem;font-weight:800;letter-spacing:.09em;color:#6a8095;text-transform:uppercase}
+        .confidence-title{margin-top:2px;font-size:1.16rem;font-weight:800;color:#17324d}
+        .confidence-score{font-size:2rem;font-weight:850;line-height:1;color:#17324d}.confidence-score span{font-size:.85rem;margin-left:2px;color:#6d8194}
+        .confidence-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:14px 0 10px}
+        .confidence-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px;padding:9px 10px;border-radius:11px;background:#f5f9fc;font-size:.84rem;color:#5b7186}
+        .confidence-row strong{color:#203a54}.signal.high{color:#26a269}.signal.mid{color:#d28b26}.signal.low{color:#c43d36}
+        .confidence-opinion{padding:11px 13px;border-radius:12px;background:#eef6fc;color:#314d67;line-height:1.5}
+        .confidence-note{margin-top:7px;font-size:.75rem;color:#7d8fa0}
         .order-summary{margin:14px 0 10px;padding:16px 18px;border-radius:16px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.24);box-shadow:0 8px 24px rgba(64,106,147,.08)}
         .order-summary-label{font-size:.78rem;font-weight:800;letter-spacing:.08em;color:#3479b9;text-transform:uppercase;margin-bottom:5px}
         .order-summary-main{font-size:1.08rem;font-weight:760;color:#17324d}
@@ -465,6 +578,7 @@ def _style(st) -> None:
         div[role="radiogroup"]{gap:.45rem}
         div[role="radiogroup"] label{padding:.68rem .75rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.72);line-height:1.35}
         div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}
+        @media(max-width:1100px){.confidence-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:900px){.status-hero{align-items:flex-start;flex-direction:column}.status-cluster{justify-content:flex-start}}
         </style>
         """,

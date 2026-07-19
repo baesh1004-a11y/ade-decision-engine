@@ -46,11 +46,7 @@ def run(db_path: str = "datahub/market.db") -> None:
                 "왼쪽 목록에서 종목을 선택하면 오른쪽 차트와 분석·주문 화면이 함께 바뀝니다."
             )
 
-            labels = [
-                f"#{r['rank_no']} {display_symbol(r.get('name'), r['ticker'], 'kr')} · "
-                f"{_decision_label(str(r['decision']))}"
-                for r in recommendations
-            ]
+            labels = [_watch_label(row) for row in recommendations]
             selected_from_workbench = normalize_ticker(st.session_state.get("workbench_selected_kr") or "", "kr")
             default_index = next(
                 (i for i, row in enumerate(recommendations) if normalize_ticker(row["ticker"], "kr") == selected_from_workbench),
@@ -68,6 +64,7 @@ def run(db_path: str = "datahub/market.db") -> None:
                     key="trading_order_selected_kr",
                     label_visibility="collapsed",
                 )
+                st.caption("● 매수 검토  ● 관찰  ● 보류  ● 제외  ● 미검증")
                 st.caption(f"총 {len(recommendations)}개 추천 종목")
 
             selected = recommendations[index]
@@ -87,6 +84,19 @@ def run(db_path: str = "datahub/market.db") -> None:
         _render_execution_and_history(st, service)
     finally:
         service.close()
+
+
+def _watch_label(row: dict) -> str:
+    decision = str(row.get("decision") or "UNVALIDATED")
+    marker = _decision_marker(decision)
+    name = display_symbol(row.get("name"), row.get("ticker"), "kr")
+    rank = int(row.get("rank_no") or 0)
+    weekly = float(row.get("weekly_similarity") or 0.0)
+    sto = float(row.get("sto_similarity") or 0.0)
+    return (
+        f"{marker} #{rank} {name} · {_decision_label(decision)}\n"
+        f"주봉 {weekly:.1f}%  ·  STO {sto:.1f}%"
+    )
 
 
 def _render_selected_summary(st, selected: dict, label: str) -> None:
@@ -355,6 +365,16 @@ def _render_execution_and_history(st, service) -> None:
     st.caption("손절·익절 감시는 자동 매도를 직접 전송하지 않고 승인 대기 매도요청만 생성합니다.")
 
 
+def _decision_marker(value: str) -> str:
+    return {
+        "FINAL BUY": "🟢",
+        "BUY WATCH": "🔵",
+        "HOLD": "🟠",
+        "PASS": "⚪",
+        "UNVALIDATED": "◽",
+    }.get(value, "◽")
+
+
 def _decision_label(value: str) -> str:
     return {
         "FINAL BUY": "매수 검토",
@@ -387,8 +407,9 @@ def _style(st) -> None:
         .block-container{max-width:1800px;padding-top:1rem}
         .hero{padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}
         .hero h1{margin:3px 0}.hero p{margin:5px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
-        div[role="radiogroup"]{gap:.35rem}
-        div[role="radiogroup"] label{padding:.55rem .7rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.7)}
+        div[role="radiogroup"]{gap:.45rem}
+        div[role="radiogroup"] label{padding:.68rem .75rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.72);line-height:1.35}
+        div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}
         </style>
         <div class="hero"><div class="eyebrow">ADE · 추천 전 종목 주문 연계</div><h1>한국 주문관리</h1><p>추천 Watch List → 선택 종목 판단 도구·차트 → 일반 주문 → 사용자 승인 → KIS 전송</p></div>
         """,

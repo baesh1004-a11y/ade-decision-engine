@@ -22,8 +22,8 @@ class MetaScoreEngine:
     """Recommendation validation layer without a second composite score.
 
     The pattern similarity produced by Daily Center remains the only ranking
-    score. Market and sector analysis are separate stages. This engine only
-    consumes their final signals together with the recommendation risk input.
+    score. Market and sector signals arrive together as one external environment
+    advice context. This engine does not execute JP Radar itself.
     """
 
     def score(
@@ -122,8 +122,7 @@ class MetaScoreEngine:
     def _reasons(pattern: float, market: str, sector: str, risk: float, decision: str) -> list[str]:
         return [
             f"급등직전 패턴 유사도 {pattern:.2f}% — 추천 순위의 유일한 점수",
-            f"시장 상태 {market} — 외부 시장 분석 결과",
-            f"업종 상태 {sector} — 외부 업종 분석 결과",
+            f"시장·업종 환경 조언 — 전체 시장 {market}, 해당 업종 {sector}",
             f"위험 상태 {'PASS' if risk >= 60 else '주의'} ({risk:.0f})",
             f"검증 결과 {decision} — 별도 종합점수는 계산하지 않음",
         ]

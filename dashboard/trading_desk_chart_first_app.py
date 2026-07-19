@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 from types import SimpleNamespace
+
+import pandas as pd
 
 from dashboard.trading_desk_app import (
     _decision_label,
-    _load_live_bars,
     _render_execution_and_history,
     _render_order_form,
     _render_pending_approval,
@@ -47,10 +49,7 @@ def _load_market_snapshot(st) -> dict[str, dict[str, object]]:
                 current = float(closes.iloc[-1])
                 previous = float(closes.iloc[-2]) if len(closes) > 1 else current
                 change_rate = ((current - previous) / previous * 100.0) if previous else 0.0
-                result[label] = {
-                    "value": current,
-                    "change_rate": change_rate,
-                }
+                result[label] = {"value": current, "change_rate": change_rate}
             except Exception:
                 continue
         return result
@@ -78,7 +77,6 @@ def _render_market_status(st) -> None:
             if data is None:
                 st.metric(title, "미연동")
                 continue
-
             value = float(data["value"])
             change_rate = float(data["change_rate"])
             value_text = f"{value:,.2f}" if title != "USD/KRW" else f"{value:,.1f}원"
@@ -120,6 +118,67 @@ def _watch_hover_text(st, row: dict, ticker: str) -> str:
         f"STO 유사도: {sto:.1f}%\n"
         f"JP Radar: {radar_text}"
     )
+
+
+def _normalize_yahoo_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    if isinstance(frame.columns, pd.MultiIndex):
+        frame.columns = frame.columns.get_level_values(0)
+    frame = frame.reset_index()
+    date_column = "Datetime" if "Datetime" in frame.columns else "Date"
+    frame = frame.rename(columns={date_column: "Date"})
+    keep = [c for c in ["Date", "Open", "High", "Low", "Close", "Volume"] if c in frame.columns]
+    return frame[keep].dropna(subset=["Close"])
+
+
+def _yahoo_candidates(ticker: str) -> list[str]:
+    raw = str(ticker).strip().upper()
+    code = normalize_ticker(raw, "kr")
+    if raw.endswith(".KQ"):
+        return [f"{code}.KQ"]
+    if raw.endswith(".KS"):
+        return [f"{code}.KS"]
+    return [f"{code}.KS", f"{code}.KQ"]
+
+
+def _load_live_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
+    try:
+        import yfinance as yf
+
+        for yahoo_ticker in _yahoo_candidates(ticker):
+            try:
+                frame = yf.download(
+                    yahoo_ticker,
+                    period="5d",
+                    interval="5m",
+                    auto_adjust=False,
+                    progress=False,
+                    threads=False,
+                )
+                normalized = _normalize_yahoo_frame(frame)
+                if not normalized.empty:
+                    return normalized, f"Yahoo Finance 5분봉 ({yahoo_ticker})"
+            except Exception:
+                continue
+    except ImportError:
+        pass
+
+    code = normalize_ticker(ticker, "kr")
+    conn = sqlite3.connect(db_path, timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            """SELECT trade_date AS Date, open AS Open, high AS High, low AS Low,
+                      close AS Close, volume AS Volume
+               FROM price_bars
+               WHERE market='kr' AND ticker IN (?, ?, ?)
+               ORDER BY trade_date DESC LIMIT 120""",
+            (code, f"{code}.KS", f"{code}.KQ"),
+        ).fetchall()
+        return pd.DataFrame([dict(row) for row in reversed(rows)]), "내부 최신 저장 시세"
+    finally:
+        conn.close()
 
 
 def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) -> None:
@@ -301,7 +360,7 @@ def run(db_path: str = "datahub/market.db") -> None:
 
         with detail_column:
             _render_selected_summary(st, selected, selected_label)
-            _render_chart_with_quote_panel(st, db_path, selected_code, selected_label)
+            _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
 
             radar_tab, validation_tab, order_tab = st.tabs(["JP Radar", "추천 검증", "주문"])
             with radar_tab:

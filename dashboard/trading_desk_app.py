@@ -20,21 +20,23 @@ def run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
 
     st.set_page_config(page_title="ADE 한국 주문관리", page_icon="💳", layout="wide")
-    _style(st)
 
     env = os.getenv("KIS_ENV", "paper").lower()
     live_enabled = os.getenv("KIS_LIVE_ORDER_ENABLED", "NO").upper() == "YES"
-    if env == "live":
-        if live_enabled:
-            st.error("실전 주문 모드가 활성화되어 있습니다. 승인 문구를 입력하면 실제 주문이 전송됩니다.")
-        else:
-            st.warning("KIS_ENV=live이지만 실전 주문은 잠겨 있습니다. KIS_LIVE_ORDER_ENABLED=YES일 때만 전송됩니다.")
-    else:
-        st.info("현재 KIS 모의투자 주문 모드입니다.")
-
     service = TradingOrderService(db_path)
     try:
         recommendations = service.latest_recommendations(50)
+        requests = service.pending_requests(100)
+        current_run_id = str(recommendations[0]["run_id"]) if recommendations else ""
+        pending_count = sum(
+            1
+            for row in requests
+            if row["status"] == "PENDING_APPROVAL"
+            and (not current_run_id or str(row.get("source_run_id") or "") == current_run_id)
+        )
+        _style(st)
+        _render_status_header(st, env, live_enabled, len(recommendations), pending_count)
+
         st.markdown("### 1. 추천 Watch List")
         if not recommendations:
             st.warning("최신 완료 추천 결과가 없습니다. 먼저 통합 추천 워크벤치에서 추천을 생성하세요.")
@@ -49,7 +51,11 @@ def run(db_path: str = "datahub/market.db") -> None:
             labels = [_watch_label(row) for row in recommendations]
             selected_from_workbench = normalize_ticker(st.session_state.get("workbench_selected_kr") or "", "kr")
             default_index = next(
-                (i for i, row in enumerate(recommendations) if normalize_ticker(row["ticker"], "kr") == selected_from_workbench),
+                (
+                    i
+                    for i, row in enumerate(recommendations)
+                    if normalize_ticker(row["ticker"], "kr") == selected_from_workbench
+                ),
                 0,
             )
 
@@ -86,6 +92,36 @@ def run(db_path: str = "datahub/market.db") -> None:
         service.close()
 
 
+def _render_status_header(st, env: str, live_enabled: bool, recommendation_count: int, pending_count: int) -> None:
+    if env == "live" and live_enabled:
+        mode_label = "실전주문 활성"
+        mode_class = "danger"
+    elif env == "live":
+        mode_label = "실전환경 · 주문 잠금"
+        mode_class = "warning"
+    else:
+        mode_label = "모의투자"
+        mode_class = "safe"
+
+    st.markdown(
+        f"""
+        <div class="status-hero">
+          <div>
+            <div class="eyebrow">ADE · 추천 전 종목 주문 연계</div>
+            <h1>한국 주문관리</h1>
+            <p>추천 Watch List → 선택 종목 판단 도구·차트 → 일반 주문 → 사용자 승인 → KIS 전송</p>
+          </div>
+          <div class="status-cluster">
+            <span class="status-badge {mode_class}">● {mode_label}</span>
+            <span class="status-badge neutral">추천 {recommendation_count}종목</span>
+            <span class="status-badge neutral">승인 대기 {pending_count}건</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _watch_label(row: dict) -> str:
     decision = str(row.get("decision") or "UNVALIDATED")
     marker = _decision_marker(decision)
@@ -107,23 +143,6 @@ def _render_selected_summary(st, selected: dict, label: str) -> None:
     cols[1].metric("주봉 유사도", f"{float(selected.get('weekly_similarity') or 0.0):.2f}%")
     cols[2].metric("STO", f"{float(selected.get('sto_similarity') or 0.0):.2f}%")
     cols[3].metric("검증 조언", _decision_label(decision))
-
-
-def _order_list_frame(recommendations: list[dict]) -> pd.DataFrame:
-    rows = []
-    for row in recommendations:
-        rows.append(
-            {
-                "순위": int(row["rank_no"]),
-                "종목": display_symbol(row.get("name"), row["ticker"], "kr"),
-                "종목코드": normalize_ticker(row["ticker"], "kr"),
-                "주봉 유사도": round(float(row.get("weekly_similarity") or 0.0), 2),
-                "STO": round(float(row.get("sto_similarity") or 0.0), 2),
-                "검증 조언": _decision_label(str(row.get("decision") or "UNVALIDATED")),
-                "주문 상태": "주문 가능" if str(row.get("decision")) in ELIGIBLE_DECISIONS else "사용자 확인 필요",
-            }
-        )
-    return pd.DataFrame(rows)
 
 
 def _render_live_chart(st, db_path: str, ticker: str, label: str) -> None:
@@ -155,7 +174,7 @@ def _load_live_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
             frame = frame.reset_index()
             date_column = "Datetime" if "Datetime" in frame.columns else "Date"
             frame = frame.rename(columns={date_column: "Date"})
-            keep = [column for column in ["Date", "Open", "High", "Low", "Close", "Volume"] if column in frame.columns]
+            keep = [c for c in ["Date", "Open", "High", "Low", "Close", "Volume"] if c in frame.columns]
             return frame[keep].dropna(subset=["Close"]), f"Yahoo Finance 5분봉 ({yahoo_ticker})"
     except Exception:
         pass
@@ -180,8 +199,6 @@ def _yahoo_ticker(ticker: str) -> str:
     code = normalize_ticker(ticker, "kr")
     if str(ticker).endswith(".KQ"):
         return f"{code}.KQ"
-    if str(ticker).endswith(".KS"):
-        return f"{code}.KS"
     return f"{code}.KS"
 
 
@@ -196,8 +213,7 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
             prediction=None,
             matched_max_drawdown=float(selected.get("matched_max_drawdown") or 0.0),
         )
-        context = EnvironmentAdvisor().analyze(recommendation)
-        st.session_state[f"jp_radar_result_{ticker}"] = context
+        st.session_state[f"jp_radar_result_{ticker}"] = EnvironmentAdvisor().analyze(recommendation)
 
     if c2.button("추천 검증", use_container_width=True, key=f"validation_{ticker}"):
         st.session_state[f"validation_open_{ticker}"] = True
@@ -213,14 +229,11 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
 
     if st.session_state.get(f"validation_open_{ticker}"):
         decision = str(selected.get("decision") or "UNVALIDATED")
-        market_score = selected.get("market_score")
-        sector_score = selected.get("sector_score")
-        risk_score = selected.get("risk_score")
         st.markdown(f"**추천 검증 조언:** {_decision_label(decision)}")
         cols = st.columns(3)
-        cols[0].metric("전체 시장", _score_label(market_score))
-        cols[1].metric("해당 업종", _score_label(sector_score))
-        cols[2].metric("종목 위험", _risk_label(risk_score))
+        cols[0].metric("전체 시장", _score_label(selected.get("market_score")))
+        cols[1].metric("해당 업종", _score_label(selected.get("sector_score")))
+        cols[2].metric("종목 위험", _risk_label(selected.get("risk_score")))
         if decision == "UNVALIDATED":
             st.info("아직 저장된 검증 조언이 없습니다. 통합 추천 워크벤치에서 이 종목의 환경 조언을 실행하세요.")
             st.page_link("pages/2_Meta_Score.py", label="추천 검증 화면 열기", icon="✅", use_container_width=True)
@@ -238,26 +251,12 @@ def _render_order_form(st, service, selected: dict, ticker: str, label: str, run
     quantity = c2.number_input("수량", min_value=1, value=1, step=1, key=f"quantity_{ticker}")
     order_type = c3.selectbox("주문 유형", ["MARKET", "LIMIT"], key=f"order_type_{ticker}")
     limit_price = c4.number_input(
-        "지정가",
-        min_value=0.0,
-        value=0.0,
-        step=10.0,
-        disabled=order_type == "MARKET",
-        key=f"limit_price_{ticker}",
+        "지정가", min_value=0.0, value=0.0, step=10.0,
+        disabled=order_type == "MARKET", key=f"limit_price_{ticker}",
     )
     r1, r2 = st.columns(2)
-    target = r1.number_input(
-        "익절 기준 수익률(%)",
-        value=float(selected.get("target_return") or 0.0),
-        step=0.1,
-        key=f"target_{ticker}",
-    )
-    stop = r2.number_input(
-        "손절 기준 수익률(%)",
-        value=float(selected.get("stop_return") or 0.0),
-        step=0.1,
-        key=f"stop_{ticker}",
-    )
+    target = r1.number_input("익절 기준 수익률(%)", value=float(selected.get("target_return") or 0.0), step=0.1, key=f"target_{ticker}")
+    stop = r2.number_input("손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0), step=0.1, key=f"stop_{ticker}")
 
     if not validated:
         st.caption("미검증 종목도 주문 리스트와 주문 입력은 유지됩니다. 매수 요청 전 검증 조언 확인을 권장합니다.")
@@ -346,20 +345,20 @@ def _render_execution_and_history(st, service) -> None:
     if not history.empty:
         history["종목코드"] = history["ticker"].map(lambda value: normalize_ticker(value, "kr"))
         history["종목"] = history.apply(lambda row: display_symbol(row.get("name"), row.get("ticker"), "kr"), axis=1)
-        keep = [column for column in [
+        keep = [c for c in [
             "created_at", "source_run_id", "source_rank", "종목", "종목코드", "side", "quantity",
             "order_type", "limit_price", "status", "broker_order_id", "broker_message", "error_message",
-        ] if column in history.columns]
+        ] if c in history.columns]
         st.dataframe(history[keep], use_container_width=True, hide_index=True)
 
     st.markdown("### 체결 이력")
     executions = pd.DataFrame(service.latest_executions(100))
     if not executions.empty:
         executions["종목코드"] = executions["ticker"].map(lambda value: normalize_ticker(value, "kr"))
-        keep = [column for column in [
+        keep = [c for c in [
             "captured_at", "broker_order_id", "종목코드", "side", "ordered_quantity",
             "filled_quantity", "filled_price", "status",
-        ] if column in executions.columns]
+        ] if c in executions.columns]
         st.dataframe(executions[keep], use_container_width=True, hide_index=True)
 
     st.caption("손절·익절 감시는 자동 매도를 직접 전송하지 않고 승인 대기 매도요청만 생성합니다.")
@@ -404,14 +403,20 @@ def _style(st) -> None:
         """
         <style>
         .stApp{background:linear-gradient(135deg,#eef7ff,#fbfdff 48%,#eaf3ff);color:#13253a}
-        .block-container{max-width:1800px;padding-top:1rem}
-        .hero{padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}
-        .hero h1{margin:3px 0}.hero p{margin:5px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
+        .block-container{max-width:1800px;padding-top:.75rem}
+        .status-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 24px;border-radius:22px;background:rgba(255,255,255,.88);border:1px solid rgba(72,145,210,.22);box-shadow:0 14px 40px rgba(64,106,147,.11);margin-bottom:12px}
+        .status-hero h1{margin:2px 0;font-size:2rem}.status-hero p{margin:3px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
+        .status-cluster{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
+        .status-badge{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:.84rem;font-weight:750;white-space:nowrap;border:1px solid transparent}
+        .status-badge.safe{color:#137044;background:#e9f8f0;border-color:#bde8cf}
+        .status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}
+        .status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}
+        .status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
         div[role="radiogroup"]{gap:.45rem}
         div[role="radiogroup"] label{padding:.68rem .75rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.72);line-height:1.35}
         div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}
+        @media(max-width:900px){.status-hero{align-items:flex-start;flex-direction:column}.status-cluster{justify-content:flex-start}}
         </style>
-        <div class="hero"><div class="eyebrow">ADE · 추천 전 종목 주문 연계</div><h1>한국 주문관리</h1><p>추천 Watch List → 선택 종목 판단 도구·차트 → 일반 주문 → 사용자 승인 → KIS 전송</p></div>
         """,
         unsafe_allow_html=True,
     )

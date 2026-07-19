@@ -5,10 +5,10 @@ from collections.abc import Mapping
 
 
 def normalize_ticker(value: object, market: str = "kr") -> str:
-    """Return the canonical display ticker.
+    """Return the canonical ticker used internally.
 
-    Korean tickers are always shown as six numeric digits. US tickers keep their
-    original symbol text.
+    Korean tickers are normalized to six digits for joins and API calls. They are
+    not automatically appended to the user-facing Korean company name.
     """
     text = str(value or "").strip()
     if market.lower() == "kr":
@@ -20,11 +20,7 @@ def normalize_ticker(value: object, market: str = "kr") -> str:
 
 
 def build_name_map(conn: sqlite3.Connection, market: str = "kr") -> dict[str, str]:
-    """Collect company names in authoritative priority order.
-
-    Earlier sources are more authoritative and are never overwritten by lower
-    priority historical tables.
-    """
+    """Collect company names in authoritative priority order."""
     result: dict[str, str] = {}
     tables = {
         str(row[0])
@@ -74,10 +70,21 @@ def resolve_name(
     candidate = str(name or "").strip()
     if candidate and candidate != code and not candidate.isdigit():
         return candidate
-    return str(name_map.get(code) or code)
+    resolved = str(name_map.get(code) or "").strip()
+    if resolved and resolved != code and not resolved.isdigit():
+        return resolved
+    return "종목명 미확인" if market.lower() == "kr" else code
 
 
 def display_symbol(name: object, ticker: object, market: str = "kr") -> str:
+    """Return the user-facing security name.
+
+    Korean screens show only the Korean company name. The numeric ticker remains
+    available in dedicated ticker columns and internal order/API fields.
+    """
     code = normalize_ticker(ticker, market)
     company = str(name or "").strip()
-    return f"{company}({code})" if company and company != code else code
+    valid_company = bool(company and company != code and not company.isdigit())
+    if market.lower() == "kr":
+        return company if valid_company else "종목명 미확인"
+    return f"{company} ({code})" if valid_company else code

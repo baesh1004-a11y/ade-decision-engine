@@ -12,6 +12,7 @@ from markets.profiles import get_market_profile
 from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from meta_score.dashboard import _recommendation_from_payload, _save_final_decisions
 from meta_score.engine import MetaScoreEngine
+from meta_score.validation_context import EnvironmentAdvisor
 from recommendation.run_context import load_latest_context
 
 
@@ -68,13 +69,13 @@ def run() -> None:
             _step_title(st, 1, "추천 생성", "종목명과 주봉 순위점수를 표시합니다.")
             _recommendation_table(st, recommendations, selected)
         with step2:
-            _step_title(st, 2, "추천 종목 비교", "현재 차트와 과거 급등 직전 패턴을 비교하고 필요할 때만 자동 검증합니다.")
+            _step_title(st, 2, "추천 종목 비교", "현재 차트와 과거 급등 직전 패턴을 비교하고 필요할 때만 환경 조언을 확인합니다.")
             _comparison_panel(
                 st, selected, current, historical, pattern, payload,
                 profile.code, profile.db_path, context.run_id, validation,
             )
         with step3:
-            _step_title(st, 3, "주문 관리", "자동 검증은 선택사항이며 주문 전에 결과를 참고할 수 있습니다.")
+            _step_title(st, 3, "주문 관리", "환경 조언은 선택사항이며 주문 전에 참고할 수 있습니다.")
             _order_panel(st, selected, profile.code, validation, context)
     finally:
         conn.close()
@@ -105,10 +106,10 @@ def _render_generation_controls(st, profile, runtime) -> None:
 def _render_context_banner(st, context) -> None:
     validated = len(context.validations)
     current_pending = len(context.current_orders)
-    tone = "추천 연결" if validated == 0 else "선택 검증 포함"
+    tone = "추천 연결" if validated == 0 else "환경 조언 포함"
     st.markdown(
         f'<div class="context-banner"><b>{tone}</b><span>run_id {context.run_id}</span>'
-        f'<span>추천 {context.recommendation_count}개</span><span>자동 검증 {validated}개</span>'
+        f'<span>추천 {context.recommendation_count}개</span><span>환경 조언 {validated}개</span>'
         f'<span>현재 실행 주문 {current_pending}건</span></div>',
         unsafe_allow_html=True,
     )
@@ -121,8 +122,8 @@ def _render_kpis(st, context, recommendations) -> None:
     cards = [
         ("오늘 추천 종목", f"{len(recommendations)}개", "현재 완료 실행"),
         ("평균 주봉 유사도", f"{avg_weekly:.1f}%", "추천 순위 기준"),
-        ("자동 검증", f"{len(context.validations)}개", "사용자 선택 실행"),
-        ("미검증", f"{max(0, len(recommendations) - len(context.validations))}개", "검증은 선택사항"),
+        ("환경 조언", f"{len(context.validations)}개", "사용자 선택 실행"),
+        ("미확인", f"{max(0, len(recommendations) - len(context.validations))}개", "조언 확인은 선택사항"),
         ("현재 실행 주문", f"{len(context.current_orders)}건", "승인 전 요청"),
         ("최근 실행", str(context.finished_at or "없음")[:16], str(context.run_type or "-")),
     ]
@@ -205,18 +206,18 @@ def _comparison_panel(st, selected, current, historical, pattern, payload, marke
     for col, (label, display) in zip(metrics, values):
         col.markdown(f'<div class="mini-card"><span>{label}</span><b>{display}</b></div>', unsafe_allow_html=True)
 
-    st.markdown("#### 선택 자동 검증")
+    st.markdown("#### 시장·업종 환경 조언")
     if validation is None:
-        st.caption("차트를 직접 비교한 뒤 필요할 때만 실행합니다. 추천 순위는 바뀌지 않습니다.")
+        st.caption("선택 종목을 기준으로 전체 시장과 해당 업종 상태를 함께 확인합니다. 추천 순위는 바뀌지 않습니다.")
         if st.button(
-            f"{selected['symbol']} 자동 검증",
+            f"{selected['symbol']} 환경 조언 확인",
             key=f"validate_{run_id}_{selected['ticker']}",
             type="secondary",
             use_container_width=True,
         ):
-            with st.spinner("시장·업종·위험 상태를 자동 확인하고 있습니다..."):
+            with st.spinner("전체 시장과 해당 업종 상태를 확인하고 있습니다..."):
                 _run_selected_validation(db_path, run_id, selected, payload)
-            st.success("선택 종목의 자동 검증 결과를 저장했습니다.")
+            st.success("선택 종목의 시장·업종 환경 조언을 저장했습니다.")
             st.rerun()
     else:
         _render_validation_summary(st, validation)
@@ -227,7 +228,11 @@ def _run_selected_validation(db_path, run_id, selected, payload) -> None:
     source["ticker"] = selected["ticker"]
     source["name"] = selected.get("display_name") or selected.get("name")
     recommendation = _recommendation_from_payload(source)
-    results = MetaScoreEngine().score([recommendation])
+    environment = EnvironmentAdvisor().analyze(recommendation)
+    results = MetaScoreEngine().score(
+        [recommendation],
+        validation_contexts={str(recommendation.ticker): environment},
+    )
     _save_final_decisions(db_path, run_id, results)
     feedback = FeedbackEngine(db_path)
     try:
@@ -239,29 +244,28 @@ def _run_selected_validation(db_path, run_id, selected, payload) -> None:
 def _render_validation_summary(st, validation) -> None:
     decision = str(validation.get("decision"))
     label = {"FINAL BUY": "매수 검토", "BUY WATCH": "관찰", "HOLD": "보류", "PASS": "제외"}.get(decision, decision)
-    st.markdown(f'<div class="validation-result"><span>자동 검증 결과</span><strong>{label}</strong></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="validation-result"><span>시장·업종 환경 조언</span><strong>{label}</strong></div>', unsafe_allow_html=True)
     checks = [
-        ("시장", _status_text(float(validation.get("market_score", 0)))),
-        ("업종", _status_text(float(validation.get("sector_score", 0)))),
-        ("위험", _risk_text(float(validation.get("risk_score", 0)))),
+        ("전체 시장 상태", _status_text(float(validation.get("market_score", 0)))),
+        ("해당 업종 상태", _status_text(float(validation.get("sector_score", 0)))),
     ]
-    cols = st.columns(3)
+    cols = st.columns(2)
     for col, (title, value) in zip(cols, checks):
         col.markdown(f'<div class="validation-row"><b>{title}</b><span>{value}</span></div>', unsafe_allow_html=True)
 
 
 def _order_panel(st, selected, market, validation, context) -> None:
     if validation is None:
-        state = "주문 가능 · 미검증"
-        note = "자동 검증은 선택사항입니다."
+        state = "주문 가능 · 환경 미확인"
+        note = "시장·업종 환경 조언은 선택사항입니다."
     else:
         decision = str(validation.get("decision"))
-        state = "주문 가능" if decision in {"FINAL BUY", "BUY WATCH"} else "검증 결과 주의"
-        note = "검증 결과를 참고해 최종 판단하세요."
+        state = "주문 가능" if decision in {"FINAL BUY", "BUY WATCH"} else "환경 조언 주의"
+        note = "시장·업종 환경 조언을 참고해 최종 판단하세요."
     st.markdown(f'<div class="order-highlight"><span>{selected["symbol"]}</span><strong>{state}</strong></div>', unsafe_allow_html=True)
     c1, c2 = st.columns(2)
     c1.metric("현재 실행 주문", len(context.current_orders))
-    c2.metric("자동 검증", "완료" if validation else "선택 안 함")
+    c2.metric("환경 조언", "확인" if validation else "선택 안 함")
     target = "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py"
     st.page_link(target, label="주문관리 열기", icon="🛒", use_container_width=True)
     st.caption(f"{note} · 연결 run_id: {context.run_id}")

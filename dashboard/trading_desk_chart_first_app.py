@@ -36,11 +36,7 @@ def _load_market_snapshot(st) -> dict[str, dict[str, object]]:
         except ImportError:
             return result
 
-        symbols = {
-            "KOSPI": "^KS11",
-            "KOSDAQ": "^KQ11",
-            "USD/KRW": "KRW=X",
-        }
+        symbols = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
         for label, symbol in symbols.items():
             try:
                 history = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=False)
@@ -90,13 +86,8 @@ def _watch_hover_text(st, row: dict, ticker: str) -> str:
     decision = _decision_label(str(row.get("decision") or "UNVALIDATED"))
     weekly = float(row.get("weekly_similarity") or 0.0)
     sto = float(row.get("sto_similarity") or 0.0)
-
     current_price = next(
-        (
-            row.get(key)
-            for key in ("current_price", "last_price", "close", "price")
-            if row.get(key) not in (None, "")
-        ),
+        (row.get(key) for key in ("current_price", "last_price", "close", "price") if row.get(key) not in (None, "")),
         None,
     )
     try:
@@ -143,7 +134,8 @@ def _yahoo_candidates(ticker: str) -> list[str]:
     return [f"{code}.KS", f"{code}.KQ"]
 
 
-def _load_fallback_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
+def _load_fallback_bars(db_path: str, ticker: str, timeframe: str) -> tuple[pd.DataFrame, str]:
+    period, interval = ("1y", "1d") if timeframe == "일봉" else ("5d", "5m")
     try:
         import yfinance as yf
 
@@ -151,15 +143,24 @@ def _load_fallback_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
             try:
                 frame = yf.download(
                     yahoo_ticker,
-                    period="5d",
-                    interval="5m",
+                    period=period,
+                    interval=interval,
                     auto_adjust=False,
                     progress=False,
                     threads=False,
                 )
                 normalized = _normalize_yahoo_frame(frame)
-                if not normalized.empty:
-                    return normalized, f"Yahoo Finance 5분봉 ({yahoo_ticker}) · KIS 조회 실패 시 대체"
+                if normalized.empty:
+                    continue
+                if timeframe == "4시간봉":
+                    normalized = (
+                        normalized.set_index("Date")
+                        .resample("4h", origin="start_day", offset="9h")
+                        .agg({"Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum"})
+                        .dropna(subset=["Open", "Close"])
+                        .reset_index()
+                    )
+                return normalized, f"Yahoo Finance {timeframe} · KIS 조회 실패 시 대체"
             except Exception:
                 continue
     except ImportError:
@@ -174,15 +175,17 @@ def _load_fallback_bars(db_path: str, ticker: str) -> tuple[pd.DataFrame, str]:
                       close AS Close, volume AS Volume
                FROM price_bars
                WHERE market='kr' AND ticker IN (?, ?, ?)
-               ORDER BY trade_date DESC LIMIT 120""",
+               ORDER BY trade_date DESC LIMIT 240""",
             (code, f"{code}.KS", f"{code}.KQ"),
         ).fetchall()
-        return pd.DataFrame([dict(row) for row in reversed(rows)]), "내부 최신 저장 시세 · KIS 조회 실패 시 대체"
+        return pd.DataFrame([dict(row) for row in reversed(rows)]), "내부 최신 저장 일봉 · KIS 조회 실패 시 대체"
     finally:
         conn.close()
 
 
-def _load_live_market_data(st, db_path: str, ticker: str) -> tuple[pd.DataFrame, dict[str, object], str, str | None]:
+def _load_live_market_data(
+    st, db_path: str, ticker: str, timeframe: str
+) -> tuple[pd.DataFrame, dict[str, object], str, str | None]:
     code = normalize_ticker(ticker, "kr")
 
     @st.cache_resource(show_spinner=False)
@@ -191,22 +194,41 @@ def _load_live_market_data(st, db_path: str, ticker: str) -> tuple[pd.DataFrame,
 
     try:
         client = _kis_client()
-        bars = client.get_intraday_bars(code, include_previous=True)
         quote = client.get_current_quote(code)
+        if timeframe == "일봉":
+            bars = client.get_daily_bars(code, lookback_days=365)
+            source = "한국투자증권 KIS 일봉"
+        elif timeframe == "4시간봉":
+            bars = client.get_four_hour_bars(code)
+            source = "한국투자증권 KIS 4시간봉"
+        else:
+            bars = client.get_intraday_bars(code, include_previous=True)
+            source = "한국투자증권 KIS 장중 분봉"
         if not bars.empty:
-            return bars, quote, "한국투자증권 KIS 장중 분봉", None
-        error = "KIS 분봉 응답이 비어 있습니다."
+            return bars, quote, source, None
+        error = f"KIS {timeframe} 응답이 비어 있습니다."
     except Exception as exc:
         quote = {}
         error = str(exc)
 
-    fallback_bars, fallback_source = _load_fallback_bars(db_path, ticker)
+    fallback_bars, fallback_source = _load_fallback_bars(db_path, ticker, timeframe)
     return fallback_bars, quote, fallback_source, error
 
 
 def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) -> None:
-    st.markdown(f"### 현재 차트 · {label}")
-    bars, quote, source, kis_error = _load_live_market_data(st, db_path, ticker)
+    title_col, control_col = st.columns([4, 1])
+    with title_col:
+        st.markdown(f"### 현재 차트 · {label}")
+    with control_col:
+        timeframe = st.selectbox(
+            "차트 주기",
+            ["일봉", "4시간봉", "장중 분봉"],
+            index=0,
+            key=f"chart_timeframe_{normalize_ticker(ticker, 'kr')}",
+            label_visibility="collapsed",
+        )
+
+    bars, quote, source, kis_error = _load_live_market_data(st, db_path, ticker, timeframe)
     if bars.empty:
         st.warning("현재 차트 데이터를 불러오지 못했습니다.")
         if kis_error:
@@ -215,11 +237,7 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) ->
 
     chart_column, quote_column = st.columns([4, 1], gap="medium")
     with chart_column:
-        st.plotly_chart(
-            build_trading_chart(bars, label),
-            use_container_width=True,
-            config=CHART_CONFIG,
-        )
+        st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
 
     latest = bars.iloc[-1]
     current_price = float(quote.get("current_price") or latest["Close"])
@@ -244,7 +262,9 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) ->
         else:
             st.info("현재가 응답에 호가가 포함되지 않았습니다.")
 
-    st.caption(f"시세 출처: {source} · 차트와 우측 현재가는 같은 KIS 종목 데이터를 우선 사용합니다.")
+    st.caption(f"시세 출처: {source} · 기본 차트는 기술분석에 적합한 일봉입니다.")
+    if timeframe == "4시간봉" and len(bars) < 10:
+        st.info("KIS 장중 분봉 제공 범위가 짧아 4시간봉 표본이 적을 수 있습니다. 중기 판단은 일봉을 권장합니다.")
     if kis_error:
         st.warning(f"KIS 차트 조회 실패로 대체 데이터를 표시했습니다: {kis_error}")
 
@@ -300,7 +320,6 @@ def _render_validation_panel(st, selected: dict) -> None:
     decision = str(selected.get("decision") or "UNVALIDATED")
     st.markdown("#### 추천 검증")
     st.metric("검증 결과", _decision_label(decision))
-
     cols = st.columns(3)
     cols[0].metric("전체 시장 환경", _environment_label(selected.get("market_score")))
     cols[1].metric("해당 업종 환경", _environment_label(selected.get("sector_score")))
@@ -317,7 +336,6 @@ def run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
 
     st.set_page_config(page_title="ADE 한국 주문관리", page_icon="💳", layout="wide")
-
     env = os.getenv("KIS_ENV", "paper").lower()
     live_enabled = os.getenv("KIS_LIVE_ORDER_ENABLED", "NO").upper() == "YES"
     service = TradingOrderService(db_path)
@@ -364,10 +382,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         selection_key = "trading_order_selected_kr_chart_first_index"
         if selection_key not in st.session_state:
             st.session_state[selection_key] = default_index
-        st.session_state[selection_key] = min(
-            max(int(st.session_state[selection_key]), 0),
-            len(recommendations) - 1,
-        )
+        st.session_state[selection_key] = min(max(int(st.session_state[selection_key]), 0), len(recommendations) - 1)
 
         watch_column, detail_column = st.columns([1, 3], gap="large")
         with watch_column:

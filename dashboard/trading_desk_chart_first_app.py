@@ -25,6 +25,69 @@ def _format_price(value: float) -> str:
     return f"{value:,.0f}원"
 
 
+def _load_market_snapshot(st) -> dict[str, dict[str, object]]:
+    @st.cache_data(ttl=300, show_spinner=False)
+    def _fetch() -> dict[str, dict[str, object]]:
+        result: dict[str, dict[str, object]] = {}
+        try:
+            import yfinance as yf
+        except ImportError:
+            return result
+
+        symbols = {
+            "KOSPI": "^KS11",
+            "KOSDAQ": "^KQ11",
+            "USD/KRW": "KRW=X",
+        }
+        for label, symbol in symbols.items():
+            try:
+                history = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=False)
+                closes = history["Close"].dropna()
+                if closes.empty:
+                    continue
+                current = float(closes.iloc[-1])
+                previous = float(closes.iloc[-2]) if len(closes) > 1 else current
+                change_rate = ((current - previous) / previous * 100.0) if previous else 0.0
+                result[label] = {
+                    "value": current,
+                    "change_rate": change_rate,
+                }
+            except Exception:
+                continue
+        return result
+
+    return _fetch()
+
+
+def _render_market_status(st) -> None:
+    snapshot = _load_market_snapshot(st)
+    st.markdown("### 오늘의 시장 현황")
+    st.caption("지수와 환율의 조회값만 표시합니다. 전망·매매 판단·시장 해석은 포함하지 않습니다.")
+
+    cards = st.columns(6, gap="small")
+    items = [
+        ("KOSPI", "KOSPI"),
+        ("KOSDAQ", "KOSDAQ"),
+        ("USD/KRW", "USD/KRW"),
+        ("거래대금", None),
+        ("외국인", None),
+        ("기관", None),
+    ]
+    for column, (title, snapshot_key) in zip(cards, items):
+        with column:
+            data = snapshot.get(snapshot_key) if snapshot_key else None
+            if data is None:
+                st.metric(title, "미연동")
+                continue
+
+            value = float(data["value"])
+            change_rate = float(data["change_rate"])
+            value_text = f"{value:,.2f}" if title != "USD/KRW" else f"{value:,.1f}원"
+            st.metric(title, value_text, f"{change_rate:+.2f}%")
+
+    st.caption("조회: Yahoo Finance · 5분 캐시 · 수급 및 거래대금은 검증된 데이터 연결 전까지 표시하지 않습니다.")
+
+
 def _watch_hover_text(st, row: dict, ticker: str) -> str:
     radar = st.session_state.get(f"jp_radar_result_{ticker}")
     score, level, _, _, _ = _ai_confidence(row, radar)
@@ -118,6 +181,7 @@ def run(db_path: str = "datahub/market.db") -> None:
 
         _style(st)
         _render_status_header(st, env, live_enabled, len(recommendations), pending_count)
+        _render_market_status(st)
         st.markdown("### 1. 추천 Watch List")
 
         if not recommendations:

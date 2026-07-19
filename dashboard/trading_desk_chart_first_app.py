@@ -3,10 +3,10 @@ from __future__ import annotations
 import os
 
 from dashboard.trading_desk_app import (
+    _load_live_bars,
     _render_ai_confidence_card,
     _render_analysis_actions,
     _render_execution_and_history,
-    _render_live_chart,
     _render_order_form,
     _render_pending_approval,
     _render_selected_summary,
@@ -14,8 +14,47 @@ from dashboard.trading_desk_app import (
     _style,
     _watch_label,
 )
+from dashboard.charts import CHART_CONFIG, build_trading_chart
 from markets.symbol_display import display_symbol, normalize_ticker
 from trading.order_service import TradingOrderService
+
+
+def _format_price(value: float) -> str:
+    return f"{value:,.0f}원"
+
+
+def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) -> None:
+    st.markdown(f"### 현재 차트 · {label}")
+    bars, source = _load_live_bars(db_path, ticker)
+    if bars.empty:
+        st.warning("현재 차트 데이터를 불러오지 못했습니다.")
+        return
+
+    chart_column, quote_column = st.columns([4, 1], gap="medium")
+    with chart_column:
+        st.plotly_chart(
+            build_trading_chart(bars, label),
+            use_container_width=True,
+            config=CHART_CONFIG,
+        )
+
+    latest = bars.iloc[-1]
+    previous_close = float(bars.iloc[-2]["Close"]) if len(bars) > 1 else float(latest["Close"])
+    current_price = float(latest["Close"])
+    change = current_price - previous_close
+    change_rate = (change / previous_close * 100.0) if previous_close else 0.0
+
+    with quote_column:
+        st.markdown("#### 실시간 시세")
+        st.metric("현재가", _format_price(current_price), f"{change:+,.0f}원 ({change_rate:+.2f}%)")
+        st.metric("고가", _format_price(float(latest["High"])))
+        st.metric("저가", _format_price(float(latest["Low"])))
+        st.metric("거래량", f"{float(latest.get('Volume') or 0):,.0f}")
+        st.markdown("#### 매수·매도 호가")
+        st.info("실시간 호가 API 미연동")
+        st.caption("호가 데이터가 연결되면 이 영역에 최우선 매도·매수호가를 표시합니다.")
+
+    st.caption(f"시세 출처: {source} · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
 
 
 def run(db_path: str = "datahub/market.db") -> None:
@@ -87,7 +126,7 @@ def run(db_path: str = "datahub/market.db") -> None:
 
         with detail_column:
             _render_selected_summary(st, selected, selected_label)
-            _render_live_chart(st, db_path, selected_code, selected_label)
+            _render_chart_with_quote_panel(st, db_path, selected_code, selected_label)
 
             ai_tab, radar_tab, validation_tab, order_tab = st.tabs(
                 ["AI 신뢰도", "JP Radar", "추천 검증", "주문"]

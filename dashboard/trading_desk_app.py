@@ -246,24 +246,70 @@ def _render_order_form(st, service, selected: dict, ticker: str, label: str, run
     eligible = decision in ELIGIBLE_DECISIONS
 
     st.markdown(f"**선택 종목:** {label}")
-    c1, c2, c3, c4 = st.columns(4)
-    side = c1.selectbox("주문 방향", ["BUY", "SELL"], key=f"side_{ticker}")
+    side_labels = {"매수": "BUY", "매도": "SELL"}
+    order_type_labels = {"시장가": "MARKET", "지정가": "LIMIT"}
+
+    c1, c2, c3 = st.columns([1, 1, 1.2])
+    side_label = c1.selectbox("주문 방향", list(side_labels), key=f"side_label_{ticker}")
     quantity = c2.number_input("수량", min_value=1, value=1, step=1, key=f"quantity_{ticker}")
-    order_type = c3.selectbox("주문 유형", ["MARKET", "LIMIT"], key=f"order_type_{ticker}")
-    limit_price = c4.number_input(
-        "지정가", min_value=0.0, value=0.0, step=10.0,
-        disabled=order_type == "MARKET", key=f"limit_price_{ticker}",
-    )
+    order_type_label = c3.selectbox("주문 유형", list(order_type_labels), key=f"order_type_label_{ticker}")
+
+    side = side_labels[side_label]
+    order_type = order_type_labels[order_type_label]
+    limit_price = 0.0
+    if order_type == "LIMIT":
+        limit_price = st.number_input(
+            "지정가",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+            key=f"limit_price_{ticker}",
+        )
+
     r1, r2 = st.columns(2)
-    target = r1.number_input("익절 기준 수익률(%)", value=float(selected.get("target_return") or 0.0), step=0.1, key=f"target_{ticker}")
-    stop = r2.number_input("손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0), step=0.1, key=f"stop_{ticker}")
+    target = r1.number_input(
+        "익절 기준 수익률(%)",
+        value=float(selected.get("target_return") or 0.0),
+        step=0.1,
+        key=f"target_{ticker}",
+    )
+    stop = r2.number_input(
+        "손절 기준 수익률(%)",
+        value=float(selected.get("stop_return") or 0.0),
+        step=0.1,
+        key=f"stop_{ticker}",
+    )
+
+    price_phrase = "시장가로" if order_type == "MARKET" else f"{float(limit_price):,.0f}원 지정가로"
+    summary = f"{label} {int(quantity)}주를 {price_phrase} {side_label}합니다."
+    risk_summary = f"목표 수익률 {float(target):+.1f}% · 손절 기준 {float(stop):+.1f}%"
+    st.markdown(
+        f"""
+        <div class="order-summary">
+          <div class="order-summary-label">주문 요약</div>
+          <div class="order-summary-main">{summary}</div>
+          <div class="order-summary-risk">{risk_summary}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if not validated:
         st.caption("미검증 종목도 주문 리스트와 주문 입력은 유지됩니다. 매수 요청 전 검증 조언 확인을 권장합니다.")
     elif not eligible and side == "BUY":
         st.warning(f"현재 검증 조언은 {_decision_label(decision)}입니다. 주문 전 사용자가 직접 판단해야 합니다.")
 
-    if st.button("주문 요청 만들기", type="primary", use_container_width=True, key=f"create_order_{ticker}"):
+    invalid_limit = order_type == "LIMIT" and float(limit_price) <= 0
+    if invalid_limit:
+        st.warning("지정가 주문은 0원보다 큰 가격을 입력해야 합니다.")
+
+    if st.button(
+        "주문 요청 만들기",
+        type="primary",
+        use_container_width=True,
+        key=f"create_order_{ticker}",
+        disabled=invalid_limit,
+    ):
         request_id = service.create_request(
             ticker=ticker,
             name=selected.get("name"),
@@ -412,6 +458,10 @@ def _style(st) -> None:
         .status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}
         .status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}
         .status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
+        .order-summary{margin:14px 0 10px;padding:16px 18px;border-radius:16px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.24);box-shadow:0 8px 24px rgba(64,106,147,.08)}
+        .order-summary-label{font-size:.78rem;font-weight:800;letter-spacing:.08em;color:#3479b9;text-transform:uppercase;margin-bottom:5px}
+        .order-summary-main{font-size:1.08rem;font-weight:760;color:#17324d}
+        .order-summary-risk{margin-top:4px;color:#62788e;font-size:.93rem}
         div[role="radiogroup"]{gap:.45rem}
         div[role="radiogroup"] label{padding:.68rem .75rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.72);line-height:1.35}
         div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}

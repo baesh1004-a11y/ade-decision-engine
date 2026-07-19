@@ -23,8 +23,50 @@ from meta_score.validation_context import EnvironmentAdvisor
 from trading.order_service import TradingOrderService
 
 
+ELIGIBLE_DECISIONS = {"FINAL BUY", "BUY WATCH"}
+
+
 def _format_price(value: float) -> str:
     return f"{value:,.0f}원"
+
+
+def _is_mobile_request(st) -> bool:
+    """Best-effort mobile detection without adding a front-end dependency."""
+    try:
+        user_agent = str(st.context.headers.get("User-Agent", "")).lower()
+    except Exception:
+        return False
+    return any(token in user_agent for token in ("android", "iphone", "ipad", "ipod", "mobile"))
+
+
+def _render_mobile_status_header(
+    st, env: str, live_enabled: bool, recommendation_count: int, pending_count: int
+) -> None:
+    if env == "live" and live_enabled:
+        mode_label = "실전주문 활성"
+        mode_class = "danger"
+    elif env == "live":
+        mode_label = "실전환경 · 주문 잠금"
+        mode_class = "warning"
+    else:
+        mode_label = "모의투자"
+        mode_class = "safe"
+
+    st.markdown(
+        f"""
+        <div class="mobile-status-bar">
+          <div class="mobile-status-title">한국 주문관리</div>
+          <div class="mobile-status-items">
+            <span class="status-badge {mode_class}">● {mode_label}</span>
+            <span class="status-badge neutral">추천 {recommendation_count}</span>
+            <span class="status-badge neutral">승인대기 {pending_count}</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    with st.expander("주문 진행 방식 보기"):
+        st.caption("추천 → 차트 확인 → 판단 도구 → 주문 요청 → 사용자 승인 → KIS 전송")
 
 
 def _load_market_snapshot(st) -> dict[str, dict[str, object]]:
@@ -215,18 +257,27 @@ def _load_live_market_data(
     return fallback_bars, quote, fallback_source, error
 
 
-def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) -> None:
-    title_col, control_col = st.columns([4, 1])
-    with title_col:
+def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mobile: bool = False) -> None:
+    if mobile:
         st.markdown(f"### 현재 차트 · {label}")
-    with control_col:
         timeframe = st.selectbox(
             "차트 주기",
             ["일봉", "4시간봉", "장중 분봉"],
             index=0,
             key=f"chart_timeframe_{normalize_ticker(ticker, 'kr')}",
-            label_visibility="collapsed",
         )
+    else:
+        title_col, control_col = st.columns([4, 1])
+        with title_col:
+            st.markdown(f"### 현재 차트 · {label}")
+        with control_col:
+            timeframe = st.selectbox(
+                "차트 주기",
+                ["일봉", "4시간봉", "장중 분봉"],
+                index=0,
+                key=f"chart_timeframe_{normalize_ticker(ticker, 'kr')}",
+                label_visibility="collapsed",
+            )
 
     bars, quote, source, kis_error = _load_live_market_data(st, db_path, ticker, timeframe)
     if bars.empty:
@@ -234,10 +285,6 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) ->
         if kis_error:
             st.caption(f"KIS 조회 오류: {kis_error}")
         return
-
-    chart_column, quote_column = st.columns([4, 1], gap="medium")
-    with chart_column:
-        st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
 
     latest = bars.iloc[-1]
     current_price = float(quote.get("current_price") or latest["Close"])
@@ -249,18 +296,37 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) ->
     ask_price = float(quote.get("ask_price") or 0.0)
     bid_price = float(quote.get("bid_price") or 0.0)
 
-    with quote_column:
-        st.markdown("#### 실시간 시세")
-        st.metric("현재가", _format_price(current_price), f"{change:+,.0f}원 ({change_rate:+.2f}%)")
-        st.metric("고가", _format_price(high))
-        st.metric("저가", _format_price(low))
-        st.metric("누적 거래량", f"{volume:,.0f}")
-        st.markdown("#### 매수·매도 호가")
-        if ask_price > 0 or bid_price > 0:
-            st.metric("최우선 매도", _format_price(ask_price) if ask_price > 0 else "미제공")
-            st.metric("최우선 매수", _format_price(bid_price) if bid_price > 0 else "미제공")
-        else:
-            st.info("현재가 응답에 호가가 포함되지 않았습니다.")
+    if mobile:
+        st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
+        quote_cols = st.columns(2)
+        quote_cols[0].metric("현재가", _format_price(current_price), f"{change:+,.0f}원 ({change_rate:+.2f}%)")
+        quote_cols[1].metric("누적 거래량", f"{volume:,.0f}")
+        quote_cols = st.columns(2)
+        quote_cols[0].metric("고가", _format_price(high))
+        quote_cols[1].metric("저가", _format_price(low))
+        with st.expander("매수·매도 호가"):
+            if ask_price > 0 or bid_price > 0:
+                bid_ask = st.columns(2)
+                bid_ask[0].metric("최우선 매도", _format_price(ask_price) if ask_price > 0 else "미제공")
+                bid_ask[1].metric("최우선 매수", _format_price(bid_price) if bid_price > 0 else "미제공")
+            else:
+                st.info("현재가 응답에 호가가 포함되지 않았습니다.")
+    else:
+        chart_column, quote_column = st.columns([4, 1], gap="medium")
+        with chart_column:
+            st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
+        with quote_column:
+            st.markdown("#### 실시간 시세")
+            st.metric("현재가", _format_price(current_price), f"{change:+,.0f}원 ({change_rate:+.2f}%)")
+            st.metric("고가", _format_price(high))
+            st.metric("저가", _format_price(low))
+            st.metric("누적 거래량", f"{volume:,.0f}")
+            st.markdown("#### 매수·매도 호가")
+            if ask_price > 0 or bid_price > 0:
+                st.metric("최우선 매도", _format_price(ask_price) if ask_price > 0 else "미제공")
+                st.metric("최우선 매수", _format_price(bid_price) if bid_price > 0 else "미제공")
+            else:
+                st.info("현재가 응답에 호가가 포함되지 않았습니다.")
 
     st.caption(f"시세 출처: {source} · 기본 차트는 기술분석에 적합한 일봉입니다.")
     if timeframe == "4시간봉" and len(bars) < 10:
@@ -332,6 +398,137 @@ def _render_validation_panel(st, selected: dict) -> None:
         st.caption("숫자 점수 대신 저장된 검증 결과와 정성적 환경 수준만 표시합니다.")
 
 
+def _render_mobile_order_form(st, service, selected: dict, ticker: str, label: str, run_id: str) -> None:
+    st.markdown("### 일반 주문")
+    decision = str(selected.get("decision") or "UNVALIDATED")
+    validated = bool(selected.get("validation_available"))
+    eligible = decision in ELIGIBLE_DECISIONS
+
+    st.markdown(f"**선택 종목:** {label}")
+    side_labels = {"매수": "BUY", "매도": "SELL"}
+    order_type_labels = {"시장가": "MARKET", "지정가": "LIMIT"}
+
+    side_label = st.radio(
+        "주문 방향",
+        list(side_labels),
+        horizontal=True,
+        key=f"mobile_side_label_{ticker}",
+    )
+    quantity = st.number_input(
+        "수량",
+        min_value=1,
+        value=1,
+        step=1,
+        key=f"mobile_quantity_{ticker}",
+    )
+    order_type_label = st.radio(
+        "주문 방식",
+        list(order_type_labels),
+        horizontal=True,
+        key=f"mobile_order_type_label_{ticker}",
+    )
+
+    side = side_labels[side_label]
+    order_type = order_type_labels[order_type_label]
+    limit_price = 0.0
+    if order_type == "LIMIT":
+        limit_price = st.number_input(
+            "지정가",
+            min_value=0.0,
+            value=0.0,
+            step=10.0,
+            key=f"mobile_limit_price_{ticker}",
+        )
+
+    with st.expander("상세 설정 · 익절/손절"):
+        target = st.number_input(
+            "익절 기준 수익률(%)",
+            value=float(selected.get("target_return") or 0.0),
+            step=0.1,
+            key=f"mobile_target_{ticker}",
+        )
+        stop = st.number_input(
+            "손절 기준 수익률(%)",
+            value=float(selected.get("stop_return") or 0.0),
+            step=0.1,
+            key=f"mobile_stop_{ticker}",
+        )
+
+    price_phrase = "시장가로" if order_type == "MARKET" else f"{float(limit_price):,.0f}원 지정가로"
+    summary = f"{label} {int(quantity)}주를 {price_phrase} {side_label}합니다."
+    risk_summary = f"목표 수익률 {float(target):+.1f}% · 손절 기준 {float(stop):+.1f}%"
+    st.markdown(
+        f"""
+        <div class="order-summary">
+          <div class="order-summary-label">주문 요약</div>
+          <div class="order-summary-main">{summary}</div>
+          <div class="order-summary-risk">{risk_summary}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if not validated:
+        st.caption("미검증 종목도 주문 리스트와 주문 입력은 유지됩니다. 매수 요청 전 검증 조언 확인을 권장합니다.")
+    elif not eligible and side == "BUY":
+        st.warning(f"현재 검증 조언은 {_decision_label(decision)}입니다. 주문 전 사용자가 직접 판단해야 합니다.")
+
+    invalid_limit = order_type == "LIMIT" and float(limit_price) <= 0
+    if invalid_limit:
+        st.warning("지정가 주문은 0원보다 큰 가격을 입력해야 합니다.")
+
+    if st.button(
+        "주문 요청 만들기",
+        type="primary",
+        use_container_width=True,
+        key=f"mobile_create_order_{ticker}",
+        disabled=invalid_limit,
+    ):
+        request_id = service.create_request(
+            ticker=ticker,
+            name=selected.get("name"),
+            side=side,
+            quantity=int(quantity),
+            order_type=order_type,
+            limit_price=None if order_type == "MARKET" else float(limit_price),
+            target_return=float(target),
+            stop_return=float(stop),
+            source_run_id=run_id,
+            source_rank=int(selected["rank_no"]),
+        )
+        st.success(f"주문 요청 생성: {request_id}. 아직 KIS로 전송되지 않았습니다.")
+
+
+def _inject_mobile_styles(st) -> None:
+    st.markdown(
+        """
+        <style>
+        .mobile-status-bar {
+            padding: 0.15rem 0 0.55rem 0;
+            border-bottom: 1px solid rgba(120, 130, 150, 0.22);
+            margin-bottom: 0.25rem;
+        }
+        .mobile-status-title {
+            font-size: 1.45rem;
+            font-weight: 750;
+            margin-bottom: 0.45rem;
+        }
+        .mobile-status-items {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.35rem;
+        }
+        @media (max-width: 768px) {
+            .block-container {padding-top: 0.75rem; padding-left: 0.85rem; padding-right: 0.85rem;}
+            div[data-testid="stMetric"] {padding: 0.45rem 0.2rem;}
+            div[data-testid="stPlotlyChart"] {margin-top: -0.3rem;}
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
 
@@ -339,6 +536,7 @@ def run(db_path: str = "datahub/market.db") -> None:
     env = os.getenv("KIS_ENV", "paper").lower()
     live_enabled = os.getenv("KIS_LIVE_ORDER_ENABLED", "NO").upper() == "YES"
     service = TradingOrderService(db_path)
+    mobile = _is_mobile_request(st)
 
     try:
         recommendations = service.latest_recommendations(50)
@@ -352,10 +550,14 @@ def run(db_path: str = "datahub/market.db") -> None:
         )
 
         _style(st)
-        _render_status_header(st, env, live_enabled, len(recommendations), pending_count)
-        _render_market_status(st)
-        st.markdown("### 1. 추천 Watch List")
+        _inject_mobile_styles(st)
+        if mobile:
+            _render_mobile_status_header(st, env, live_enabled, len(recommendations), pending_count)
+        else:
+            _render_status_header(st, env, live_enabled, len(recommendations), pending_count)
+            _render_market_status(st)
 
+        st.markdown("### 1. 추천 Watch List")
         if not recommendations:
             st.warning("최신 완료 추천 결과가 없습니다. 먼저 통합 추천 워크벤치에서 추천을 생성하세요.")
             _render_pending_approval(st, service, recommendations)
@@ -364,11 +566,6 @@ def run(db_path: str = "datahub/market.db") -> None:
 
         run_id = str(recommendations[0]["run_id"])
         run_finished = str(recommendations[0].get("run_finished_at") or "-")
-        st.caption(
-            f"추천 완료: {run_finished} · "
-            "왼쪽 종목에 마우스를 올리면 핵심정보가 표시되고, 클릭하면 차트가 전환됩니다."
-        )
-
         labels = [_watch_label(row) for row in recommendations]
         selected_from_workbench = normalize_ticker(st.session_state.get("workbench_selected_kr") or "", "kr")
         default_index = next(
@@ -384,32 +581,24 @@ def run(db_path: str = "datahub/market.db") -> None:
             st.session_state[selection_key] = default_index
         st.session_state[selection_key] = min(max(int(st.session_state[selection_key]), 0), len(recommendations) - 1)
 
-        watch_column, detail_column = st.columns([1, 3], gap="large")
-        with watch_column:
-            st.markdown("#### 추천 종목")
-            for i, row in enumerate(recommendations):
-                ticker = normalize_ticker(row["ticker"], "kr")
-                if st.button(
-                    labels[i],
-                    key=f"watch_hover_{ticker}_{i}",
-                    help=_watch_hover_text(st, row, ticker),
-                    type="primary" if i == st.session_state[selection_key] else "secondary",
-                    use_container_width=True,
-                ):
-                    st.session_state[selection_key] = i
-            st.caption("종목 버튼에 마우스를 올리면 상세정보를 볼 수 있습니다.")
-            st.caption("● 매수 검토  ● 관찰  ● 보류  ● 제외  ● 미검증")
-            st.caption(f"총 {len(recommendations)}개 추천 종목")
+        if mobile:
+            index = st.selectbox(
+                "종목 선택",
+                range(len(recommendations)),
+                index=int(st.session_state[selection_key]),
+                format_func=lambda i: labels[i].replace("\n", " · "),
+                key="mobile_trading_order_selector",
+            )
+            st.session_state[selection_key] = int(index)
+            st.caption(f"추천 완료: {run_finished} · 총 {len(recommendations)}개 추천 종목")
 
-        index = int(st.session_state[selection_key])
-        selected = recommendations[index]
-        selected_code = normalize_ticker(selected["ticker"], "kr")
-        selected_label = display_symbol(selected.get("name"), selected_code, "kr")
-        st.session_state["workbench_selected_kr"] = selected_code
+            selected = recommendations[int(index)]
+            selected_code = normalize_ticker(selected["ticker"], "kr")
+            selected_label = display_symbol(selected.get("name"), selected_code, "kr")
+            st.session_state["workbench_selected_kr"] = selected_code
 
-        with detail_column:
+            _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label, mobile=True)
             _render_selected_summary(st, selected, selected_label)
-            _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
 
             radar_tab, validation_tab, order_tab = st.tabs(["JP Radar", "추천 검증", "주문"])
             with radar_tab:
@@ -417,7 +606,49 @@ def run(db_path: str = "datahub/market.db") -> None:
             with validation_tab:
                 _render_validation_panel(st, selected)
             with order_tab:
-                _render_order_form(st, service, selected, selected_code, selected_label, run_id)
+                _render_mobile_order_form(st, service, selected, selected_code, selected_label, run_id)
+
+            with st.expander("오늘의 시장 현황"):
+                _render_market_status(st)
+        else:
+            st.caption(
+                f"추천 완료: {run_finished} · "
+                "왼쪽 종목에 마우스를 올리면 핵심정보가 표시되고, 클릭하면 차트가 전환됩니다."
+            )
+            watch_column, detail_column = st.columns([1, 3], gap="large")
+            with watch_column:
+                st.markdown("#### 추천 종목")
+                for i, row in enumerate(recommendations):
+                    ticker = normalize_ticker(row["ticker"], "kr")
+                    if st.button(
+                        labels[i],
+                        key=f"watch_hover_{ticker}_{i}",
+                        help=_watch_hover_text(st, row, ticker),
+                        type="primary" if i == st.session_state[selection_key] else "secondary",
+                        use_container_width=True,
+                    ):
+                        st.session_state[selection_key] = i
+                st.caption("종목 버튼에 마우스를 올리면 상세정보를 볼 수 있습니다.")
+                st.caption("● 매수 검토  ● 관찰  ● 보류  ● 제외  ● 미검증")
+                st.caption(f"총 {len(recommendations)}개 추천 종목")
+
+            index = int(st.session_state[selection_key])
+            selected = recommendations[index]
+            selected_code = normalize_ticker(selected["ticker"], "kr")
+            selected_label = display_symbol(selected.get("name"), selected_code, "kr")
+            st.session_state["workbench_selected_kr"] = selected_code
+
+            with detail_column:
+                _render_selected_summary(st, selected, selected_label)
+                _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
+
+                radar_tab, validation_tab, order_tab = st.tabs(["JP Radar", "추천 검증", "주문"])
+                with radar_tab:
+                    _render_radar_panel(st, selected, selected_code)
+                with validation_tab:
+                    _render_validation_panel(st, selected)
+                with order_tab:
+                    _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 
         st.divider()
         _render_pending_approval(st, service, recommendations)

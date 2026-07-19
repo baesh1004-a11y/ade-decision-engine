@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 
 from dashboard.trading_desk_app import (
+    _ai_confidence,
+    _decision_label,
     _load_live_bars,
     _render_ai_confidence_card,
     _render_analysis_actions,
@@ -21,6 +23,43 @@ from trading.order_service import TradingOrderService
 
 def _format_price(value: float) -> str:
     return f"{value:,.0f}원"
+
+
+def _watch_hover_text(st, row: dict, ticker: str) -> str:
+    radar = st.session_state.get(f"jp_radar_result_{ticker}")
+    score, level, _, _, _ = _ai_confidence(row, radar)
+    decision = _decision_label(str(row.get("decision") or "UNVALIDATED"))
+    weekly = float(row.get("weekly_similarity") or 0.0)
+    sto = float(row.get("sto_similarity") or 0.0)
+
+    current_price = next(
+        (
+            row.get(key)
+            for key in ("current_price", "last_price", "close", "price")
+            if row.get(key) not in (None, "")
+        ),
+        None,
+    )
+    try:
+        price_text = _format_price(float(current_price)) if current_price is not None else "차트 선택 후 확인"
+    except (TypeError, ValueError):
+        price_text = "차트 선택 후 확인"
+
+    if radar is None:
+        radar_text = "미실행"
+    else:
+        market_signal = str(getattr(radar, "market_signal", "-") or "-")
+        sector_signal = str(getattr(radar, "sector_signal", "-") or "-")
+        radar_text = f"시장 {market_signal} / 업종 {sector_signal}"
+
+    return (
+        f"현재가: {price_text}\n"
+        f"AI 신뢰도: {score}점 ({level})\n"
+        f"추천 등급: {decision}\n"
+        f"주봉 유사도: {weekly:.1f}%\n"
+        f"STO 유사도: {sto:.1f}%\n"
+        f"JP Radar: {radar_text}"
+    )
 
 
 def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str) -> None:
@@ -91,7 +130,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         run_finished = str(recommendations[0].get("run_finished_at") or "-")
         st.caption(
             f"추천 완료: {run_finished} · "
-            "왼쪽 목록에서 종목을 선택하면 오른쪽 차트와 판단 패널이 함께 바뀝니다."
+            "왼쪽 종목에 마우스를 올리면 핵심정보가 표시되고, 클릭하면 차트가 전환됩니다."
         )
 
         labels = [_watch_label(row) for row in recommendations]
@@ -104,21 +143,32 @@ def run(db_path: str = "datahub/market.db") -> None:
             ),
             0,
         )
+        selection_key = "trading_order_selected_kr_chart_first_index"
+        if selection_key not in st.session_state:
+            st.session_state[selection_key] = default_index
+        st.session_state[selection_key] = min(
+            max(int(st.session_state[selection_key]), 0),
+            len(recommendations) - 1,
+        )
 
         watch_column, detail_column = st.columns([1, 3], gap="large")
         with watch_column:
             st.markdown("#### 추천 종목")
-            index = st.radio(
-                "추천 종목 선택",
-                range(len(recommendations)),
-                index=default_index,
-                format_func=lambda i: labels[i],
-                key="trading_order_selected_kr_chart_first",
-                label_visibility="collapsed",
-            )
+            for i, row in enumerate(recommendations):
+                ticker = normalize_ticker(row["ticker"], "kr")
+                if st.button(
+                    labels[i],
+                    key=f"watch_hover_{ticker}_{i}",
+                    help=_watch_hover_text(st, row, ticker),
+                    type="primary" if i == st.session_state[selection_key] else "secondary",
+                    use_container_width=True,
+                ):
+                    st.session_state[selection_key] = i
+            st.caption("종목 버튼에 마우스를 올리면 상세정보를 볼 수 있습니다.")
             st.caption("● 매수 검토  ● 관찰  ● 보류  ● 제외  ● 미검증")
             st.caption(f"총 {len(recommendations)}개 추천 종목")
 
+        index = int(st.session_state[selection_key])
         selected = recommendations[index]
         selected_code = normalize_ticker(selected["ticker"], "kr")
         selected_label = display_symbol(selected.get("name"), selected_code, "kr")

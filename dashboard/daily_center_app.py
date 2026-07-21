@@ -10,7 +10,6 @@ from maintenance.recommendation_runner import cancel_job, get_status, start_job
 from markets.profiles import get_market_profile
 from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from recommendation.daily_service import DailyRecommendationService
-from recommendation.run_context import latest_completed_run
 
 
 def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
@@ -30,17 +29,26 @@ def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
     st.dataframe(pd.DataFrame(rows, columns=["단계", "통과 수", "의미"]), use_container_width=True, hide_index=True)
 
 
-def _render_selected_options(st, values: dict[str, object]) -> None:
-    if not values:
-        return
-    years = values.get("candidate_years", values.get("replay_years", 2))
-    pool = values.get("pattern_pool", values.get("weekly_pool_n", 100))
-    weekly = float(values.get("min_weekly_similarity", 0) or 0)
-    sto = float(values.get("min_sto_similarity", 0) or 0)
-    st.caption(
-        f"적용 기준 · 최근 {years}년 · 과거 패턴 {pool}개 · "
-        f"주봉 {weekly:.0f}% 이상 · STO {sto:.0f}% 이상 · 순위는 주봉 유사도 단일 기준"
-    )
+def _parameters(values: dict[str, object] | None) -> dict[str, object]:
+    values = values or {}
+    return {
+        "candidate_years": int(values.get("candidate_years", values.get("replay_years", 2)) or 2),
+        "weekly_pool_n": int(values.get("weekly_pool_n", values.get("pattern_pool", 100)) or 100),
+        "min_weekly_similarity": float(values.get("min_weekly_similarity", 0) or 0),
+        "min_sto_similarity": float(values.get("min_sto_similarity", 0) or 0),
+        "top_n": int(values.get("top_n", values.get("recommendation_count", 20)) or 20),
+    }
+
+
+def _render_applied_settings(st, values: dict[str, object] | None, title: str = "실행 적용 기준") -> None:
+    p = _parameters(values)
+    st.markdown(f"#### {title}")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("과거 패턴 기간", f"{p['candidate_years']}년")
+    c2.metric("비교 패턴 수", f"{p['weekly_pool_n']:,}개")
+    c3.metric("최소 주봉", f"{p['min_weekly_similarity']:.1f}%")
+    c4.metric("STO 기준", f"{p['min_sto_similarity']:.1f}%")
+    c5.metric("저장 목표", f"{p['top_n']}개")
 
 
 def _format_elapsed(seconds: object) -> str:
@@ -69,7 +77,7 @@ def _health_text(value: object, unknown: str = "확인 불가") -> str:
     return unknown
 
 
-def _render_live_status(st, live: dict[str, object]) -> None:
+def _render_live_status(st, live: dict[str, object], run_parameters: dict[str, object] | None) -> None:
     state = str(live.get("state") or "IDLE")
     running = bool(live.get("running"))
     stage = str(live.get("stage_label") or live.get("stage") or "-")
@@ -86,6 +94,8 @@ def _render_live_status(st, live: dict[str, object]) -> None:
     elif state in {"STARTING", "RUNNING", "CANCELLING"}:
         st.error("상태값은 실행 중이지만 작업 생존 신호를 확인하지 못했습니다.")
 
+    _render_applied_settings(st, run_parameters or live.get("diagnostics") or {}, "현재 실행에 실제 적용된 기준")
+
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("실행 판정", "정상 실행 중" if running else state)
     c2.metric("현재 단계", stage)
@@ -94,18 +104,39 @@ def _render_live_status(st, live: dict[str, object]) -> None:
 
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("처리 종목", f"{current:,} / {total:,}" if total else f"{current:,}")
-    d2.metric("현재 종목", str(ticker))
+    d2.metric("최근 처리 종목", str(ticker))
     d3.metric("추천 기준 통과", f"{matched:,}종목")
     d4.metric("남은 종목", f"{int(remaining):,}" if remaining is not None else "-")
 
     h1, h2, h3 = st.columns(3)
     h1.metric("최근 생존 신호", _heartbeat_text(live.get("heartbeat_age_seconds")))
     h2.metric("작업 스레드", _health_text(live.get("thread_alive"), "외부 프로세스"))
-    h3.metric("작업 잠금", _health_text(live.get("lock_exists")))
+    h3.metric("작업 잠금 파일", _health_text(live.get("lock_exists")))
 
     st.progress(overall, text=str(live.get("message") or "분석 중..."))
     st.caption(f"단계 진행률 {stage_progress * 100:.1f}% · 마지막 상태 갱신 {live.get('updated_at') or '-'}")
-    _render_selected_options(st, live.get("diagnostics") or {})
+
+
+def _history_frame(runs: list[dict[str, object]]) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for run in runs:
+        p = _parameters(run.get("parameters") or {})
+        rows.append({
+            "실행 시작": run.get("started_at"),
+            "완료 시각": run.get("finished_at") or "-",
+            "유형": run.get("run_type"),
+            "상태": run.get("status"),
+            "기간(년)": p["candidate_years"],
+            "패턴 수": p["weekly_pool_n"],
+            "주봉 기준": p["min_weekly_similarity"],
+            "STO 기준": p["min_sto_similarity"],
+            "저장 목표": p["top_n"],
+            "추천 결과": int(run.get("recommendation_count") or 0),
+            "소요(초)": round(float(run.get("elapsed_seconds") or 0), 1),
+            "오류": run.get("error_message") or "",
+            "run_id": run.get("run_id"),
+        })
+    return pd.DataFrame(rows)
 
 
 def run(market_code: str = "kr") -> None:
@@ -138,17 +169,11 @@ def run(market_code: str = "kr") -> None:
     try:
         readiness = inspect_market_db(profile.db_path, profile.code)
         runs = service.latest_runs(50)
-        completed_runs = [
-            row for row in runs
-            if row["status"] == "COMPLETED" and int(row.get("recommendation_count") or 0) > 0
-        ]
-        common_latest = latest_completed_run(service.conn, profile.code)
-        latest_completed = next(
-            (row for row in completed_runs if common_latest and row["run_id"] == common_latest["run_id"]),
-            completed_runs[0] if completed_runs else None,
-        )
-        latest_auto = next((row for row in completed_runs if row["run_type"] == "AUTO"), None)
-        latest_manual = next((row for row in completed_runs if row["run_type"] == "MANUAL"), None)
+        completed_runs = [row for row in runs if row.get("status") == "COMPLETED"]
+        latest_completed = completed_runs[0] if completed_runs else None
+        latest_auto = next((row for row in completed_runs if row.get("run_type") == "AUTO"), None)
+        latest_manual = next((row for row in completed_runs if row.get("run_type") == "MANUAL"), None)
+        active_run = next((row for row in runs if row.get("status") == "RUNNING"), None)
         runtime = get_status(profile.code)
 
         a, b, c, d = st.columns(4)
@@ -167,6 +192,10 @@ def run(market_code: str = "kr") -> None:
         min_sto = o4.number_input("STO 통과 기준", 0.0, 100.0, 85.0, 1.0, key=f"{profile.code}_sto")
         top_n = o5.number_input("저장할 추천종목 수", 1, 50, 20, 1, key=f"{profile.code}_top_n")
         st.info("추천 순위는 주봉 유사도만 사용하고 STO는 최소 기준 통과 여부만 확인합니다.")
+        st.caption(
+            f"다음 실행 예정 기준 · 최근 {int(candidate_years)}년 · 과거 패턴 {int(pattern_pool):,}개 · "
+            f"주봉 {float(min_chart):.1f}% · STO {float(min_sto):.1f}% · 저장 목표 {int(top_n)}개"
+        )
 
         running = bool(runtime.get("running"))
         start_col, refresh_col, stop_col = st.columns([4, 1.4, 1])
@@ -198,11 +227,11 @@ def run(market_code: str = "kr") -> None:
         state = str(live.get("state", "IDLE"))
         if state in {"STARTING", "RUNNING", "CANCELLING"}:
             st.markdown("### 현재 실행 상세")
-            _render_live_status(st, live)
+            _render_live_status(st, live, (active_run or {}).get("parameters") or {})
         elif state == "COMPLETED":
             st.success(f"추천 완료 및 저장 · {int(live.get('recommendation_count', 0))}개 · {_format_elapsed(live.get('elapsed_seconds'))}")
         elif state == "CANCELLED":
-            st.warning("추천 생성이 사용자 요청으로 중단되었습니다. 아래에는 완료된 실행만 표시합니다.")
+            st.warning("추천 생성이 사용자 요청으로 중단되었습니다. 실행 기록은 아래 이력에 남습니다.")
         elif state == "STALE":
             st.error(str(live.get("message") or "이전 작업 상태를 복구했습니다."))
             if live.get("error_message"):
@@ -214,54 +243,61 @@ def run(market_code: str = "kr") -> None:
         st.markdown("### 최근 완료된 추천 결과")
         if running:
             st.info("아래 결과는 현재 실행 결과가 아니라 이전에 완료된 실행 결과입니다. 현재 실행 결과는 완료 후 반영됩니다.")
-        if latest_completed:
+        if not latest_completed:
+            st.info(f"{profile.name}에 완료된 추천 실행이 없습니다.")
+        else:
             st.caption(
-                f"완료 시각 {latest_completed.get('finished_at') or '-'} · "
-                f"실행 유형 {latest_completed.get('run_type') or '-'} · "
+                f"완료 시각 {latest_completed.get('finished_at') or '-'} · 실행 유형 {latest_completed.get('run_type') or '-'} · "
                 f"추천 {int(latest_completed.get('recommendation_count') or 0)}종목"
             )
-        if not completed_runs:
-            st.info(f"{profile.name}에 추천 결과가 저장된 완료 실행 이력이 없습니다.")
-            return
-
-        selected_run_id = str(latest_completed["run_id"] if latest_completed else completed_runs[0]["run_id"])
-        selected_run = next(row for row in completed_runs if row["run_id"] == selected_run_id)
-        details = pd.DataFrame(service.recommendations_for_run(selected_run_id))
-        if not details.empty:
-            name_map = build_name_map(service.conn, profile.code)
-            details["종목코드"] = details["ticker"].map(lambda value: normalize_ticker(value, profile.code))
-            details["종목명"] = details.apply(
-                lambda row: resolve_name(row.get("ticker"), row.get("name"), name_map, profile.code), axis=1
-            )
-            details["종목"] = details.apply(
-                lambda row: display_symbol(row.get("종목명"), row.get("종목코드"), profile.code), axis=1
-            )
-            rename = {"final_similarity": "순위점수(주봉)", "weekly_similarity": "주봉 유사도", "sto_similarity": "STO 유사도"}
-            preferred = ["rank_no", "종목", "종목코드", "종목명", "주봉 유사도", "STO 유사도", "decision"]
-            shown = details.rename(columns=rename)
-            st.dataframe(shown[[column for column in preferred if column in shown.columns]], use_container_width=True, hide_index=True)
-            st.page_link("pages/14_Recommendation_Workbench.py", label="투자 워크벤치에서 검토", icon="📊")
+            _render_applied_settings(st, latest_completed.get("parameters") or {}, "이 결과에 실제 적용된 기준")
+            selected_run_id = str(latest_completed["run_id"])
+            details = pd.DataFrame(service.recommendations_for_run(selected_run_id))
+            if details.empty:
+                st.warning("이 실행은 정상 완료됐지만 추천 기준을 통과한 종목이 0개입니다.")
+            else:
+                name_map = build_name_map(service.conn, profile.code)
+                details["종목코드"] = details["ticker"].map(lambda value: normalize_ticker(value, profile.code))
+                details["종목명"] = details.apply(
+                    lambda row: resolve_name(row.get("ticker"), row.get("name"), name_map, profile.code), axis=1
+                )
+                details["종목"] = details.apply(
+                    lambda row: display_symbol(row.get("종목명"), row.get("종목코드"), profile.code), axis=1
+                )
+                rename = {"final_similarity": "순위점수(주봉)", "weekly_similarity": "주봉 유사도", "sto_similarity": "STO 유사도"}
+                preferred = ["rank_no", "종목", "종목코드", "종목명", "주봉 유사도", "STO 유사도", "decision"]
+                shown = details.rename(columns=rename)
+                st.dataframe(shown[[column for column in preferred if column in shown.columns]], use_container_width=True, hide_index=True)
+                st.page_link("pages/14_Recommendation_Workbench.py", label="투자 워크벤치에서 검토", icon="📊")
 
         with st.expander("이전 실행 이력", expanded=False):
-            run_df = pd.DataFrame([{key: value for key, value in row.items() if key not in {"diagnostics", "parameters"}} for row in completed_runs])
-            st.dataframe(run_df, use_container_width=True, hide_index=True)
-            labels = {
-                row["run_id"]: f"{row['started_at']} · {row['run_type']} · {row['recommendation_count']}개"
-                for row in completed_runs
-            }
-            history_run_id = st.selectbox(
-                "이력 상세 보기",
-                options=list(labels),
-                index=0,
-                format_func=lambda run_id: labels[run_id],
-                key=f"{profile.code}_detail_completed_run",
-            )
-            history_run = next(row for row in completed_runs if row["run_id"] == history_run_id)
-            _render_selected_options(st, history_run.get("diagnostics") or history_run.get("parameters") or {})
-            _render_diagnostics(st, history_run.get("diagnostics") or {})
-            report_path = history_run.get("report_path")
-            if report_path and Path(str(report_path)).exists():
-                st.caption(f"HTML 보고서: {report_path}")
+            if not runs:
+                st.info("저장된 실행 이력이 없습니다.")
+            else:
+                st.caption("추천 결과가 0개이거나 실패·중단된 실행도 모두 표시합니다.")
+                st.dataframe(_history_frame(runs), use_container_width=True, hide_index=True)
+                labels = {
+                    str(row["run_id"]): (
+                        f"{row.get('started_at')} · {row.get('status')} · "
+                        f"{int(row.get('recommendation_count') or 0)}개"
+                    )
+                    for row in runs
+                }
+                history_run_id = st.selectbox(
+                    "이력 상세 보기",
+                    options=list(labels),
+                    index=0,
+                    format_func=lambda run_id: labels[run_id],
+                    key=f"{profile.code}_detail_run",
+                )
+                history_run = next(row for row in runs if str(row["run_id"]) == history_run_id)
+                _render_applied_settings(st, history_run.get("parameters") or {}, "선택 실행에 적용된 기준")
+                if history_run.get("error_message"):
+                    st.error(str(history_run.get("error_message")))
+                _render_diagnostics(st, history_run.get("diagnostics") or {})
+                report_path = history_run.get("report_path")
+                if report_path and Path(str(report_path)).exists():
+                    st.caption(f"HTML 보고서: {report_path}")
 
         st.caption(
             f"최근 자동 완료 {latest_auto['finished_at'] if latest_auto else '없음'} · "

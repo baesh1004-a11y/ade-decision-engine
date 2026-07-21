@@ -35,11 +35,19 @@
 | 12 | Report Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 일일 의사결정, 포트폴리오, 체결, 백테스트 리포트 생성 |
 | 13 | Integration Orchestrator | 완료 | 기존 통합 흐름 존재 | 계획 완료 | 미확인 | 실행 ID, 단계 상태, 실패 격리, 감사 로그를 관리하는 상위 제어 계층 |
 | 14 | Run State Store | 완료 | 미구현 | 계획 완료 | 미확인 | SQLite run/stage/artifact 저장, 상태 전이, 멱등성, 감사 추적 |
+| 15 | Configuration & Policy Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 정책 버전, 승인, 실행별 불변 스냅샷 관리 |
+| 16 | Data Snapshot & Lineage Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 데이터 무결성, 계보, 재현성 관리 |
+| 17 | Audit & Compliance Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 감사 이벤트와 통제 위반 탐지 |
+| 18 | Scheduler & Trigger Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 시장 세션과 스케줄 기반 실행 생성 |
+| 19 | Portfolio Accounting & Performance Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 현금, 원장, 손익, 수익률, 벤치마크 계산 |
+| 20 | Market Regime & Feature Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 특징량 생성과 시장 국면 분류 |
+| 21 | Signal Generation & Ranking Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 종목 신호, 신뢰도, 순위, 후보 선정 |
+| 22 | Portfolio Risk & Exposure Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 종목·섹터·상관 군집·현금·총 익스포저 한도 평가 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 핵심 엔진 및 통합 실행 기반 설계 완료
+[██████████] 현재 계획된 핵심 판단·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -48,7 +56,8 @@
 2. `RunRequest`, `RunResult`, `StageResult` 모델 구현
 3. 기존 `main.py`/`ADEPipeline` adapter 작성
 4. 고정 CSV fixture 기반 스모크 테스트
-5. Candidate → Signal 병행 전환과 Risk/Decision 정합성 검증
+5. Candidate → Signal 병행 전환과 Portfolio Risk/Decision 정합성 검증
+6. Decision & Position Sizing Engine v1 상세 설계
 
 ## 다음 작업
 
@@ -56,8 +65,9 @@
 2. `core/run_models.py`, `core/run_repository.py`, `core/run_state_store.py` 구현
 3. run/stage 상태 전이 단위 테스트 작성
 4. 기존 파이프라인을 Orchestrator stage로 래핑
-5. DataHub → Signal → Risk → Decision fixture 통합 테스트
-6. Report Engine용 최소 JSON fixture 생성
+5. DataHub → Feature → Signal → Risk → Decision fixture 통합 테스트
+6. Portfolio Risk 결과와 Position Sizing 입력 계약 확정
+7. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -71,3 +81,5 @@
 - Run State Store는 상태를 기록하되 최종 투자 판단이나 재시도 정책을 결정하지 않는다.
 - 완료 상태의 run은 되살리지 않으며 재실행 시 새 run ID를 생성한다.
 - stage 상태 변경과 산출물 저장은 가능한 한 동일 트랜잭션으로 처리한다.
+- Portfolio Risk Engine의 하드 차단은 Decision Engine이 무시할 수 없다.
+- 승인 후 예상 포트폴리오는 모든 현금·집중도·익스포저 한도를 준수해야 한다.

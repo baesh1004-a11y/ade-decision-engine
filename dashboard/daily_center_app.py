@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -42,6 +43,71 @@ def _render_selected_options(st, values: dict[str, object]) -> None:
     )
 
 
+def _format_elapsed(seconds: object) -> str:
+    total = max(0, int(float(seconds or 0)))
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}시간 {minutes}분 {secs}초"
+    if minutes:
+        return f"{minutes}분 {secs}초"
+    return f"{secs}초"
+
+
+def _heartbeat_text(age: object) -> str:
+    if age is None:
+        return "확인 불가"
+    seconds = max(0, int(float(age)))
+    return "방금" if seconds < 2 else f"{seconds}초 전"
+
+
+def _health_text(value: object, unknown: str = "확인 불가") -> str:
+    if value is True:
+        return "정상"
+    if value is False:
+        return "끊김"
+    return unknown
+
+
+def _render_live_status(st, live: dict[str, object]) -> None:
+    state = str(live.get("state") or "IDLE")
+    running = bool(live.get("running"))
+    stage = str(live.get("stage_label") or live.get("stage") or "-")
+    current = int(live.get("current") or live.get("processed_symbols") or 0)
+    total = int(live.get("total") or live.get("total_symbols") or 0)
+    remaining = live.get("remaining_symbols")
+    ticker = live.get("current_ticker") or live.get("ticker") or "-"
+    matched = int(live.get("matched_symbols") or (live.get("diagnostics") or {}).get("symbols_with_matches", 0) or 0)
+    overall = float(live.get("overall_progress", live.get("progress", 0.0)) or 0.0)
+    stage_progress = float(live.get("stage_progress", live.get("progress", 0.0)) or 0.0)
+
+    if state in {"STARTING", "RUNNING", "CANCELLING"} and running:
+        st.success("실제 작업 생존 신호를 확인했습니다. 추천 작업이 실행 중입니다.")
+    elif state in {"STARTING", "RUNNING", "CANCELLING"}:
+        st.error("상태값은 실행 중이지만 작업 생존 신호를 확인하지 못했습니다.")
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("실행 판정", "정상 실행 중" if running else state)
+    c2.metric("현재 단계", stage)
+    c3.metric("전체 진행률", f"{overall * 100:.1f}%")
+    c4.metric("경과 시간", _format_elapsed(live.get("elapsed_seconds")))
+
+    d1, d2, d3, d4 = st.columns(4)
+    d1.metric("처리 종목", f"{current:,} / {total:,}" if total else f"{current:,}")
+    d2.metric("현재 종목", str(ticker))
+    d3.metric("추천 기준 통과", f"{matched:,}종목")
+    d4.metric("남은 종목", f"{int(remaining):,}" if remaining is not None else "-")
+
+    h1, h2, h3 = st.columns(3)
+    h1.metric("최근 생존 신호", _heartbeat_text(live.get("heartbeat_age_seconds")))
+    h2.metric("작업 스레드", _health_text(live.get("thread_alive"), "외부 프로세스"))
+    h3.metric("작업 잠금", _health_text(live.get("lock_exists")))
+
+    st.progress(overall, text=str(live.get("message") or "분석 중..."))
+    st.caption(f"단계 진행률 {stage_progress * 100:.1f}% · 마지막 상태 갱신 {live.get('updated_at') or '-'}")
+    _render_selected_options(st, live.get("diagnostics") or {})
+
+
 def run(market_code: str = "kr") -> None:
     import streamlit as st
 
@@ -62,7 +128,7 @@ def run(market_code: str = "kr") -> None:
         <div class="hero">
           <div class="eyebrow">ADE {profile.code.upper()} PRE-SURGE RECOMMENDATION</div>
           <h1>{profile.name} 급등직전 120일 패턴 추천</h1>
-          <p>통합 추천 워크벤치와 같은 추천 실행·같은 DB·같은 순위 규칙을 사용합니다.</p>
+          <p>투자 워크벤치와 같은 추천 실행·같은 DB·같은 순위 규칙을 사용합니다.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -88,23 +154,12 @@ def run(market_code: str = "kr") -> None:
         a, b, c, d = st.columns(4)
         a.metric("운영 준비", "READY" if readiness.ready else "NOT READY")
         b.metric("활성 종목", f"{readiness.active_symbols:,}")
-        c.metric("급등직전 패턴", f"{readiness.surge_patterns:,}")
-        d.metric("가격 최신일", readiness.latest_price_date or "없음")
+        c.metric("최근 완료 추천", f"{int(latest_completed.get('recommendation_count') or 0):,}개" if latest_completed else "없음")
+        d.metric("실행 상태", "RUNNING" if runtime.get("running") else str(runtime.get("state", "IDLE")))
         if not readiness.ready:
             st.error("추천 실행 전 데이터 준비가 필요합니다: " + " / ".join(readiness.issues))
 
-        st.markdown("### 운영 상태")
-        s1, s2, s3, s4 = st.columns(4)
-        s1.metric("자동 스케줄", profile.scheduler_time)
-        s2.metric("오늘 자동 완료", "YES" if service.auto_completed_today() else "NO")
-        s3.metric("현재 작업", str(runtime.get("stage", "없음")))
-        s4.metric("작업 상태", str(runtime.get("state", "IDLE")))
-        st.caption(
-            f"최근 완료 실행 {latest_completed['finished_at'] if latest_completed else '없음'} · "
-            f"자동 {latest_auto['finished_at'] if latest_auto else '없음'} · 수동 {latest_manual['finished_at'] if latest_manual else '없음'}"
-        )
-
-        st.markdown("### 추천 기준")
+        st.markdown("### 오늘의 추천 생성")
         o1, o2, o3, o4, o5 = st.columns(5)
         candidate_years = o1.number_input("과거 패턴 기간(년)", 1, 10, 2, 1, key=f"{profile.code}_replay_years")
         pattern_pool = o2.number_input("비교할 과거 패턴 수", 10, 1000, 100, 10, key=f"{profile.code}_weekly_pool")
@@ -142,41 +197,35 @@ def run(market_code: str = "kr") -> None:
         live = get_status(profile.code)
         state = str(live.get("state", "IDLE"))
         if state in {"STARTING", "RUNNING", "CANCELLING"}:
-            st.progress(float(live.get("progress", 0.0) or 0.0), text=str(live.get("message", "분석 중...")))
-            _render_selected_options(st, live.get("diagnostics") or {})
-            _render_diagnostics(st, live.get("diagnostics") or {})
+            st.markdown("### 현재 실행 상세")
+            _render_live_status(st, live)
         elif state == "COMPLETED":
-            st.success(f"추천 완료 및 저장 · {int(live.get('recommendation_count', 0))}개 · {float(live.get('elapsed_seconds', 0.0)):.1f}초")
+            st.success(f"추천 완료 및 저장 · {int(live.get('recommendation_count', 0))}개 · {_format_elapsed(live.get('elapsed_seconds'))}")
         elif state == "CANCELLED":
-            st.warning("추천 생성이 사용자 요청으로 중단되었습니다. 아래 상세 결과에는 완료 실행만 표시합니다.")
+            st.warning("추천 생성이 사용자 요청으로 중단되었습니다. 아래에는 완료된 실행만 표시합니다.")
         elif state == "STALE":
-            st.warning(str(live.get("message") or "이전 작업 상태를 복구했습니다."))
+            st.error(str(live.get("message") or "이전 작업 상태를 복구했습니다."))
+            if live.get("error_message"):
+                st.caption(str(live.get("error_message")))
         elif state == "FAILED":
             st.error(str(live.get("error_message") or "추천 생성에 실패했습니다."))
 
         st.divider()
-        st.markdown("### 완료된 추천 이력")
+        st.markdown("### 최근 완료된 추천 결과")
+        if running:
+            st.info("아래 결과는 현재 실행 결과가 아니라 이전에 완료된 실행 결과입니다. 현재 실행 결과는 완료 후 반영됩니다.")
+        if latest_completed:
+            st.caption(
+                f"완료 시각 {latest_completed.get('finished_at') or '-'} · "
+                f"실행 유형 {latest_completed.get('run_type') or '-'} · "
+                f"추천 {int(latest_completed.get('recommendation_count') or 0)}종목"
+            )
         if not completed_runs:
             st.info(f"{profile.name}에 추천 결과가 저장된 완료 실행 이력이 없습니다.")
             return
-        run_df = pd.DataFrame([{key: value for key, value in row.items() if key not in {"diagnostics", "parameters"}} for row in completed_runs])
-        st.dataframe(run_df, use_container_width=True, hide_index=True)
 
-        labels = {
-            row["run_id"]: f"{row['started_at']} · {row['run_type']} · {row['recommendation_count']}개"
-            for row in completed_runs
-        }
-        selected_run_id = st.selectbox(
-            "상세 추천 결과",
-            options=list(labels),
-            index=0,
-            format_func=lambda run_id: labels[run_id],
-            key=f"{profile.code}_detail_completed_run",
-        )
+        selected_run_id = str(latest_completed["run_id"] if latest_completed else completed_runs[0]["run_id"])
         selected_run = next(row for row in completed_runs if row["run_id"] == selected_run_id)
-        st.caption(f"통합 워크벤치 기준 실행 ID: {latest_completed['run_id']} · 현재 선택: {selected_run_id}")
-        _render_selected_options(st, selected_run.get("diagnostics") or selected_run.get("parameters") or {})
-        _render_diagnostics(st, selected_run.get("diagnostics") or {})
         details = pd.DataFrame(service.recommendations_for_run(selected_run_id))
         if not details.empty:
             name_map = build_name_map(service.conn, profile.code)
@@ -191,10 +240,34 @@ def run(market_code: str = "kr") -> None:
             preferred = ["rank_no", "종목", "종목코드", "종목명", "주봉 유사도", "STO 유사도", "decision"]
             shown = details.rename(columns=rename)
             st.dataframe(shown[[column for column in preferred if column in shown.columns]], use_container_width=True, hide_index=True)
-            st.page_link("pages/14_Recommendation_Workbench.py", label="동일 실행을 통합 추천 워크벤치에서 보기", icon="📊")
-        report_path = selected_run.get("report_path")
-        if report_path and Path(str(report_path)).exists():
-            st.caption(f"HTML 보고서: {report_path}")
+            st.page_link("pages/14_Recommendation_Workbench.py", label="투자 워크벤치에서 검토", icon="📊")
+
+        with st.expander("이전 실행 이력", expanded=False):
+            run_df = pd.DataFrame([{key: value for key, value in row.items() if key not in {"diagnostics", "parameters"}} for row in completed_runs])
+            st.dataframe(run_df, use_container_width=True, hide_index=True)
+            labels = {
+                row["run_id"]: f"{row['started_at']} · {row['run_type']} · {row['recommendation_count']}개"
+                for row in completed_runs
+            }
+            history_run_id = st.selectbox(
+                "이력 상세 보기",
+                options=list(labels),
+                index=0,
+                format_func=lambda run_id: labels[run_id],
+                key=f"{profile.code}_detail_completed_run",
+            )
+            history_run = next(row for row in completed_runs if row["run_id"] == history_run_id)
+            _render_selected_options(st, history_run.get("diagnostics") or history_run.get("parameters") or {})
+            _render_diagnostics(st, history_run.get("diagnostics") or {})
+            report_path = history_run.get("report_path")
+            if report_path and Path(str(report_path)).exists():
+                st.caption(f"HTML 보고서: {report_path}")
+
+        st.caption(
+            f"최근 자동 완료 {latest_auto['finished_at'] if latest_auto else '없음'} · "
+            f"최근 수동 완료 {latest_manual['finished_at'] if latest_manual else '없음'} · "
+            f"화면 확인 시각 {datetime.now().isoformat(timespec='seconds')}"
+        )
     finally:
         service.close()
 

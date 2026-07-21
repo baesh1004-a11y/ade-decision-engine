@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from broker.base import BrokerOrder
@@ -80,6 +82,15 @@ class USTradingOrderService:
             CREATE INDEX IF NOT EXISTS idx_us_trade_status ON us_trade_order_requests(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_us_execution_order ON us_trade_execution_events(broker_order_id, captured_at);
             """
+        )
+        execution_columns = {
+            str(row[1]) for row in self.conn.execute("PRAGMA table_info(us_trade_execution_events)").fetchall()
+        }
+        if "event_key" not in execution_columns:
+            self.conn.execute("ALTER TABLE us_trade_execution_events ADD COLUMN event_key TEXT")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_us_execution_event_key "
+            "ON us_trade_execution_events(event_key) WHERE event_key IS NOT NULL"
         )
         self.conn.commit()
 
@@ -162,6 +173,7 @@ class USTradingOrderService:
         return request_id
 
     def approve_and_send(self, request_id: str, approval_text: str) -> dict[str, object]:
+        self.expire_stale_requests()
         row = self.conn.execute(
             "SELECT * FROM us_trade_order_requests WHERE request_id=?",
             (request_id,),
@@ -173,6 +185,13 @@ class USTradingOrderService:
         expected = f"{row['ticker']} {row['side']} {row['quantity']}주 ${float(row['limit_price']):.2f} 승인"
         if approval_text.strip() != expected:
             raise ValueError(f"승인 문구가 일치하지 않습니다. 정확히 입력: {expected}")
+
+        self._validate_sell_capacity(dict(row))
+        self.conn.execute(
+            "UPDATE us_trade_order_requests SET approved_at=?, status='SENDING', approval_text=? WHERE request_id=?",
+            (self._now(), approval_text, request_id),
+        )
+        self.conn.commit()
 
         order = BrokerOrder(
             market="us",
@@ -216,10 +235,10 @@ class USTradingOrderService:
         except Exception as exc:
             self.conn.execute(
                 """
-                UPDATE us_trade_order_requests SET approved_at=?, status='FAILED',
-                    approval_text=?, error_message=? WHERE request_id=?
+                UPDATE us_trade_order_requests SET status='VERIFY_REQUIRED',
+                    error_message=? WHERE request_id=?
                 """,
-                (self._now(), approval_text, str(exc), request_id),
+                (str(exc), request_id),
             )
             self.conn.commit()
             raise
@@ -233,20 +252,21 @@ class USTradingOrderService:
                 (order_id,),
             ).fetchone()
             request_id = request["request_id"] if request else None
+            event_key = self._execution_event_key(item)
             self.conn.execute(
                 """
-                INSERT INTO us_trade_execution_events(
+                INSERT OR IGNORE INTO us_trade_execution_events(
                     request_id, captured_at, broker_order_id, ticker, exchange,
                     side, ordered_quantity, filled_quantity, filled_price,
-                    status, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    status, raw_json, event_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     request_id, self._now(), order_id, item.get("ticker", ""),
                     item.get("exchange"), item.get("side"),
                     item.get("ordered_quantity", 0), item.get("filled_quantity", 0),
                     item.get("filled_price", 0.0), item.get("status", "UNKNOWN"),
-                    json.dumps(item, ensure_ascii=False),
+                    json.dumps(item, ensure_ascii=False), event_key,
                 ),
             )
             if request_id:
@@ -304,18 +324,22 @@ class USTradingOrderService:
                 continue
             request_id = None
             if create_sell_requests:
-                request_id = self.create_request(
-                    ticker=str(pos["ticker"]),
-                    name=str(pos["name"]),
-                    exchange=self.exchange_for_ticker(str(pos["ticker"])),
-                    side="SELL",
-                    quantity=int(pos["quantity"]),
-                    limit_price=float(pos["current_price"]),
-                )
-                self.conn.execute(
-                    "UPDATE us_trade_risk_rules SET last_action=?, updated_at=? WHERE ticker=?",
-                    (trigger, self._now(), pos["ticker"]),
-                )
+                existing = self._open_sell_request(str(pos["ticker"]))
+                if existing:
+                    request_id = str(existing["request_id"])
+                else:
+                    request_id = self.create_request(
+                        ticker=str(pos["ticker"]),
+                        name=str(pos["name"]),
+                        exchange=self.exchange_for_ticker(str(pos["ticker"])),
+                        side="SELL",
+                        quantity=int(pos["quantity"]),
+                        limit_price=float(pos["current_price"]),
+                    )
+                    self.conn.execute(
+                        "UPDATE us_trade_risk_rules SET last_action=?, updated_at=? WHERE ticker=?",
+                        (trigger, self._now(), pos["ticker"]),
+                    )
             actions.append({
                 "ticker": pos["ticker"],
                 "name": pos["name"],
@@ -333,6 +357,69 @@ class USTradingOrderService:
             (int(limit),),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def pending_approval_requests(self, limit: int = 500) -> list[dict[str, object]]:
+        self.expire_stale_requests()
+        rows = self.conn.execute(
+            "SELECT * FROM us_trade_order_requests WHERE status='PENDING_APPROVAL' "
+            "ORDER BY created_at DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def cancel_request(self, request_id: str) -> None:
+        cursor = self.conn.execute(
+            "UPDATE us_trade_order_requests SET status='CANCELLED', error_message='Cancelled by user' "
+            "WHERE request_id=? AND status='PENDING_APPROVAL'",
+            (request_id,),
+        )
+        self.conn.commit()
+        if cursor.rowcount != 1:
+            raise ValueError("취소 가능한 승인 대기 주문이 아닙니다.")
+
+    def expire_stale_requests(self) -> int:
+        ttl_minutes = max(1, int(os.getenv("ADE_ORDER_REQUEST_TTL_MINUTES", "30")))
+        cutoff = (datetime.now() - timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+        cursor = self.conn.execute(
+            "UPDATE us_trade_order_requests SET status='EXPIRED', error_message='Approval window expired' "
+            "WHERE status='PENDING_APPROVAL' AND created_at < ?",
+            (cutoff,),
+        )
+        self.conn.commit()
+        return int(cursor.rowcount)
+
+    def _open_sell_request(self, ticker: str):
+        return self.conn.execute(
+            "SELECT * FROM us_trade_order_requests WHERE ticker=? AND side='SELL' "
+            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (ticker.upper(),),
+        ).fetchone()
+
+    def _validate_sell_capacity(self, row: dict[str, object]) -> None:
+        if str(row["side"]) != "SELL":
+            return
+        positions = self.sync_positions()
+        ticker = str(row["ticker"]).upper()
+        held = sum(int(pos["quantity"]) for pos in positions if str(pos["ticker"]).upper() == ticker)
+        reserved = self.conn.execute(
+            "SELECT COALESCE(SUM(quantity), 0) FROM us_trade_order_requests "
+            "WHERE ticker=? AND side='SELL' AND request_id<>? "
+            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')",
+            (ticker, row["request_id"]),
+        ).fetchone()[0]
+        available = max(0, held - int(reserved or 0))
+        if int(row["quantity"]) > available:
+            raise ValueError(f"매도 가능 수량은 {available}주입니다. 보유·대기 주문을 다시 확인하세요.")
+
+    @staticmethod
+    def _execution_event_key(item: dict[str, object]) -> str:
+        values = (
+            item.get("order_id"), item.get("ticker"), item.get("exchange"), item.get("side"),
+            item.get("ordered_quantity"), item.get("filled_quantity"), item.get("filled_price"),
+            item.get("status"), item.get("executed_at") or item.get("captured_at") or item.get("time"),
+        )
+        return hashlib.sha256("|".join(str(value or "") for value in values).encode("utf-8")).hexdigest()
 
     def execution_history(self, limit: int = 100) -> list[dict[str, object]]:
         rows = self.conn.execute(

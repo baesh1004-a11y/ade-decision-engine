@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import os
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from broker.base import BrokerOrder
@@ -51,6 +53,15 @@ class TradingOrderService:
                 ON trade_execution_events(broker_order_id, captured_at);
             """
         )
+        execution_columns = {
+            str(row[1]) for row in self.conn.execute("PRAGMA table_info(trade_execution_events)").fetchall()
+        }
+        if "event_key" not in execution_columns:
+            self.conn.execute("ALTER TABLE trade_execution_events ADD COLUMN event_key TEXT")
+        self.conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_execution_event_key "
+            "ON trade_execution_events(event_key) WHERE event_key IS NOT NULL"
+        )
         self.conn.commit()
 
     def close(self) -> None:
@@ -84,6 +95,7 @@ class TradingOrderService:
         return request_id
 
     def approve_and_send(self, request_id: str, approval_text: str) -> dict[str, object]:
+        self.expire_stale_requests()
         row = self.conn.execute(
             "SELECT * FROM trade_order_requests WHERE request_id=?", (request_id,)
         ).fetchone()
@@ -94,6 +106,13 @@ class TradingOrderService:
         expected = f"{row['ticker']} {row['side']} {row['quantity']}주 승인"
         if approval_text.strip() != expected:
             raise ValueError(f"승인 문구가 일치하지 않습니다. 정확히 입력: {expected}")
+
+        self._validate_order_capacity(dict(row))
+        self.conn.execute(
+            "UPDATE trade_order_requests SET approved_at=?, status='SENDING', approval_text=? WHERE request_id=?",
+            (self._now(), approval_text, request_id),
+        )
+        self.conn.commit()
 
         broker = kis_trading_broker_from_env()
         order = BrokerOrder(
@@ -128,8 +147,8 @@ class TradingOrderService:
             return result.to_dict()
         except Exception as exc:
             self.conn.execute(
-                "UPDATE trade_order_requests SET approved_at=?, status='FAILED', approval_text=?, error_message=? WHERE request_id=?",
-                (self._now(), approval_text, str(exc), request_id),
+                "UPDATE trade_order_requests SET status='VERIFY_REQUIRED', error_message=? WHERE request_id=?",
+                (str(exc), request_id),
             )
             self.conn.commit()
             raise
@@ -143,17 +162,18 @@ class TradingOrderService:
                 (order_id,),
             ).fetchone()
             request_id = request["request_id"] if request else None
+            event_key = self._execution_event_key(item)
             self.conn.execute(
                 """
-                INSERT INTO trade_execution_events(
+                INSERT OR IGNORE INTO trade_execution_events(
                     request_id, captured_at, broker_order_id, ticker, side,
-                    ordered_quantity, filled_quantity, filled_price, status, raw_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ordered_quantity, filled_quantity, filled_price, status, raw_json, event_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (request_id, self._now(), order_id, item.get("ticker", ""),
                  item.get("side"), item.get("ordered_quantity", 0),
                  item.get("filled_quantity", 0), item.get("filled_price", 0.0),
-                 item.get("status", "UNKNOWN"), json.dumps(item, ensure_ascii=False)),
+                 item.get("status", "UNKNOWN"), json.dumps(item, ensure_ascii=False), event_key),
             )
             if request_id:
                 self.conn.execute(
@@ -190,14 +210,18 @@ class TradingOrderService:
                 continue
             request_id = None
             if create_sell_requests:
-                request_id = self.create_request(
-                    ticker=str(pos["ticker"]), name=str(pos["name"]), side="SELL",
-                    quantity=int(pos["quantity"]), order_type="MARKET",
-                )
-                self.conn.execute(
-                    "UPDATE trade_risk_rules SET last_action=?, updated_at=? WHERE ticker=?",
-                    (trigger, self._now(), pos["ticker"]),
-                )
+                existing = self._open_sell_request(str(pos["ticker"]))
+                if existing:
+                    request_id = str(existing["request_id"])
+                else:
+                    request_id = self.create_request(
+                        ticker=str(pos["ticker"]), name=str(pos["name"]), side="SELL",
+                        quantity=int(pos["quantity"]), order_type="MARKET",
+                    )
+                    self.conn.execute(
+                        "UPDATE trade_risk_rules SET last_action=?, updated_at=? WHERE ticker=?",
+                        (trigger, self._now(), pos["ticker"]),
+                    )
             actions.append({
                 "ticker": pos["ticker"], "name": pos["name"],
                 "quantity": int(pos["quantity"]), "pnl_rate": pnl_rate,
@@ -211,6 +235,111 @@ class TradingOrderService:
             "SELECT * FROM trade_order_requests ORDER BY created_at DESC LIMIT ?", (int(limit),)
         ).fetchall()
         return [dict(row) for row in rows]
+
+    def pending_approval_requests(self, limit: int = 500) -> list[dict[str, object]]:
+        self.expire_stale_requests()
+        rows = self.conn.execute(
+            "SELECT * FROM trade_order_requests WHERE status='PENDING_APPROVAL' "
+            "ORDER BY created_at DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def cancel_request(self, request_id: str) -> None:
+        cursor = self.conn.execute(
+            "UPDATE trade_order_requests SET status='CANCELLED', error_message='Cancelled by user' "
+            "WHERE request_id=? AND status='PENDING_APPROVAL'",
+            (request_id,),
+        )
+        self.conn.commit()
+        if cursor.rowcount != 1:
+            raise ValueError("취소 가능한 승인 대기 주문이 아닙니다.")
+
+    def expire_stale_requests(self) -> int:
+        ttl_minutes = max(1, int(os.getenv("ADE_ORDER_REQUEST_TTL_MINUTES", "30")))
+        cutoff = (datetime.now() - timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
+        cursor = self.conn.execute(
+            "UPDATE trade_order_requests SET status='EXPIRED', error_message='Approval window expired' "
+            "WHERE status='PENDING_APPROVAL' AND created_at < ?",
+            (cutoff,),
+        )
+        self.conn.commit()
+        return int(cursor.rowcount)
+
+    def _open_sell_request(self, ticker: str, exclude_request_id: str | None = None):
+        sql = (
+            "SELECT * FROM trade_order_requests WHERE ticker=? AND side='SELL' "
+            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')"
+        )
+        params: list[object] = [ticker]
+        if exclude_request_id:
+            sql += " AND request_id<>?"
+            params.append(exclude_request_id)
+        sql += " ORDER BY created_at DESC LIMIT 1"
+        return self.conn.execute(sql, params).fetchone()
+
+    def _validate_order_capacity(self, row: dict[str, object]) -> None:
+        from markets.symbol_display import normalize_ticker
+
+        sync = KISAccountSync(self.db_path)
+        try:
+            snapshot, positions = sync.sync()
+        finally:
+            sync.close()
+
+        ticker = normalize_ticker(str(row["ticker"]), "kr")
+        quantity = int(row["quantity"])
+        if str(row["side"]) == "SELL":
+            held = sum(
+                int(pos["quantity"])
+                for pos in positions
+                if normalize_ticker(str(pos["ticker"]), "kr") == ticker
+            )
+            reserved = self.conn.execute(
+                "SELECT COALESCE(SUM(quantity), 0) FROM trade_order_requests "
+                "WHERE ticker=? AND side='SELL' AND request_id<>? "
+                "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')",
+                (ticker, row["request_id"]),
+            ).fetchone()[0]
+            available = max(0, held - int(reserved or 0))
+            if quantity > available:
+                raise ValueError(f"매도 가능 수량은 {available}주입니다. 보유·대기 주문을 다시 확인하세요.")
+            return
+
+        price = float(row.get("limit_price") or 0.0)
+        if price <= 0:
+            from broker.kis_market_data import kis_market_data_from_env
+
+            price = float(kis_market_data_from_env().get_current_quote(ticker).get("current_price") or 0.0)
+        if price <= 0:
+            raise ValueError("현재가를 확인할 수 없어 매수 주문을 승인할 수 없습니다.")
+        unknown_market_buys = self.conn.execute(
+            "SELECT COUNT(*) FROM trade_order_requests WHERE side='BUY' AND request_id<>? "
+            "AND order_type='MARKET' AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')",
+            (row["request_id"],),
+        ).fetchone()[0]
+        if int(unknown_market_buys or 0) > 0:
+            raise ValueError("금액이 확정되지 않은 다른 시장가 매수 요청을 먼저 처리하거나 취소하세요.")
+        reserved_row = self.conn.execute(
+            "SELECT COALESCE(SUM(quantity * COALESCE(limit_price, 0)), 0) FROM trade_order_requests "
+            "WHERE side='BUY' AND request_id<>? "
+            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')",
+            (row["request_id"],),
+        ).fetchone()
+        available_cash = max(0.0, float(snapshot.cash) - float(reserved_row[0] or 0.0))
+        estimated = price * quantity
+        if estimated > available_cash:
+            raise ValueError(f"예상 주문금액 {estimated:,.0f}원이 주문 가능 현금 {available_cash:,.0f}원을 초과합니다.")
+
+    @staticmethod
+    def _execution_event_key(item: dict[str, object]) -> str:
+        values = (
+            item.get("order_id"), item.get("ticker"), item.get("side"),
+            item.get("ordered_quantity"), item.get("filled_quantity"),
+            item.get("filled_price"), item.get("status"),
+            item.get("executed_at") or item.get("captured_at") or item.get("time"),
+        )
+        return hashlib.sha256("|".join(str(value or "") for value in values).encode("utf-8")).hexdigest()
 
     def latest_executions(self, limit: int = 100) -> list[dict[str, object]]:
         rows = self.conn.execute(

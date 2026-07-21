@@ -1,5 +1,26 @@
 # Changelog
 
+## ADE v1.0.1
+
+### Fixed
+
+- Distinguished live KIS quotes from fallback chart prices and exposed price freshness.
+- Added bounded market-data caches and an explicit refresh action for the trading dashboard.
+- Kept current and prior-run pending orders visible, cancellable, and separately labeled.
+- Added a configurable approval expiry window for stale Korean and US order requests.
+- Recorded ambiguous broker transport failures as `VERIFY_REQUIRED` instead of a definite failure.
+- Prevented duplicate execution events and duplicate risk-triggered sell requests.
+- Revalidated Korean buying power and Korean/US sellable quantities before broker submission.
+- Queried pending approvals independently from the limited general order history.
+- Distinguished unavailable Command Center database metrics from real zero values.
+- Restored UTF-8 Korean dashboard copy and added regression coverage for data-accuracy fixes.
+
+### Safety
+
+- Backup branch: `backup/dashboard-before-11-20-20260721`.
+- Default order approval lifetime: 30 minutes via `ADE_ORDER_REQUEST_TTL_MINUTES`.
+- Orders with an uncertain broker response require execution-status verification before any retry.
+
 ## ADE Design v0.1
 
 ### Added

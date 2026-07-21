@@ -61,7 +61,7 @@ def run(db_path: str = "datahub/us_market.db") -> None:
             _render_analysis_actions(st, selected, ticker)
             _render_order_form(st, service, selected, ticker)
 
-        _render_pending(st, service)
+        _render_pending(st, service, recommendations)
         _render_execution(st, service)
     finally:
         service.close()
@@ -180,10 +180,10 @@ def _render_order_form(st, service, selected: dict, ticker: str) -> None:
             st.error(f"주문 요청 생성 실패: {exc}")
 
 
-def _render_pending(st, service) -> None:
+def _render_pending(st, service, recommendations: list[dict]) -> None:
     st.markdown("### 2. 사용자 승인 후 KIS 전송")
-    history = service.order_history(100)
-    pending = [row for row in history if row["status"] == "PENDING_APPROVAL"]
+    pending = service.pending_approval_requests()
+    current_run_id = str(recommendations[0]["run_id"]) if recommendations else ""
     if not pending:
         st.caption("승인 대기 주문이 없습니다.")
         return
@@ -191,22 +191,33 @@ def _render_pending(st, service) -> None:
         "승인 대기 주문",
         range(len(pending)),
         format_func=lambda index: (
-            f"{pending[index]['ticker']} {pending[index]['side']} {pending[index]['quantity']}주 "
-            f"${float(pending[index]['limit_price']):.2f}"
+            ("현재 실행 · " if str(pending[index].get("source_run_id") or "") == current_run_id else "이전 실행 · ")
+            + f"{pending[index]['ticker']} {pending[index]['side']} {pending[index]['quantity']}주 "
+            f"${float(pending[index]['limit_price']):.2f} · {pending[index].get('created_at') or '-'}"
         ),
     )
     row = pending[request_index]
+    if str(row.get("source_run_id") or "") != current_run_id:
+        st.warning("이 주문은 이전 추천 실행에서 생성되었습니다. 현재 가격과 판단을 다시 확인하세요.")
     expected = f"{row['ticker']} {row['side']} {row['quantity']}주 ${float(row['limit_price']):.2f} 승인"
     st.code(expected)
     approval = st.text_input("위 승인 문구를 정확히 입력")
     confirm = st.checkbox("종목·거래소·방향·수량·지정가를 확인했습니다.")
-    if st.button("승인하고 KIS 미국주식 주문 전송", disabled=not confirm, type="primary"):
+    approve_col, cancel_col = st.columns(2)
+    if approve_col.button("승인하고 KIS 미국주식 주문 전송", disabled=not confirm, type="primary"):
         try:
             result = service.approve_and_send(str(row["request_id"]), approval)
             st.success(f"주문 결과: {result.get('message')} · 주문번호 {result.get('order_id')}")
             st.rerun()
         except Exception as exc:
             st.error(f"주문 전송 실패: {exc}")
+    if cancel_col.button("이 주문 요청 취소"):
+        try:
+            service.cancel_request(str(row["request_id"]))
+            st.success("주문 요청을 취소했습니다.")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"주문 취소 실패: {exc}")
 
 
 def _render_execution(st, service) -> None:

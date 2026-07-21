@@ -5,6 +5,7 @@ import sqlite3
 from types import SimpleNamespace
 
 import pandas as pd
+import streamlit as st
 
 from broker.kis_market_data import kis_market_data_from_env
 from dashboard.trading_desk_app import (
@@ -24,6 +25,38 @@ from trading.order_service import TradingOrderService
 
 
 ELIGIBLE_DECISIONS = {"FINAL BUY", "BUY WATCH"}
+
+
+@st.cache_resource(show_spinner=False)
+def _cached_kis_client():
+    return kis_market_data_from_env()
+
+
+@st.cache_data(ttl=5, max_entries=200, show_spinner=False)
+def _cached_kis_quote(ticker: str) -> dict[str, object]:
+    return _cached_kis_client().get_current_quote(ticker)
+
+
+@st.cache_data(ttl=900, max_entries=100, show_spinner=False)
+def _cached_kis_daily_bars(ticker: str) -> pd.DataFrame:
+    return _cached_kis_client().get_daily_bars(ticker, lookback_days=365)
+
+
+@st.cache_data(ttl=30, max_entries=100, show_spinner=False)
+def _cached_kis_intraday_bars(ticker: str) -> pd.DataFrame:
+    return _cached_kis_client().get_intraday_bars(ticker, include_previous=True)
+
+
+@st.cache_data(ttl=30, max_entries=100, show_spinner=False)
+def _cached_kis_four_hour_bars(ticker: str) -> pd.DataFrame:
+    return _cached_kis_client().get_four_hour_bars(ticker)
+
+
+def _clear_market_data_cache() -> None:
+    _cached_kis_quote.clear()
+    _cached_kis_daily_bars.clear()
+    _cached_kis_intraday_bars.clear()
+    _cached_kis_four_hour_bars.clear()
 
 
 def _format_price(value: float) -> str:
@@ -176,6 +209,7 @@ def _yahoo_candidates(ticker: str) -> list[str]:
     return [f"{code}.KS", f"{code}.KQ"]
 
 
+@st.cache_data(ttl=60, max_entries=200, show_spinner=False)
 def _load_fallback_bars(db_path: str, ticker: str, timeframe: str) -> tuple[pd.DataFrame, str]:
     period, interval = ("1y", "1d") if timeframe == "일봉" else ("5d", "5m")
     try:
@@ -230,31 +264,31 @@ def _load_live_market_data(
 ) -> tuple[pd.DataFrame, dict[str, object], str, str | None]:
     code = normalize_ticker(ticker, "kr")
 
-    @st.cache_resource(show_spinner=False)
-    def _kis_client():
-        return kis_market_data_from_env()
-
+    errors: list[str] = []
     try:
-        client = _kis_client()
-        quote = client.get_current_quote(code)
-        if timeframe == "일봉":
-            bars = client.get_daily_bars(code, lookback_days=365)
-            source = "한국투자증권 KIS 일봉"
-        elif timeframe == "4시간봉":
-            bars = client.get_four_hour_bars(code)
-            source = "한국투자증권 KIS 4시간봉"
-        else:
-            bars = client.get_intraday_bars(code, include_previous=True)
-            source = "한국투자증권 KIS 장중 분봉"
-        if not bars.empty:
-            return bars, quote, source, None
-        error = f"KIS {timeframe} 응답이 비어 있습니다."
+        quote = _cached_kis_quote(code)
     except Exception as exc:
         quote = {}
-        error = str(exc)
+        errors.append(f"현재가: {exc}")
+
+    try:
+        if timeframe == "일봉":
+            bars = _cached_kis_daily_bars(code)
+            source = "한국투자증권 KIS 일봉"
+        elif timeframe == "4시간봉":
+            bars = _cached_kis_four_hour_bars(code)
+            source = "한국투자증권 KIS 4시간봉"
+        else:
+            bars = _cached_kis_intraday_bars(code)
+            source = "한국투자증권 KIS 장중 분봉"
+        if not bars.empty:
+            return bars, quote, source, " / ".join(errors) or None
+        errors.append(f"KIS {timeframe} 응답이 비어 있습니다.")
+    except Exception as exc:
+        errors.append(f"차트: {exc}")
 
     fallback_bars, fallback_source = _load_fallback_bars(db_path, ticker, timeframe)
-    return fallback_bars, quote, fallback_source, error
+    return fallback_bars, quote, fallback_source, " / ".join(errors) or None
 
 
 def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mobile: bool = False) -> None:
@@ -266,8 +300,12 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
             index=0,
             key=f"chart_timeframe_{normalize_ticker(ticker, 'kr')}",
         )
+        if st.button("시세 새로고침", key=f"refresh_market_{normalize_ticker(ticker, 'kr')}"):
+            _clear_market_data_cache()
+            _load_fallback_bars.clear()
+            st.rerun()
     else:
-        title_col, control_col = st.columns([4, 1])
+        title_col, control_col, refresh_col = st.columns([4, 1, 1])
         with title_col:
             st.markdown(f"### 현재 차트 · {label}")
         with control_col:
@@ -278,6 +316,11 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
                 key=f"chart_timeframe_{normalize_ticker(ticker, 'kr')}",
                 label_visibility="collapsed",
             )
+        with refresh_col:
+            if st.button("시세 새로고침", key=f"refresh_market_{normalize_ticker(ticker, 'kr')}"):
+                _clear_market_data_cache()
+                _load_fallback_bars.clear()
+                st.rerun()
 
     bars, quote, source, kis_error = _load_live_market_data(st, db_path, ticker, timeframe)
     if bars.empty:
@@ -287,9 +330,10 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
         return
 
     latest = bars.iloc[-1]
+    live_quote = quote.get("current_price") not in (None, "", 0, 0.0)
     current_price = float(quote.get("current_price") or latest["Close"])
-    change = float(quote.get("change") or 0.0)
-    change_rate = float(quote.get("change_rate") or 0.0)
+    change = float(quote.get("change") or 0.0) if live_quote else None
+    change_rate = float(quote.get("change_rate") or 0.0) if live_quote else None
     high = float(quote.get("high") or latest["High"])
     low = float(quote.get("low") or latest["Low"])
     volume = float(quote.get("volume") or latest.get("Volume") or 0.0)
@@ -299,7 +343,11 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
     if mobile:
         st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
         quote_cols = st.columns(2)
-        quote_cols[0].metric("현재가", _format_price(current_price), f"{change:+,.0f}원 ({change_rate:+.2f}%)")
+        quote_cols[0].metric(
+            "현재가" if live_quote else "최근 확인 가격",
+            _format_price(current_price),
+            f"{change:+,.0f}원 ({change_rate:+.2f}%)" if live_quote else None,
+        )
         quote_cols[1].metric("누적 거래량", f"{volume:,.0f}")
         quote_cols = st.columns(2)
         quote_cols[0].metric("고가", _format_price(high))
@@ -316,8 +364,12 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
         with chart_column:
             st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
         with quote_column:
-            st.markdown("#### 실시간 시세")
-            st.metric("현재가", _format_price(current_price), f"{change:+,.0f}원 ({change_rate:+.2f}%)")
+            st.markdown("#### 실시간 시세" if live_quote else "#### 최근 확인 가격")
+            st.metric(
+                "현재가" if live_quote else "대체 데이터 종가",
+                _format_price(current_price),
+                f"{change:+,.0f}원 ({change_rate:+.2f}%)" if live_quote else None,
+            )
             st.metric("고가", _format_price(high))
             st.metric("저가", _format_price(low))
             st.metric("누적 거래량", f"{volume:,.0f}")
@@ -328,7 +380,9 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
             else:
                 st.info("현재가 응답에 호가가 포함되지 않았습니다.")
 
-    st.caption(f"시세 출처: {source} · 기본 차트는 기술분석에 적합한 일봉입니다.")
+    captured_at = quote.get("captured_at") if live_quote else latest.get("Date", "-")
+    freshness = "KIS 실시간 현재가" if live_quote else "대체 데이터 · 실시간 아님"
+    st.caption(f"시세 출처: {source} · {freshness} · 기준 시각 {captured_at or '-'}")
     if timeframe == "4시간봉" and len(bars) < 10:
         st.info("KIS 장중 분봉 제공 범위가 짧아 4시간봉 표본이 적을 수 있습니다. 중기 판단은 일봉을 권장합니다.")
     if kis_error:
@@ -540,14 +594,9 @@ def run(db_path: str = "datahub/market.db") -> None:
 
     try:
         recommendations = service.latest_recommendations(50)
-        requests = service.pending_requests(100)
+        requests = service.pending_approval_requests()
         current_run_id = str(recommendations[0]["run_id"]) if recommendations else ""
-        pending_count = sum(
-            1
-            for row in requests
-            if row["status"] == "PENDING_APPROVAL"
-            and (not current_run_id or str(row.get("source_run_id") or "") == current_run_id)
-        )
+        pending_count = len(requests)
 
         _style(st)
         _inject_mobile_styles(st)

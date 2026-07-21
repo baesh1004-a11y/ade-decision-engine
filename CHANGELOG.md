@@ -19,6 +19,14 @@
 - Report Engine v1 specification.
 - Integration Orchestrator v1 specification.
 - Run State Store v1 specification.
+- Configuration & Policy Engine v1 specification.
+- Data Snapshot & Lineage Engine v1 specification.
+- Audit & Compliance Engine v1 specification.
+- Scheduler & Trigger Engine v1 specification.
+- Portfolio Accounting & Performance Engine v1 specification.
+- Market Regime & Feature Engine v1 specification.
+- Signal Generation & Ranking Engine v1 specification.
+- Portfolio Risk & Exposure Engine v1 specification.
 
 ### Updated
 
@@ -29,10 +37,10 @@
 - Marked Backtest Engine design as complete while keeping implementation status as not started.
 - Marked Report Engine design as complete while keeping implementation status as not started.
 - Added run ID, stage state, failure isolation, idempotency, and audit-log design for integrated execution.
-- Changed the next milestone from additional engine design to Orchestrator wrapping and fixture-based smoke testing.
 - Defined SQLite schemas for `ade_runs`, `ade_run_stages`, and `ade_run_artifacts`.
-- Added explicit run/stage state-transition guards, transactional artifact persistence, and stale-run recovery tests.
-- Updated the implementation priority to build the Run State Store before wrapping the existing pipeline.
+- Added explicit run/stage state-transition guards and transactional artifact persistence.
+- Added portfolio-level risk limits for symbol, sector, correlation cluster, cash, total exposure, liquidity, volatility, daily loss, and drawdown.
+- Added projected-portfolio validation, regime-based risk multipliers, standard reason codes, immutable Risk Snapshots, and property-based test requirements.
 
 ### Notes
 
@@ -45,12 +53,15 @@
 - Run State Store persists execution evidence but does not determine investment decisions, execution order, or retry policy.
 - Completed runs are immutable terminal records; reruns create a new run ID.
 - Credentials, access tokens, and account authentication data must not be stored in run artifacts.
+- Portfolio Risk hard blocks cannot be overridden by the Decision Engine.
+- Approved orders must remain within all projected portfolio limits after execution simulation.
 
 ### Next
 
+- Design Decision & Position Sizing Engine v1.
 - Implement `db/migrations/001_create_run_state.sql`.
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.
 - Wrap the existing analysis pipeline with an Orchestrator adapter.
-- Run a fixed-fixture DataHub → Signal → Risk → Decision smoke test.
+- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision smoke test.
 - Generate minimal Report Engine JSON fixture output.

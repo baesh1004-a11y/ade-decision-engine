@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,77 @@ from maintenance.recommendation_runner import cancel_job, get_status, start_job
 from markets.profiles import get_market_profile
 from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from recommendation.daily_service import DailyRecommendationService
+
+
+_DEFAULT_SETTINGS = {
+    "candidate_years": 2,
+    "weekly_pool_n": 100,
+    "min_weekly_similarity": 85.0,
+    "min_sto_similarity": 85.0,
+    "top_n": 20,
+}
+
+
+def _settings_path(market_code: str) -> Path:
+    return Path("output") / f"{market_code}_recommendation_ui_settings.json"
+
+
+def _parameters(values: dict[str, object] | None) -> dict[str, object]:
+    values = values or {}
+    return {
+        "candidate_years": int(values.get("candidate_years", values.get("replay_years", _DEFAULT_SETTINGS["candidate_years"])) or _DEFAULT_SETTINGS["candidate_years"]),
+        "weekly_pool_n": int(values.get("weekly_pool_n", values.get("pattern_pool", _DEFAULT_SETTINGS["weekly_pool_n"])) or _DEFAULT_SETTINGS["weekly_pool_n"]),
+        "min_weekly_similarity": float(values.get("min_weekly_similarity", _DEFAULT_SETTINGS["min_weekly_similarity"]) or 0),
+        "min_sto_similarity": float(values.get("min_sto_similarity", _DEFAULT_SETTINGS["min_sto_similarity"]) or 0),
+        "top_n": int(values.get("top_n", values.get("recommendation_count", _DEFAULT_SETTINGS["top_n"])) or _DEFAULT_SETTINGS["top_n"]),
+    }
+
+
+def _load_saved_settings(market_code: str, fallback: dict[str, object] | None = None) -> dict[str, object]:
+    path = _settings_path(market_code)
+    if path.exists():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return _parameters(payload)
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+    return _parameters(fallback or _DEFAULT_SETTINGS)
+
+
+def _save_settings(market_code: str, values: dict[str, object]) -> None:
+    path = _settings_path(market_code)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {**_parameters(values), "updated_at": datetime.now().isoformat(timespec="seconds")}
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def _initialize_widget_state(st, market_code: str, fallback: dict[str, object] | None) -> None:
+    saved = _load_saved_settings(market_code, fallback)
+    mapping = {
+        f"{market_code}_replay_years": saved["candidate_years"],
+        f"{market_code}_weekly_pool": saved["weekly_pool_n"],
+        f"{market_code}_weekly": saved["min_weekly_similarity"],
+        f"{market_code}_sto": saved["min_sto_similarity"],
+        f"{market_code}_top_n": saved["top_n"],
+    }
+    for key, value in mapping.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
+
+
+def _persist_widget_state(st, market_code: str) -> None:
+    _save_settings(
+        market_code,
+        {
+            "candidate_years": st.session_state.get(f"{market_code}_replay_years", _DEFAULT_SETTINGS["candidate_years"]),
+            "weekly_pool_n": st.session_state.get(f"{market_code}_weekly_pool", _DEFAULT_SETTINGS["weekly_pool_n"]),
+            "min_weekly_similarity": st.session_state.get(f"{market_code}_weekly", _DEFAULT_SETTINGS["min_weekly_similarity"]),
+            "min_sto_similarity": st.session_state.get(f"{market_code}_sto", _DEFAULT_SETTINGS["min_sto_similarity"]),
+            "top_n": st.session_state.get(f"{market_code}_top_n", _DEFAULT_SETTINGS["top_n"]),
+        },
+    )
 
 
 def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
@@ -27,17 +99,6 @@ def _render_diagnostics(st, diagnostics: dict[str, object]) -> None:
         ("최종 추천", diagnostics.get("final_recommendations", 0), "주봉 유사도 순으로 저장된 종목"),
     ]
     st.dataframe(pd.DataFrame(rows, columns=["단계", "통과 수", "의미"]), use_container_width=True, hide_index=True)
-
-
-def _parameters(values: dict[str, object] | None) -> dict[str, object]:
-    values = values or {}
-    return {
-        "candidate_years": int(values.get("candidate_years", values.get("replay_years", 2)) or 2),
-        "weekly_pool_n": int(values.get("weekly_pool_n", values.get("pattern_pool", 100)) or 100),
-        "min_weekly_similarity": float(values.get("min_weekly_similarity", 0) or 0),
-        "min_sto_similarity": float(values.get("min_sto_similarity", 0) or 0),
-        "top_n": int(values.get("top_n", values.get("recommendation_count", 20)) or 20),
-    }
 
 
 def _render_applied_settings(st, values: dict[str, object] | None, title: str = "실행 적용 기준") -> None:
@@ -176,6 +237,8 @@ def run(market_code: str = "kr") -> None:
         active_run = next((row for row in runs if row.get("status") == "RUNNING"), None)
         runtime = get_status(profile.code)
 
+        _initialize_widget_state(st, profile.code, (latest_completed or {}).get("parameters") or {})
+
         a, b, c, d = st.columns(4)
         a.metric("운영 준비", "READY" if readiness.ready else "NOT READY")
         b.metric("활성 종목", f"{readiness.active_symbols:,}")
@@ -186,11 +249,12 @@ def run(market_code: str = "kr") -> None:
 
         st.markdown("### 오늘의 추천 생성")
         o1, o2, o3, o4, o5 = st.columns(5)
-        candidate_years = o1.number_input("과거 패턴 기간(년)", 1, 10, 2, 1, key=f"{profile.code}_replay_years")
-        pattern_pool = o2.number_input("비교할 과거 패턴 수", 10, 1000, 100, 10, key=f"{profile.code}_weekly_pool")
-        min_chart = o3.number_input("최소 주봉 유사도", 0.0, 100.0, 85.0, 1.0, key=f"{profile.code}_weekly")
-        min_sto = o4.number_input("STO 통과 기준", 0.0, 100.0, 85.0, 1.0, key=f"{profile.code}_sto")
-        top_n = o5.number_input("저장할 추천종목 수", 1, 50, 20, 1, key=f"{profile.code}_top_n")
+        callback_args = (st, profile.code)
+        candidate_years = o1.number_input("과거 패턴 기간(년)", 1, 10, step=1, key=f"{profile.code}_replay_years", on_change=_persist_widget_state, args=callback_args)
+        pattern_pool = o2.number_input("비교할 과거 패턴 수", 10, 1000, step=10, key=f"{profile.code}_weekly_pool", on_change=_persist_widget_state, args=callback_args)
+        min_chart = o3.number_input("최소 주봉 유사도", 0.0, 100.0, step=1.0, key=f"{profile.code}_weekly", on_change=_persist_widget_state, args=callback_args)
+        min_sto = o4.number_input("STO 통과 기준", 0.0, 100.0, step=1.0, key=f"{profile.code}_sto", on_change=_persist_widget_state, args=callback_args)
+        top_n = o5.number_input("저장할 추천종목 수", 1, 50, step=1, key=f"{profile.code}_top_n", on_change=_persist_widget_state, args=callback_args)
         st.info("추천 순위는 주봉 유사도만 사용하고 STO는 최소 기준 통과 여부만 확인합니다.")
         st.caption(
             f"다음 실행 예정 기준 · 최근 {int(candidate_years)}년 · 과거 패턴 {int(pattern_pool):,}개 · "
@@ -200,6 +264,7 @@ def run(market_code: str = "kr") -> None:
         running = bool(runtime.get("running"))
         start_col, refresh_col, stop_col = st.columns([4, 1.4, 1])
         if start_col.button(f"{profile.name} 추천종목 생성 및 저장", type="primary", use_container_width=True, key=f"{profile.code}_run", disabled=not readiness.ready or running):
+            _persist_widget_state(st, profile.code)
             started = start_job(
                 profile.code,
                 profile.db_path,

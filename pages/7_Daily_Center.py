@@ -1,3 +1,3 @@
-from dashboard.daily_center_app import run
+from dashboard.daily_center_redesign_app import run
 
-run()
+run("kr")

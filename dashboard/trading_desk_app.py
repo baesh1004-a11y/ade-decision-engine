@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 import pandas as pd
 
 from dashboard.charts import CHART_CONFIG, build_trading_chart
+from dashboard.trading_desk_ui import render_order_timeline, render_view_mode, status_text
 from markets.symbol_display import display_symbol, normalize_ticker
 from meta_score.validation_context import EnvironmentAdvisor
 from trading.order_service import TradingOrderService
@@ -21,6 +22,8 @@ ELIGIBLE_DECISIONS = {"FINAL BUY", "BUY WATCH"}
 def _kst_text(value) -> str:
     if not value:
         return "-"
+    if str(value).endswith(" KST"):
+        return str(value)
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
@@ -42,6 +45,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         pending_count = len(requests)
         _style(st)
         _render_status_header(st, env, live_enabled, len(recommendations), pending_count)
+        view_mode = render_view_mode(st, service, market="kr")
 
         st.markdown("### 1. 추천 Watch List")
         if not recommendations:
@@ -86,11 +90,11 @@ def run(db_path: str = "datahub/market.db") -> None:
 
             with detail_column:
                 _render_selected_summary(st, selected, selected_label)
-                _render_ai_confidence_card(st, selected, selected_code)
-                _render_analysis_actions(st, selected, selected_code)
+                if view_mode == "상세 보기":
+                    _render_ai_confidence_card(st, selected, selected_code)
+                    _render_analysis_actions(st, selected, selected_code)
                 _render_live_chart(st, db_path, selected_code, selected_label)
 
-            st.divider()
             _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 
         _render_pending_approval(st, service, recommendations)
@@ -110,6 +114,9 @@ def _render_status_header(st, env: str, live_enabled: bool, recommendation_count
         mode_label = "모의투자"
         mode_class = "safe"
 
+    kis_ready = bool(os.getenv("KIS_APP_KEY") and os.getenv("KIS_APP_SECRET"))
+    kis_label = "● KIS 설정됨" if kis_ready else "▲ KIS 설정 확인"
+    kis_class = "safe" if kis_ready else "warning"
     st.markdown(
         f"""
         <div class="status-hero">
@@ -120,6 +127,8 @@ def _render_status_header(st, env: str, live_enabled: bool, recommendation_count
           </div>
           <div class="status-cluster">
             <span class="status-badge {mode_class}">● {mode_label}</span>
+            <span class="status-badge {kis_class}">{kis_label}</span>
+            <span class="status-badge neutral">▲ 장 상태 확인</span>
             <span class="status-badge neutral">추천 {recommendation_count}종목</span>
             <span class="status-badge neutral">승인 대기 {pending_count}건</span>
           </div>
@@ -337,33 +346,7 @@ def _yahoo_tickers(ticker: str) -> list[str]:
 
 def _yahoo_ticker(ticker: str) -> str:
     """Compatibility helper for callers that only need the first candidate."""
-    return _yahoo_tickers(ticker)[0]
-
-
-def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
-    st.markdown("#### 판단 도구")
-    c1, c2, c3 = st.columns(3)
-    if c1.button("JP Radar", width="stretch", key=f"jp_radar_{ticker}"):
-        recommendation = SimpleNamespace(
-            market="kr",
-            ticker=ticker,
-            name=selected.get("name"),
-            prediction=None,
-            matched_max_drawdown=float(selected.get("matched_max_drawdown") or 0.0),
-        )
-        st.session_state[f"jp_radar_result_{ticker}"] = EnvironmentAdvisor().analyze(recommendation)
-        st.rerun()
-
-    if c2.button("추천 검증", width="stretch", key=f"validation_{ticker}"):
-        st.session_state[f"validation_open_{ticker}"] = True
-
-    if c3.button("차트 새로고침", width="stretch", key=f"refresh_chart_{ticker}"):
-        st.rerun()
-
-    radar = st.session_state.get(f"jp_radar_result_{ticker}")
-    if radar is not None:
-        a, b = st.columns(2)
-        a.metric("전체 시장 JP Radar", str(radar.market_signal))
+   ߎ��G����ƭy�r(radar.market_signal))
         b.metric("해당 업종 JP Radar", str(radar.sector_signal))
 
     if st.session_state.get(f"validation_open_{ticker}"):
@@ -379,7 +362,7 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
 
 
 def _render_order_form(st, service, selected: dict, ticker: str, label: str, run_id: str) -> None:
-    st.markdown("### 일반 주문")
+    st.markdown("### ① 주문 입력 → ② 내용 확인 → ③ 승인 대기")
     decision = str(selected.get("decision") or "UNVALIDATED")
     validated = bool(selected.get("validation_available"))
     eligible = decision in ELIGIBLE_DECISIONS
@@ -406,6 +389,12 @@ def _render_order_form(st, service, selected: dict, ticker: str, label: str, run
             "손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0),
             step=0.1, key=f"stop_{ticker}",
         )
+        estimated = int(quantity) * float(limit_price) if order_type == "LIMIT" else None
+        st.markdown("**② 내용 확인**")
+        st.caption(
+            f"{label} · {side_label} {int(quantity)}주 · "
+            + (f"예상 주문금액 {estimated:,.0f}원" if estimated is not None else "시장가 · 승인 직전 주문 가능 금액 재확인")
+        )
         submitted = st.form_submit_button("주문 요청 만들기", type="primary", width="stretch")
 
     if not validated:
@@ -428,7 +417,7 @@ def _render_order_form(st, service, selected: dict, ticker: str, label: str, run
             source_run_id=run_id,
             source_rank=int(selected["rank_no"]),
         )
-        st.success(f"주문 요청 생성: {request_id}. 아직 KIS로 전송되지 않았습니다.")
+        st.success(f"③ 승인 대기 · 요청번호 {request_id} · 30분 안에 승인하세요.", icon=":material/pending_actions:")
 
 
 def _render_pending_approval(st, service, recommendations: list[dict]) -> None:
@@ -525,6 +514,20 @@ def _render_execution_and_history(st, service) -> None:
         ] if c in executions.columns]
         st.dataframe(executions[keep], width="stretch", hide_index=True)
 
+    if not history.empty:
+        st.markdown("### 선택 주문 진행 과정")
+        timeline_index = st.selectbox(
+            "진행 과정을 확인할 주문", range(len(history)),
+            format_func=lambda i: f"{history.iloc[i].get('ticker', '-')} · {status_text(history.iloc[i].get('status'))}",
+            key="kr_order_timeline_select",
+        )
+        order = dict(history.iloc[timeline_index])
+        matching = [] if executions.empty else [
+            dict(row) for _, row in executions.iterrows()
+            if str(row.get("request_id") or "") == str(order.get("request_id") or "")
+        ]
+        render_order_timeline(st, order, matching, time_formatter=_kst_text)
+
     st.caption("손절·익절 감시는 자동 매도를 직접 전송하지 않고 승인 대기 매도요청만 생성합니다.")
 
 
@@ -594,6 +597,9 @@ def _style(st) -> None:
         div[role="radiogroup"]{gap:.45rem}
         div[role="radiogroup"] label{padding:.68rem .75rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.72);line-height:1.35}
         div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}
+        div.stButton > button{min-height:2.75rem;text-align:left;border-radius:14px}
+        div.stButton > button:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
+        [data-testid="stCaptionContainer"]{color:#51677d}
         @media(max-width:1100px){.confidence-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:900px){.status-hero{align-items:flex-start;flex-direction:column}.status-cluster{justify-content:flex-start}}
         </style>

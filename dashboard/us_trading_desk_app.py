@@ -10,6 +10,10 @@ import pandas as pd
 import streamlit as st
 
 from dashboard.charts import CHART_CONFIG, build_trading_chart
+from dashboard.trading_desk_ui import (
+    render_empty_state, render_mobile_bottom_nav, render_order_timeline,
+    render_view_mode, status_text,
+)
 from meta_score.validation_context import EnvironmentAdvisor
 from trading.us_order_service import USTradingOrderService
 
@@ -20,6 +24,8 @@ LOGGER = logging.getLogger(__name__)
 def _kst_text(value) -> str:
     if not value:
         return "-"
+    if str(value).endswith(" KST"):
+        return str(value)
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
@@ -53,25 +59,28 @@ def run(db_path: str = "datahub/us_market.db") -> None:
     st.set_page_config(page_title="ADE US Trading Desk", page_icon="🇺🇸", layout="wide")
     _style(st)
 
-    env = os.getenv("KIS_ENV", "paper").lower()
-    live_enabled = os.getenv("KIS_US_LIVE_ORDER_ENABLED", "NO").upper() == "YES"
-    if env == "live":
-        if live_enabled:
-            st.error("미국 실전주문 모드가 활성화되어 있습니다.")
-        else:
-            st.warning("KIS_ENV=live이지만 미국 실전주문은 잠겨 있습니다.")
-    else:
-        st.info("현재 KIS 미국주식 모의투자 모드입니다. 모의투자는 지정가 주문만 지원합니다.")
-
     service = USTradingOrderService(db_path)
     try:
         recommendations = service.latest_recommendations(50)
+        pending_count = len(service.pending_approval_requests())
+        env = os.getenv("KIS_ENV", "paper").lower()
+        live_enabled = os.getenv("KIS_US_LIVE_ORDER_ENABLED", "NO").upper() == "YES"
+        _render_us_status_header(st, env, live_enabled, len(recommendations), pending_count)
+        view_mode = render_view_mode(st, service, market="us")
+        mobile = _is_mobile_request(st)
+        mobile_section = str(st.session_state.get("us_mobile_section", "차트")) if mobile else "전체"
+        if mobile:
+            render_mobile_bottom_nav(st, pending_count=pending_count, state_key="us_mobile_section")
         st.markdown("### 1. 추천 종목 주문 리스트")
         if not recommendations:
-            st.warning("저장된 미국 추천 결과가 없습니다. US Daily Center에서 추천을 먼저 생성하세요.")
+            render_empty_state(
+                st, "미국 추천 결과가 없습니다",
+                "US Daily Center에서 추천을 생성한 뒤 다시 확인하세요.", icon=":material/playlist_add:",
+            )
         else:
             st.caption("최신 추천 실행의 모든 종목을 주문 리스트에 포함합니다.")
-            st.dataframe(_order_list_frame(recommendations), width="stretch", hide_index=True)
+            if view_mode == "상세 보기":
+                st.dataframe(_order_list_frame(recommendations), width="stretch", hide_index=True)
 
             labels = [
                 f"#{row['rank_no']} {row.get('name') or row['ticker']} ({row['ticker']}) · "
@@ -94,12 +103,18 @@ def run(db_path: str = "datahub/us_market.db") -> None:
             ticker = str(selected["ticker"]).upper()
             st.session_state["workbench_selected_us"] = ticker
 
-            _render_live_chart(st, ticker, selected.get("name") or ticker)
-            _render_analysis_actions(st, selected, ticker)
-            _render_order_form(st, service, selected, ticker)
+            if not mobile or mobile_section == "차트":
+                with st.container(border=True):
+                    _render_live_chart(st, ticker, selected.get("name") or ticker)
+            if (not mobile and view_mode == "상세 보기") or mobile_section == "분석":
+                _render_analysis_actions(st, selected, ticker)
+            if not mobile or mobile_section == "주문":
+                _render_order_form(st, service, selected, ticker)
 
-        _render_pending(st, service, recommendations)
-        _render_execution(st, service)
+        if not mobile or mobile_section == "승인":
+            _render_pending(st, service, recommendations)
+        if not mobile and view_mode == "상세 보기":
+            _render_execution(st, service)
     finally:
         service.close()
 
@@ -117,19 +132,54 @@ def _order_list_frame(recommendations: list[dict]) -> pd.DataFrame:
     ])
 
 
+def _is_mobile_request(st) -> bool:
+    try:
+        user_agent = str(st.context.headers.get("User-Agent", "")).lower()
+    except Exception:
+        return False
+    return any(token in user_agent for token in ("android", "iphone", "ipad", "mobile"))
+
+
+def _render_us_status_header(st, env: str, live_enabled: bool, rec_count: int, pending_count: int) -> None:
+    if env == "live" and live_enabled:
+        mode, mode_class = "■ 실전주문 활성", "danger"
+    elif env == "live":
+        mode, mode_class = "▲ 실전환경 · 주문 잠금", "warning"
+    else:
+        mode, mode_class = "● 모의투자", "safe"
+    kis_ready = bool(os.getenv("KIS_APP_KEY") and os.getenv("KIS_APP_SECRET"))
+    st.markdown(
+        f"""
+        <div class="status-hero">
+          <div><div class="eyebrow">ADE · US TRADING DESK</div><h1>미국 주문관리</h1>
+          <p>추천 확인 → 차트·분석 → 주문 요청 → 사용자 승인 → KIS 전송</p></div>
+          <div class="status-cluster">
+            <span class="status-badge {mode_class}">{mode}</span>
+            <span class="status-badge {'safe' if kis_ready else 'warning'}">{'● KIS 설정됨' if kis_ready else '▲ KIS 설정 확인'}</span>
+            <span class="status-badge neutral">추천 {rec_count}종목</span>
+            <span class="status-badge neutral">승인 대기 {pending_count}건</span>
+          </div>
+        </div>
+        """, unsafe_allow_html=True,
+    )
+
+
 def _render_live_chart(st, ticker: str, label: str) -> None:
     st.markdown(f"### 현재 차트 · {label} ({ticker})")
     frame, error = _load_us_chart(ticker)
 
     if frame.empty:
-        st.warning("현재 차트 데이터를 불러오지 못했습니다.")
+        render_empty_state(
+            st, "미국 차트를 불러오지 못했습니다",
+            "잠시 후 다시 조회하거나 오류 원인을 확인하세요.", icon=":material/error:",
+        )
         if error:
             with st.expander("오류 원인 확인"):
                 st.code(error)
     else:
         st.plotly_chart(build_trading_chart(frame, f"{label} ({ticker})"), width="stretch", config=CHART_CONFIG)
         st.caption("Yahoo Finance 5분봉 · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
-    if st.button("현재 차트 새로고침", width="stretch", key=f"refresh_us_chart_{ticker}"):
+    if st.button("다시 조회", icon=":material/refresh:", width="stretch", key=f"refresh_us_chart_{ticker}"):
         _load_us_chart.clear()
         st.rerun()
 
@@ -162,7 +212,7 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
 
 
 def _render_order_form(st, service, selected: dict, ticker: str) -> None:
-    st.markdown("### 일반 주문")
+    st.markdown("### ① 주문 입력 → ② 내용 확인 → ③ 승인 대기")
     default_exchange = service.exchange_for_ticker(ticker)
     with st.form(f"us_order_form_{ticker}"):
         c1, c2, c3, c4 = st.columns(4)
@@ -182,6 +232,9 @@ def _render_order_form(st, service, selected: dict, ticker: str) -> None:
         stop = r2.number_input(
             "손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0), step=0.1, key=f"us_stop_{ticker}"
         )
+        estimated = int(quantity) * float(limit_price)
+        st.markdown("**② 내용 확인**")
+        st.caption(f"{ticker} · {side} {int(quantity)}주 · 예상 주문금액 ${estimated:,.2f}")
         submitted = st.form_submit_button("미국주식 주문 요청 만들기", type="primary", width="stretch")
     if submitted:
         try:
@@ -197,7 +250,7 @@ def _render_order_form(st, service, selected: dict, ticker: str) -> None:
                 source_run_id=str(selected["run_id"]),
                 source_rank=int(selected["rank_no"]),
             )
-            st.success(f"주문 요청 생성: {request_id}. 아직 KIS로 전송되지 않았습니다.")
+            st.success(f"③ 승인 대기 · 요청번호 {request_id} · 30분 안에 승인하세요.", icon=":material/pending_actions:")
         except Exception as exc:
             st.error(f"주문 요청 생성 실패: {exc}")
 
@@ -290,6 +343,19 @@ def _render_execution(st, service) -> None:
             "filled_quantity", "filled_price", "status",
         ] if column in execution_df.columns]
         st.dataframe(execution_df[keep], width="stretch", hide_index=True)
+    if not order_df.empty:
+        st.markdown("### 선택 주문 진행 과정")
+        timeline_index = st.selectbox(
+            "진행 과정을 확인할 주문", range(len(order_df)),
+            format_func=lambda i: f"{order_df.iloc[i].get('ticker', '-')} · {status_text(order_df.iloc[i].get('status'))}",
+            key="us_order_timeline_select",
+        )
+        order = dict(order_df.iloc[timeline_index])
+        matching = [] if execution_df.empty else [
+            dict(row) for _, row in execution_df.iterrows()
+            if str(row.get("request_id") or "") == str(order.get("request_id") or "")
+        ]
+        render_order_timeline(st, order, matching, time_formatter=_kst_text)
     st.caption("모의투자에서도 주문은 사용자 승인 후에만 전송됩니다.")
 
 
@@ -309,10 +375,15 @@ def _style(st) -> None:
         <style>
         .stApp{background:linear-gradient(135deg,#eef7ff,#fbfdff 48%,#eaf3ff);color:#13253a}
         .block-container{max-width:1800px;padding-top:1rem}
-        .hero{padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}
-        .hero h1{margin:3px 0}.hero p{margin:5px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
+        .status-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 24px;border-radius:22px;background:rgba(255,255,255,.9);border:1px solid rgba(72,145,210,.22);box-shadow:0 14px 40px rgba(64,106,147,.11);margin-bottom:12px}
+        .status-hero h1{margin:2px 0;font-size:2rem}.status-hero p{margin:3px 0;color:#51677d}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
+        .status-cluster{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
+        .status-badge{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:.84rem;font-weight:750;border:1px solid transparent}
+        .status-badge.safe{color:#137044;background:#e9f8f0;border-color:#bde8cf}.status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}.status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}.status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
+        div.stButton > button:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
+        [data-testid="stCaptionContainer"]{color:#51677d}
+        @media(max-width:900px){.status-hero{align-items:flex-start;flex-direction:column}.status-cluster{justify-content:flex-start}.block-container{padding-bottom:5.5rem}}
         </style>
-        <div class="hero"><div class="eyebrow">ADE · KIS US STOCK EXECUTION</div><h1>US Trading Desk</h1><p>추천 전 종목 주문 리스트 → 현재 차트 → JP Radar·검증 조언 → 지정가 주문 → 사용자 승인</p></div>
         """,
         unsafe_allow_html=True,
     )

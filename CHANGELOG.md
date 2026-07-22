@@ -1,5 +1,24 @@
 # Changelog
 
+## ADE v1.0.3
+
+### Dashboard design
+
+- Consolidated trading mode, KIS readiness, recommendation count, and pending approvals in the top status area.
+- Improved recommendation controls as readable, keyboard-visible selection cards.
+- Grouped the selected symbol summary, price source, quote metrics, chart, and refresh controls.
+- Presented order entry as input, review, and approval-waiting steps with an estimated order amount.
+- Added a per-order status timeline while keeping raw order and execution tables in detailed view.
+- Added a mobile bottom navigation bar for recommendations, charts, analysis, orders, and approvals.
+- Standardized empty and chart-error states with clear next actions.
+- Added text and icons to status colors, stronger contrast, and visible keyboard focus.
+- Added persisted basic and detailed dashboard modes backed by the dashboard database.
+
+### Safety
+
+- Approval-waiting order cards were intentionally not changed because design proposal 35 was passed.
+- Backup branch: `backup/dashboard-before-31-40-20260722`.
+
 ## ADE v1.0.2
 
 ### Improved

@@ -81,6 +81,10 @@ class USTradingOrderService:
                 last_action TEXT,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS dashboard_preferences (
+                preference_key TEXT PRIMARY KEY, preference_value TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_us_trade_status ON us_trade_order_requests(status, created_at);
             CREATE INDEX IF NOT EXISTS idx_us_execution_order ON us_trade_execution_events(broker_order_id, captured_at);
             """
@@ -105,6 +109,21 @@ class USTradingOrderService:
 
     def close(self) -> None:
         self.conn.close()
+
+    def dashboard_preference(self, key: str, default: str) -> str:
+        row = self.conn.execute(
+            "SELECT preference_value FROM dashboard_preferences WHERE preference_key=?", (key,)
+        ).fetchone()
+        return str(row[0]) if row else default
+
+    def set_dashboard_preference(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT INTO dashboard_preferences(preference_key, preference_value, updated_at) VALUES (?, ?, ?) "
+            "ON CONFLICT(preference_key) DO UPDATE SET preference_value=excluded.preference_value, "
+            "updated_at=excluded.updated_at",
+            (key, value, self._now()),
+        )
+        self.conn.commit()
 
     def latest_recommendations(self, limit: int = 30) -> list[dict[str, object]]:
         run = self.conn.execute(

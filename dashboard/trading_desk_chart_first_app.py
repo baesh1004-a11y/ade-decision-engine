@@ -19,6 +19,7 @@ from dashboard.trading_desk_app import (
     _watch_label,
 )
 from dashboard.charts import CHART_CONFIG, build_trading_chart
+from dashboard.trading_desk_ui import render_empty_state, render_mobile_bottom_nav, render_view_mode
 from markets.symbol_display import display_symbol, normalize_ticker
 from meta_score.validation_context import EnvironmentAdvisor
 from trading.order_service import TradingOrderService
@@ -324,7 +325,10 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
 
     bars, quote, source, kis_error = _load_live_market_data(st, db_path, ticker, timeframe)
     if bars.empty:
-        st.warning("현재 차트 데이터를 불러오지 못했습니다.")
+        render_empty_state(
+            st, "한국 차트를 불러오지 못했습니다",
+            "KIS 연결과 종목코드를 확인한 뒤 시세 새로고침을 실행하세요.", icon=":material/error:",
+        )
         if kis_error:
             st.caption(f"KIS 조회 오류: {kis_error}")
         return
@@ -604,11 +608,21 @@ def run(db_path: str = "datahub/market.db") -> None:
             _render_mobile_status_header(st, env, live_enabled, len(recommendations), pending_count)
         else:
             _render_status_header(st, env, live_enabled, len(recommendations), pending_count)
+        view_mode = render_view_mode(st, service, market="kr")
+        mobile_section = "차트"
+        if mobile:
+            mobile_section = str(st.session_state.get("kr_mobile_section", "차트"))
+            render_mobile_bottom_nav(st, pending_count=pending_count, state_key="kr_mobile_section")
+        elif view_mode == "상세 보기":
             _render_market_status(st)
 
         st.markdown("### 1. 추천 Watch List")
         if not recommendations:
-            st.warning("최신 완료 추천 결과가 없습니다. 먼저 통합 추천 워크벤치에서 추천을 생성하세요.")
+            render_empty_state(
+                st, "추천 결과가 없습니다",
+                "통합 추천 워크벤치에서 추천을 생성한 뒤 다시 확인하세요.",
+                icon=":material/playlist_add:",
+            )
             _render_pending_approval(st, service, recommendations)
             _render_execution_and_history(st, service)
             return
@@ -646,22 +660,21 @@ def run(db_path: str = "datahub/market.db") -> None:
             selected_label = display_symbol(selected.get("name"), selected_code, "kr")
             st.session_state["workbench_selected_kr"] = selected_code
 
-            _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label, mobile=True)
-            _render_selected_summary(st, selected, selected_label)
-
-            detail_view = st.segmented_control(
-                "상세 화면", ["JP Radar", "추천 검증", "주문"], default="JP Radar",
-                key=f"mobile_detail_view_{selected_code}", label_visibility="collapsed",
-            )
-            if detail_view == "JP Radar":
+            if mobile_section == "추천":
+                _render_selected_summary(st, selected, selected_label)
+            elif mobile_section == "차트":
+                _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label, mobile=True)
+                _render_selected_summary(st, selected, selected_label)
+            elif mobile_section == "분석":
                 _render_radar_panel(st, selected, selected_code)
-            elif detail_view == "추천 검증":
-                _render_validation_panel(st, selected)
-            else:
+                if view_mode == "상세 보기":
+                    _render_validation_panel(st, selected)
+            elif mobile_section == "주문":
                 _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 
-            with st.expander("오늘의 시장 현황"):
-                _render_market_status(st)
+            if view_mode == "상세 보기" and mobile_section in ("추천", "분석"):
+                with st.expander("오늘의 시장 현황", icon=":material/public:"):
+                    _render_market_status(st)
         else:
             st.caption(
                 f"추천 완료: {run_finished} · "
@@ -691,8 +704,9 @@ def run(db_path: str = "datahub/market.db") -> None:
             st.session_state["workbench_selected_kr"] = selected_code
 
             with detail_column:
-                _render_selected_summary(st, selected, selected_label)
-                _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
+                with st.container(border=True):
+                    _render_selected_summary(st, selected, selected_label)
+                    _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
 
                 detail_view = st.segmented_control(
                     "상세 화면", ["JP Radar", "추천 검증", "주문"], default="JP Radar",
@@ -700,13 +714,14 @@ def run(db_path: str = "datahub/market.db") -> None:
                 )
                 if detail_view == "JP Radar":
                     _render_radar_panel(st, selected, selected_code)
-                elif detail_view == "추천 검증":
+                elif detail_view == "추천 검증" and view_mode == "상세 보기":
                     _render_validation_panel(st, selected)
                 else:
                     _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 
-        st.divider()
-        _render_pending_approval(st, service, recommendations)
-        _render_execution_and_history(st, service)
+        if not mobile or mobile_section == "승인":
+            _render_pending_approval(st, service, recommendations)
+        if not mobile and view_mode == "상세 보기":
+            _render_execution_and_history(st, service)
     finally:
         service.close()

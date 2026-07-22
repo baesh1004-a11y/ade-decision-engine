@@ -208,3 +208,25 @@ def test_order_approval_claim_is_conditional() -> None:
     assert "WHERE request_id=? AND status='PENDING_APPROVAL'" in us
     assert "'PARTIAL'" in kr
     assert "'PARTIAL'" in us
+
+
+def test_dashboard_view_preference_persists(tmp_path: Path) -> None:
+    service = TradingOrderService(tmp_path / "orders.db")
+    try:
+        assert service.dashboard_preference("kr_trading_view_mode", "기본 보기") == "기본 보기"
+        service.set_dashboard_preference("kr_trading_view_mode", "상세 보기")
+        assert service.dashboard_preference("kr_trading_view_mode", "기본 보기") == "상세 보기"
+    finally:
+        service.close()
+
+
+def test_approved_dashboard_design_features_are_present() -> None:
+    root = Path(__file__).resolve().parents[1]
+    ui = (root / "dashboard" / "trading_desk_ui.py").read_text(encoding="utf-8")
+    kr = (root / "dashboard" / "trading_desk_chart_first_app.py").read_text(encoding="utf-8")
+    us = (root / "dashboard" / "us_trading_desk_app.py").read_text(encoding="utf-8")
+    assert "render_mobile_bottom_nav" in ui
+    assert "render_order_timeline" in ui
+    assert "기본 보기" in ui and "상세 보기" in ui
+    assert "with st.container(border=True)" in kr
+    assert "① 주문 입력 → ② 내용 확인 → ③ 승인 대기" in us

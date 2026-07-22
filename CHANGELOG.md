@@ -48,6 +48,7 @@
 - Market Regime & Feature Engine v1 specification.
 - Signal Generation & Ranking Engine v1 specification.
 - Portfolio Risk & Exposure Engine v1 specification.
+- Decision & Position Sizing Engine v1 specification.
 
 ### Updated
 
@@ -62,6 +63,9 @@
 - Added explicit run/stage state-transition guards and transactional artifact persistence.
 - Added portfolio-level risk limits for symbol, sector, correlation cluster, cash, total exposure, liquidity, volatility, daily loss, and drawdown.
 - Added projected-portfolio validation, regime-based risk multipliers, standard reason codes, immutable Risk Snapshots, and property-based test requirements.
+- Defined final BUY/HOLD/REDUCE/SELL/REJECT/NO_ACTION priority rules and Order Intent mapping.
+- Added position sizing bounded by Signal strength, confidence, market regime, and Risk-approved amount and quantity.
+- Added stop-loss, trailing-stop, take-profit protection, daily one-entry selection, snapshot contract validation, and deterministic decision hashing.
 
 ### Notes
 
@@ -76,10 +80,14 @@
 - Credentials, access tokens, and account authentication data must not be stored in run artifacts.
 - Portfolio Risk hard blocks cannot be overridden by the Decision Engine.
 - Approved orders must remain within all projected portfolio limits after execution simulation.
+- Decision buy amount and quantity can never exceed Risk approval.
+- Expired or cross-run Signal/Risk snapshots cannot be combined into a decision.
+- Sell and reduce actions are evaluated before new entries; only one new symbol may be opened per day under the virtual portfolio policy.
 
 ### Next
 
-- Design Decision & Position Sizing Engine v1.
+- Implement the minimal Decision & Position Sizing models and pure sizing functions.
+- Design Order Validation & Routing Engine v2.
 - Implement `db/migrations/001_create_run_state.sql`.
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.

@@ -43,6 +43,7 @@
 | 20 | Market Regime & Feature Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 특징량 생성과 시장 국면 분류 |
 | 21 | Signal Generation & Ranking Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 종목 신호, 신뢰도, 순위, 후보 선정 |
 | 22 | Portfolio Risk & Exposure Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 종목·섹터·상관 군집·현금·총 익스포저 한도 평가 |
+| 23 | Decision & Position Sizing Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 최종 행동, 목표 금액·수량, 하루 1종목 선정, 보호 규칙 |
 
 ## 설계 진행률
 
@@ -56,8 +57,9 @@
 2. `RunRequest`, `RunResult`, `StageResult` 모델 구현
 3. 기존 `main.py`/`ADEPipeline` adapter 작성
 4. 고정 CSV fixture 기반 스모크 테스트
-5. Candidate → Signal 병행 전환과 Portfolio Risk/Decision 정합성 검증
-6. Decision & Position Sizing Engine v1 상세 설계
+5. Candidate → Signal → Portfolio Risk → Decision 계약 정합성 검증
+6. Decision & Position Sizing 최소 코드 구현
+7. Order Validation & Routing Engine v2 상세 설계
 
 ## 다음 작업
 
@@ -66,8 +68,9 @@
 3. run/stage 상태 전이 단위 테스트 작성
 4. 기존 파이프라인을 Orchestrator stage로 래핑
 5. DataHub → Feature → Signal → Risk → Decision fixture 통합 테스트
-6. Portfolio Risk 결과와 Position Sizing 입력 계약 확정
-7. Report Engine용 최소 JSON fixture 생성
+6. `decision/models.py`, `decision/sizing.py`, `decision/engine.py` 최소 구현
+7. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+8. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -83,3 +86,6 @@
 - stage 상태 변경과 산출물 저장은 가능한 한 동일 트랜잭션으로 처리한다.
 - Portfolio Risk Engine의 하드 차단은 Decision Engine이 무시할 수 없다.
 - 승인 후 예상 포트폴리오는 모든 현금·집중도·익스포저 한도를 준수해야 한다.
+- Decision Engine의 매수 금액과 수량은 Risk 승인값을 초과할 수 없다.
+- 신규 진입은 하루 최대 1종목이며 매도·축소는 이 한도에 포함하지 않는다.
+- 만료되거나 서로 다른 run의 Signal/Risk Snapshot은 결합하지 않는다.

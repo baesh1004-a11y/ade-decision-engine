@@ -71,6 +71,29 @@ class KISOverseasStockAdapter(KISBrokerAdapter):
             raw=payload,
         )
 
+    def get_us_buying_power(self, ticker: str, exchange: str, price: float) -> float:
+        """Return USD buying power for a US limit order, failing closed on bad data."""
+        params = {
+            "CANO": self.config.account_no,
+            "ACNT_PRDT_CD": self.config.account_product_code,
+            "OVRS_EXCG_CD": normalize_exchange(exchange),
+            "OVRS_ORD_UNPR": f"{float(price):.4f}".rstrip("0").rstrip("."),
+            "ITEM_CD": ticker.upper(),
+        }
+        tr_id = "TTTS3007R" if self.config.is_live else "VTTS3007R"
+        payload = self._get(
+            "/uapi/overseas-stock/v1/trading/inquire-psamount",
+            tr_id=tr_id,
+            params=params,
+        )
+        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+        value = self._to_float(
+            output.get("ovrs_ord_psbl_amt", output.get("frcr_ord_psbl_amt1", 0))
+        )
+        if payload.get("rt_cd") != "0" or value <= 0:
+            raise BrokerError("미국주식 주문 가능 달러를 확인할 수 없어 매수 승인을 중단했습니다.")
+        return value
+
     def get_us_positions(self, exchange: str = "NASD") -> list[BrokerPosition]:
         exchange = normalize_exchange(exchange)
         params = {

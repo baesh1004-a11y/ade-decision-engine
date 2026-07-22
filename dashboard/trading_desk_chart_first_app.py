@@ -341,7 +341,7 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
     bid_price = float(quote.get("bid_price") or 0.0)
 
     if mobile:
-        st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
+        st.plotly_chart(build_trading_chart(bars, label), width="stretch", config=CHART_CONFIG)
         quote_cols = st.columns(2)
         quote_cols[0].metric(
             "현재가" if live_quote else "최근 확인 가격",
@@ -362,7 +362,7 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
     else:
         chart_column, quote_column = st.columns([4, 1], gap="medium")
         with chart_column:
-            st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
+            st.plotly_chart(build_trading_chart(bars, label), width="stretch", config=CHART_CONFIG)
         with quote_column:
             st.markdown("#### 실시간 시세" if live_quote else "#### 최근 확인 가격")
             st.metric(
@@ -391,7 +391,7 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
 
 def _render_radar_panel(st, selected: dict, ticker: str) -> None:
     st.markdown("#### JP Radar")
-    if st.button("JP Radar 실행", use_container_width=True, key=f"jp_radar_tab_{ticker}"):
+    if st.button("JP Radar 실행", width="stretch", key=f"jp_radar_tab_{ticker}"):
         recommendation = SimpleNamespace(
             market="kr",
             ticker=ticker,
@@ -447,7 +447,7 @@ def _render_validation_panel(st, selected: dict) -> None:
 
     if decision == "UNVALIDATED":
         st.info("아직 저장된 검증 결과가 없습니다. 통합 추천 워크벤치에서 환경 검증을 실행하세요.")
-        st.page_link("pages/2_Meta_Score.py", label="추천 검증 화면 열기", icon="✅", use_container_width=True)
+        st.page_link("pages/2_Meta_Score.py", label="추천 검증 화면 열기", icon="✅", width="stretch")
     else:
         st.caption("숫자 점수 대신 저장된 검증 결과와 정성적 환경 수준만 표시합니다.")
 
@@ -534,7 +534,7 @@ def _render_mobile_order_form(st, service, selected: dict, ticker: str, label: s
     if st.button(
         "주문 요청 만들기",
         type="primary",
-        use_container_width=True,
+        width="stretch",
         key=f"mobile_create_order_{ticker}",
         disabled=invalid_limit,
     ):
@@ -649,13 +649,16 @@ def run(db_path: str = "datahub/market.db") -> None:
             _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label, mobile=True)
             _render_selected_summary(st, selected, selected_label)
 
-            radar_tab, validation_tab, order_tab = st.tabs(["JP Radar", "추천 검증", "주문"])
-            with radar_tab:
+            detail_view = st.segmented_control(
+                "상세 화면", ["JP Radar", "추천 검증", "주문"], default="JP Radar",
+                key=f"mobile_detail_view_{selected_code}", label_visibility="collapsed",
+            )
+            if detail_view == "JP Radar":
                 _render_radar_panel(st, selected, selected_code)
-            with validation_tab:
+            elif detail_view == "추천 검증":
                 _render_validation_panel(st, selected)
-            with order_tab:
-                _render_mobile_order_form(st, service, selected, selected_code, selected_label, run_id)
+            else:
+                _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 
             with st.expander("오늘의 시장 현황"):
                 _render_market_status(st)
@@ -674,7 +677,7 @@ def run(db_path: str = "datahub/market.db") -> None:
                         key=f"watch_hover_{ticker}_{i}",
                         help=_watch_hover_text(st, row, ticker),
                         type="primary" if i == st.session_state[selection_key] else "secondary",
-                        use_container_width=True,
+                        width="stretch",
                     ):
                         st.session_state[selection_key] = i
                 st.caption("종목 버튼에 마우스를 올리면 상세정보를 볼 수 있습니다.")
@@ -691,12 +694,15 @@ def run(db_path: str = "datahub/market.db") -> None:
                 _render_selected_summary(st, selected, selected_label)
                 _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
 
-                radar_tab, validation_tab, order_tab = st.tabs(["JP Radar", "추천 검증", "주문"])
-                with radar_tab:
+                detail_view = st.segmented_control(
+                    "상세 화면", ["JP Radar", "추천 검증", "주문"], default="JP Radar",
+                    key=f"desktop_detail_view_{selected_code}", label_visibility="collapsed",
+                )
+                if detail_view == "JP Radar":
                     _render_radar_panel(st, selected, selected_code)
-                with validation_tab:
+                elif detail_view == "추천 검증":
                     _render_validation_panel(st, selected)
-                with order_tab:
+                else:
                     _render_order_form(st, service, selected, selected_code, selected_label, run_id)
 
         st.divider()

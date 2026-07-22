@@ -1,5 +1,23 @@
 # Changelog
 
+## ADE v1.0.2
+
+### Improved
+
+- Migrated active dashboards from deprecated `use_container_width` calls to the current width API.
+- Submitted Korean and US order inputs through forms to avoid full reruns while editing.
+- Replaced eager detail tabs with a selected-view control so hidden panels do not execute.
+- Cached US chart downloads and exposed actionable errors while retaining server logs.
+- Displayed order and execution timestamps in Korea Standard Time while storing new events in UTC.
+
+### Safety
+
+- Rejected identical unresolved order requests and atomically claimed approvals before broker submission.
+- Enabled SQLite WAL mode and a 30-second busy timeout for concurrent dashboard sessions.
+- Persisted filled quantity and retained reservations for partially filled orders.
+- Checked KIS US-dollar buying power and other unresolved US buy reservations before approval.
+- Backup branch: `backup/dashboard-before-21-30-20260722`.
+
 ## ADE v1.0.1
 
 ### Fixed

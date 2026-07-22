@@ -159,3 +159,52 @@ def test_execution_event_keys_are_stable() -> None:
     }
     assert TradingOrderService._execution_event_key(event) == TradingOrderService._execution_event_key(dict(event))
     assert USTradingOrderService._execution_event_key(event) == USTradingOrderService._execution_event_key(dict(event))
+
+
+def test_duplicate_open_order_request_is_rejected(tmp_path: Path) -> None:
+    service = TradingOrderService(tmp_path / "orders.db")
+    try:
+        first = service.create_request(ticker="005930", name="삼성전자", side="BUY", quantity=1)
+        try:
+            service.create_request(ticker="005930", name="삼성전자", side="BUY", quantity=1)
+        except ValueError as exc:
+            assert first in str(exc)
+        else:
+            raise AssertionError("duplicate order request should be rejected")
+    finally:
+        service.close()
+
+
+def test_order_safety_schema_and_utc_timestamp(tmp_path: Path) -> None:
+    service = TradingOrderService(tmp_path / "orders.db")
+    try:
+        columns = {
+            row[1] for row in service.conn.execute("PRAGMA table_info(trade_order_requests)").fetchall()
+        }
+        assert "filled_quantity" in columns
+        assert datetime.fromisoformat(service._now()).utcoffset() == timedelta(0)
+        mode = service.conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert str(mode).lower() == "wal"
+    finally:
+        service.close()
+
+
+def test_dashboard_uses_forms_lazy_detail_views_and_current_width_api() -> None:
+    root = Path(__file__).resolve().parents[1]
+    kr = (root / "dashboard" / "trading_desk_app.py").read_text(encoding="utf-8")
+    chart_first = (root / "dashboard" / "trading_desk_chart_first_app.py").read_text(encoding="utf-8")
+    us = (root / "dashboard" / "us_trading_desk_app.py").read_text(encoding="utf-8")
+    assert "with st.form(" in kr
+    assert "with st.form(" in us
+    assert "st.segmented_control(" in chart_first
+    assert "use_container_width=True" not in kr + chart_first + us
+
+
+def test_order_approval_claim_is_conditional() -> None:
+    root = Path(__file__).resolve().parents[1]
+    kr = (root / "trading" / "order_service.py").read_text(encoding="utf-8")
+    us = (root / "trading" / "us_order_service.py").read_text(encoding="utf-8")
+    assert "WHERE request_id=? AND status='PENDING_APPROVAL'" in kr
+    assert "WHERE request_id=? AND status='PENDING_APPROVAL'" in us
+    assert "'PARTIAL'" in kr
+    assert "'PARTIAL'" in us

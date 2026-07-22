@@ -5,7 +5,7 @@ import hashlib
 import os
 import sqlite3
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from broker.base import BrokerOrder
@@ -20,6 +20,8 @@ class TradingOrderService:
         self.db_path = Path(db_path)
         self.conn = sqlite3.connect(str(self.db_path), timeout=30)
         self.conn.row_factory = sqlite3.Row
+        self.conn.execute("PRAGMA busy_timeout=30000")
+        self.conn.execute("PRAGMA journal_mode=WAL")
         self.initialize()
 
     def initialize(self) -> None:
@@ -58,6 +60,13 @@ class TradingOrderService:
         }
         if "event_key" not in execution_columns:
             self.conn.execute("ALTER TABLE trade_execution_events ADD COLUMN event_key TEXT")
+        request_columns = {
+            str(row[1]) for row in self.conn.execute("PRAGMA table_info(trade_order_requests)").fetchall()
+        }
+        if "filled_quantity" not in request_columns:
+            self.conn.execute(
+                "ALTER TABLE trade_order_requests ADD COLUMN filled_quantity INTEGER NOT NULL DEFAULT 0"
+            )
         self.conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_execution_event_key "
             "ON trade_execution_events(event_key) WHERE event_key IS NOT NULL"
@@ -78,7 +87,16 @@ class TradingOrderService:
             order_type=order_type.upper(), limit_price=limit_price, dry_run=False,
         )
         order.validate()
-        request_id = f"ORD-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        duplicate = self.conn.execute(
+            "SELECT request_id FROM trade_order_requests WHERE ticker=? AND side=? AND quantity=? "
+            "AND order_type=? AND COALESCE(limit_price, -1)=COALESCE(?, -1) "
+            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT','PARTIAL') "
+            "ORDER BY created_at DESC LIMIT 1",
+            (ticker, order.side, order.quantity, order.order_type, order.limit_price),
+        ).fetchone()
+        if duplicate:
+            raise ValueError(f"동일한 미처리 주문 요청이 이미 있습니다: {duplicate['request_id']}")
+        request_id = f"ORD-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
         self.conn.execute(
             """
             INSERT INTO trade_order_requests(
@@ -108,11 +126,14 @@ class TradingOrderService:
             raise ValueError(f"승인 문구가 일치하지 않습니다. 정확히 입력: {expected}")
 
         self._validate_order_capacity(dict(row))
-        self.conn.execute(
-            "UPDATE trade_order_requests SET approved_at=?, status='SENDING', approval_text=? WHERE request_id=?",
+        cursor = self.conn.execute(
+            "UPDATE trade_order_requests SET approved_at=?, status='SENDING', approval_text=? "
+            "WHERE request_id=? AND status='PENDING_APPROVAL'",
             (self._now(), approval_text, request_id),
         )
         self.conn.commit()
+        if cursor.rowcount != 1:
+            raise ValueError("다른 화면에서 이미 처리한 주문입니다. 주문 상태를 새로고침하세요.")
 
         broker = kis_trading_broker_from_env()
         order = BrokerOrder(
@@ -176,9 +197,13 @@ class TradingOrderService:
                  item.get("status", "UNKNOWN"), json.dumps(item, ensure_ascii=False), event_key),
             )
             if request_id:
+                filled_quantity = max(0, int(item.get("filled_quantity", 0) or 0))
+                ordered_quantity = max(0, int(item.get("ordered_quantity", 0) or 0))
+                broker_status = str(item.get("status", "UNKNOWN")).upper()
+                status = "PARTIAL" if 0 < filled_quantity < ordered_quantity else broker_status
                 self.conn.execute(
-                    "UPDATE trade_order_requests SET status=? WHERE request_id=?",
-                    (item.get("status", "UNKNOWN"), request_id),
+                    "UPDATE trade_order_requests SET status=?, filled_quantity=? WHERE request_id=?",
+                    (status, filled_quantity, request_id),
                 )
         self.conn.commit()
         return executions
@@ -257,11 +282,15 @@ class TradingOrderService:
 
     def expire_stale_requests(self) -> int:
         ttl_minutes = max(1, int(os.getenv("ADE_ORDER_REQUEST_TTL_MINUTES", "30")))
-        cutoff = (datetime.now() - timedelta(minutes=ttl_minutes)).isoformat(timespec="seconds")
-        cursor = self.conn.execute(
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl_minutes)
+        rows = self.conn.execute(
+            "SELECT request_id, created_at FROM trade_order_requests WHERE status='PENDING_APPROVAL'"
+        ).fetchall()
+        expired = [row["request_id"] for row in rows if self._as_utc(row["created_at"]) < cutoff]
+        cursor = self.conn.executemany(
             "UPDATE trade_order_requests SET status='EXPIRED', error_message='Approval window expired' "
-            "WHERE status='PENDING_APPROVAL' AND created_at < ?",
-            (cutoff,),
+            "WHERE request_id=? AND status='PENDING_APPROVAL'",
+            [(request_id,) for request_id in expired],
         )
         self.conn.commit()
         return int(cursor.rowcount)
@@ -269,7 +298,7 @@ class TradingOrderService:
     def _open_sell_request(self, ticker: str, exclude_request_id: str | None = None):
         sql = (
             "SELECT * FROM trade_order_requests WHERE ticker=? AND side='SELL' "
-            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')"
+            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT','PARTIAL')"
         )
         params: list[object] = [ticker]
         if exclude_request_id:
@@ -296,9 +325,9 @@ class TradingOrderService:
                 if normalize_ticker(str(pos["ticker"]), "kr") == ticker
             )
             reserved = self.conn.execute(
-                "SELECT COALESCE(SUM(quantity), 0) FROM trade_order_requests "
+                "SELECT COALESCE(SUM(MAX(quantity - COALESCE(filled_quantity, 0), 0)), 0) FROM trade_order_requests "
                 "WHERE ticker=? AND side='SELL' AND request_id<>? "
-                "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')",
+                "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT','PARTIAL')",
                 (ticker, row["request_id"]),
             ).fetchone()[0]
             available = max(0, held - int(reserved or 0))
@@ -315,7 +344,7 @@ class TradingOrderService:
             raise ValueError("현재가를 확인할 수 없어 매수 주문을 승인할 수 없습니다.")
         unknown_market_buys = self.conn.execute(
             "SELECT COUNT(*) FROM trade_order_requests WHERE side='BUY' AND request_id<>? "
-            "AND order_type='MARKET' AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')",
+            "AND order_type='MARKET' AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT','PARTIAL')",
             (row["request_id"],),
         ).fetchone()[0]
         if int(unknown_market_buys or 0) > 0:
@@ -323,7 +352,7 @@ class TradingOrderService:
         reserved_row = self.conn.execute(
             "SELECT COALESCE(SUM(quantity * COALESCE(limit_price, 0)), 0) FROM trade_order_requests "
             "WHERE side='BUY' AND request_id<>? "
-            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT')",
+            "AND status IN ('PENDING_APPROVAL','SENDING','VERIFY_REQUIRED','SENT','PARTIAL')",
             (row["request_id"],),
         ).fetchone()
         available_cash = max(0.0, float(snapshot.cash) - float(reserved_row[0] or 0.0))
@@ -420,4 +449,13 @@ class TradingOrderService:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now().isoformat(timespec="seconds")
+        return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+    @staticmethod
+    def _as_utc(value: str) -> datetime:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            from zoneinfo import ZoneInfo
+
+            parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        return parsed.astimezone(timezone.utc)

@@ -168,14 +168,14 @@ def main() -> None:
     if recent.empty:
         st.info("최근 실행 이력이 없습니다.")
     else:
-        st.dataframe(recent, use_container_width=True, hide_index=True)
+        st.dataframe(recent, width="stretch", hide_index=True)
 
     st.markdown('<div class="section"><h2>빠른 실행</h2><span>자주 사용하는 기능</span></div>', unsafe_allow_html=True)
     q1, q2, q3, q4 = st.columns(4)
-    q1.page_link("pages/7_Daily_Center.py", label="한국 추천 생성", icon="📈", use_container_width=True)
-    q2.page_link("pages/10_US_Daily_Center.py", label="미국 추천 생성", icon="📊", use_container_width=True)
-    q3.page_link("pages/9_Trading_Desk.py", label="한국 주문관리", icon="💳", use_container_width=True)
-    q4.page_link("pages/12_US_Trading_Desk.py", label="미국 주문관리", icon="💵", use_container_width=True)
+    q1.page_link("pages/7_Daily_Center.py", label="한국 추천 생성", icon="📈", width="stretch")
+    q2.page_link("pages/10_US_Daily_Center.py", label="미국 추천 생성", icon="📊", width="stretch")
+    q3.page_link("pages/9_Trading_Desk.py", label="한국 주문관리", icon="💳", width="stretch")
+    q4.page_link("pages/12_US_Trading_Desk.py", label="미국 주문관리", icon="💵", width="stretch")
 
 
 def _system_box(column, title: str, detail: str, healthy: bool | None) -> None:

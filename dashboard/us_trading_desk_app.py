@@ -1,13 +1,50 @@
 from __future__ import annotations
 
 import os
+import logging
+from datetime import datetime
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pandas as pd
+import streamlit as st
 
 from dashboard.charts import CHART_CONFIG, build_trading_chart
 from meta_score.validation_context import EnvironmentAdvisor
 from trading.us_order_service import USTradingOrderService
+
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _kst_text(value) -> str:
+    if not value:
+        return "-"
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+    return parsed.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S KST")
+
+
+@st.cache_data(ttl=30, max_entries=100, show_spinner=False)
+def _load_us_chart(ticker: str) -> tuple[pd.DataFrame, str | None]:
+    try:
+        import yfinance as yf
+
+        frame = yf.download(
+            ticker, period="5d", interval="5m", auto_adjust=False,
+            progress=False, threads=False, timeout=10,
+        )
+        if isinstance(frame.columns, pd.MultiIndex):
+            frame.columns = frame.columns.get_level_values(0)
+        frame = frame.reset_index()
+        date_column = "Datetime" if "Datetime" in frame.columns else "Date"
+        frame = frame.rename(columns={date_column: "Date"})
+        keep = [column for column in ["Date", "Open", "High", "Low", "Close", "Volume"] if column in frame.columns]
+        return frame[keep].dropna(subset=["Close"]), None
+    except Exception as exc:
+        LOGGER.exception("US chart download failed for %s", ticker)
+        return pd.DataFrame(), str(exc)
 
 
 def run(db_path: str = "datahub/us_market.db") -> None:
@@ -34,7 +71,7 @@ def run(db_path: str = "datahub/us_market.db") -> None:
             st.warning("저장된 미국 추천 결과가 없습니다. US Daily Center에서 추천을 먼저 생성하세요.")
         else:
             st.caption("최신 추천 실행의 모든 종목을 주문 리스트에 포함합니다.")
-            st.dataframe(_order_list_frame(recommendations), use_container_width=True, hide_index=True)
+            st.dataframe(_order_list_frame(recommendations), width="stretch", hide_index=True)
 
             labels = [
                 f"#{row['rank_no']} {row.get('name') or row['ticker']} ({row['ticker']}) · "
@@ -82,40 +119,25 @@ def _order_list_frame(recommendations: list[dict]) -> pd.DataFrame:
 
 def _render_live_chart(st, ticker: str, label: str) -> None:
     st.markdown(f"### 현재 차트 · {label} ({ticker})")
-    try:
-        import yfinance as yf
-
-        frame = yf.download(
-            ticker,
-            period="5d",
-            interval="5m",
-            auto_adjust=False,
-            progress=False,
-            threads=False,
-        )
-        if isinstance(frame.columns, pd.MultiIndex):
-            frame.columns = frame.columns.get_level_values(0)
-        frame = frame.reset_index()
-        date_column = "Datetime" if "Datetime" in frame.columns else "Date"
-        frame = frame.rename(columns={date_column: "Date"})
-        keep = [column for column in ["Date", "Open", "High", "Low", "Close", "Volume"] if column in frame.columns]
-        frame = frame[keep].dropna(subset=["Close"])
-    except Exception:
-        frame = pd.DataFrame()
+    frame, error = _load_us_chart(ticker)
 
     if frame.empty:
         st.warning("현재 차트 데이터를 불러오지 못했습니다.")
+        if error:
+            with st.expander("오류 원인 확인"):
+                st.code(error)
     else:
-        st.plotly_chart(build_trading_chart(frame, f"{label} ({ticker})"), use_container_width=True, config=CHART_CONFIG)
+        st.plotly_chart(build_trading_chart(frame, f"{label} ({ticker})"), width="stretch", config=CHART_CONFIG)
         st.caption("Yahoo Finance 5분봉 · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
-    if st.button("현재 차트 새로고침", use_container_width=True, key=f"refresh_us_chart_{ticker}"):
+    if st.button("현재 차트 새로고침", width="stretch", key=f"refresh_us_chart_{ticker}"):
+        _load_us_chart.clear()
         st.rerun()
 
 
 def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
     st.markdown("### 추천 분석 연결")
     c1, c2 = st.columns(2)
-    if c1.button("JP Radar 확인", use_container_width=True, key=f"us_jp_radar_{ticker}"):
+    if c1.button("JP Radar 확인", width="stretch", key=f"us_jp_radar_{ticker}"):
         recommendation = SimpleNamespace(
             market="us",
             ticker=ticker,
@@ -124,7 +146,7 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
             matched_max_drawdown=0.0,
         )
         st.session_state[f"us_jp_radar_result_{ticker}"] = EnvironmentAdvisor().analyze(recommendation)
-    if c2.button("추천종목 검증 조언 확인", use_container_width=True, key=f"us_validation_{ticker}"):
+    if c2.button("추천종목 검증 조언 확인", width="stretch", key=f"us_validation_{ticker}"):
         st.session_state[f"us_validation_open_{ticker}"] = True
 
     radar = st.session_state.get(f"us_jp_radar_result_{ticker}")
@@ -142,26 +164,26 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
 def _render_order_form(st, service, selected: dict, ticker: str) -> None:
     st.markdown("### 일반 주문")
     default_exchange = service.exchange_for_ticker(ticker)
-    c1, c2, c3, c4 = st.columns(4)
-    side = c1.selectbox("주문 방향", ["BUY", "SELL"], key=f"us_side_{ticker}")
-    exchange = c2.selectbox(
-        "거래소",
-        ["NASD", "NYSE", "AMEX"],
-        index=["NASD", "NYSE", "AMEX"].index(default_exchange),
-        key=f"us_exchange_{ticker}",
-    )
-    quantity = c3.number_input("수량", min_value=1, value=1, step=1, key=f"us_quantity_{ticker}")
-    limit_price = c4.number_input(
-        "지정가(USD)", min_value=0.01, value=1.00, step=0.01, format="%.2f", key=f"us_price_{ticker}"
-    )
-    r1, r2 = st.columns(2)
-    target = r1.number_input(
-        "익절 기준 수익률(%)", value=float(selected.get("target_return") or 0.0), step=0.1, key=f"us_target_{ticker}"
-    )
-    stop = r2.number_input(
-        "손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0), step=0.1, key=f"us_stop_{ticker}"
-    )
-    if st.button("미국주식 주문 요청 만들기", type="primary", use_container_width=True, key=f"us_create_{ticker}"):
+    with st.form(f"us_order_form_{ticker}"):
+        c1, c2, c3, c4 = st.columns(4)
+        side = c1.selectbox("주문 방향", ["BUY", "SELL"], key=f"us_side_{ticker}")
+        exchange = c2.selectbox(
+            "거래소", ["NASD", "NYSE", "AMEX"],
+            index=["NASD", "NYSE", "AMEX"].index(default_exchange), key=f"us_exchange_{ticker}",
+        )
+        quantity = c3.number_input("수량", min_value=1, value=1, step=1, key=f"us_quantity_{ticker}")
+        limit_price = c4.number_input(
+            "지정가(USD)", min_value=0.01, value=1.00, step=0.01, format="%.2f", key=f"us_price_{ticker}"
+        )
+        r1, r2 = st.columns(2)
+        target = r1.number_input(
+            "익절 기준 수익률(%)", value=float(selected.get("target_return") or 0.0), step=0.1, key=f"us_target_{ticker}"
+        )
+        stop = r2.number_input(
+            "손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0), step=0.1, key=f"us_stop_{ticker}"
+        )
+        submitted = st.form_submit_button("미국주식 주문 요청 만들기", type="primary", width="stretch")
+    if submitted:
         try:
             request_id = service.create_request(
                 ticker=ticker,
@@ -223,27 +245,27 @@ def _render_pending(st, service, recommendations: list[dict]) -> None:
 def _render_execution(st, service) -> None:
     st.markdown("### 3. 체결·보유종목·손절익절")
     c1, c2, c3 = st.columns(3)
-    if c1.button("미국 주문·체결 새로고침", use_container_width=True):
+    if c1.button("미국 주문·체결 새로고침", width="stretch"):
         try:
             rows = service.refresh_executions(days=7)
             st.success(f"최근 주문·체결 {len(rows)}건 확인")
         except Exception as exc:
             st.error(f"체결 조회 실패: {exc}")
-    if c2.button("미국 보유종목 동기화", use_container_width=True):
+    if c2.button("미국 보유종목 동기화", width="stretch"):
         try:
             rows = service.sync_positions()
             st.success(f"미국 보유종목 {len(rows)}개 동기화")
             if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         except Exception as exc:
             st.error(f"보유종목 동기화 실패: {exc}")
     create_sell = c3.checkbox("조건 충족 시 매도요청 생성", value=False)
-    if st.button("미국 손절·익절 조건 점검", use_container_width=True):
+    if st.button("미국 손절·익절 조건 점검", width="stretch"):
         try:
             actions = service.monitor_risk(create_sell_requests=create_sell)
             if actions:
                 st.warning(f"조건 충족 {len(actions)}건")
-                st.dataframe(pd.DataFrame(actions), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(actions), width="stretch", hide_index=True)
             else:
                 st.success("현재 손절·익절 조건 충족 종목이 없습니다.")
         except Exception as exc:
@@ -252,20 +274,22 @@ def _render_execution(st, service) -> None:
     st.markdown("### 미국 주문 요청 이력")
     order_df = pd.DataFrame(service.order_history(100))
     if not order_df.empty:
+        order_df["created_at"] = order_df["created_at"].map(_kst_text)
         keep = [column for column in [
             "created_at", "ticker", "name", "exchange", "side", "quantity", "limit_price",
             "status", "broker_order_id", "broker_message", "error_message",
         ] if column in order_df.columns]
-        st.dataframe(order_df[keep], use_container_width=True, hide_index=True)
+        st.dataframe(order_df[keep], width="stretch", hide_index=True)
 
     st.markdown("### 미국 체결 이력")
     execution_df = pd.DataFrame(service.execution_history(100))
     if not execution_df.empty:
+        execution_df["captured_at"] = execution_df["captured_at"].map(_kst_text)
         keep = [column for column in [
             "captured_at", "broker_order_id", "ticker", "exchange", "side", "ordered_quantity",
             "filled_quantity", "filled_price", "status",
         ] if column in execution_df.columns]
-        st.dataframe(execution_df[keep], use_container_width=True, hide_index=True)
+        st.dataframe(execution_df[keep], width="stretch", hide_index=True)
     st.caption("모의투자에서도 주문은 사용자 승인 후에만 전송됩니다.")
 
 

@@ -3,7 +3,9 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
+from datetime import datetime, timezone
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -14,6 +16,15 @@ from trading.order_service import TradingOrderService
 
 
 ELIGIBLE_DECISIONS = {"FINAL BUY", "BUY WATCH"}
+
+
+def _kst_text(value) -> str:
+    if not value:
+        return "-"
+    parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Seoul"))
+    return parsed.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
 def run(db_path: str = "datahub/market.db") -> None:
@@ -270,7 +281,7 @@ def _render_live_chart(st, db_path: str, ticker: str, label: str) -> None:
     if bars.empty:
         st.warning("현재 차트 데이터를 불러오지 못했습니다.")
         return
-    st.plotly_chart(build_trading_chart(bars, label), use_container_width=True, config=CHART_CONFIG)
+    st.plotly_chart(build_trading_chart(bars, label), width="stretch", config=CHART_CONFIG)
     st.caption(f"시세 출처: {source} · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
 
 
@@ -332,7 +343,7 @@ def _yahoo_ticker(ticker: str) -> str:
 def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
     st.markdown("#### 판단 도구")
     c1, c2, c3 = st.columns(3)
-    if c1.button("JP Radar", use_container_width=True, key=f"jp_radar_{ticker}"):
+    if c1.button("JP Radar", width="stretch", key=f"jp_radar_{ticker}"):
         recommendation = SimpleNamespace(
             market="kr",
             ticker=ticker,
@@ -343,10 +354,10 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
         st.session_state[f"jp_radar_result_{ticker}"] = EnvironmentAdvisor().analyze(recommendation)
         st.rerun()
 
-    if c2.button("추천 검증", use_container_width=True, key=f"validation_{ticker}"):
+    if c2.button("추천 검증", width="stretch", key=f"validation_{ticker}"):
         st.session_state[f"validation_open_{ticker}"] = True
 
-    if c3.button("차트 새로고침", use_container_width=True, key=f"refresh_chart_{ticker}"):
+    if c3.button("차트 새로고침", width="stretch", key=f"refresh_chart_{ticker}"):
         st.rerun()
 
     radar = st.session_state.get(f"jp_radar_result_{ticker}")
@@ -364,7 +375,7 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
         cols[2].metric("종목 위험", _risk_label(selected.get("risk_score")))
         if decision == "UNVALIDATED":
             st.info("아직 저장된 검증 조언이 없습니다. 통합 추천 워크벤치에서 이 종목의 환경 조언을 실행하세요.")
-            st.page_link("pages/2_Meta_Score.py", label="추천 검증 화면 열기", icon="✅", use_container_width=True)
+            st.page_link("pages/2_Meta_Score.py", label="추천 검증 화면 열기", icon="✅", width="stretch")
 
 
 def _render_order_form(st, service, selected: dict, ticker: str, label: str, run_id: str) -> None:
@@ -372,72 +383,39 @@ def _render_order_form(st, service, selected: dict, ticker: str, label: str, run
     decision = str(selected.get("decision") or "UNVALIDATED")
     validated = bool(selected.get("validation_available"))
     eligible = decision in ELIGIBLE_DECISIONS
-
     st.markdown(f"**선택 종목:** {label}")
     side_labels = {"매수": "BUY", "매도": "SELL"}
     order_type_labels = {"시장가": "MARKET", "지정가": "LIMIT"}
-
-    c1, c2, c3 = st.columns([1, 1, 1.2])
-    side_label = c1.selectbox("주문 방향", list(side_labels), key=f"side_label_{ticker}")
-    quantity = c2.number_input("수량", min_value=1, value=1, step=1, key=f"quantity_{ticker}")
-    order_type_label = c3.selectbox("주문 유형", list(order_type_labels), key=f"order_type_label_{ticker}")
-
-    side = side_labels[side_label]
-    order_type = order_type_labels[order_type_label]
-    limit_price = 0.0
-    if order_type == "LIMIT":
+    with st.form(f"order_form_{ticker}"):
+        c1, c2, c3 = st.columns([1, 1, 1.2])
+        side_label = c1.selectbox("주문 방향", list(side_labels), key=f"side_label_{ticker}")
+        quantity = c2.number_input("수량", min_value=1, value=1, step=1, key=f"quantity_{ticker}")
+        order_type_label = c3.selectbox("주문 유형", list(order_type_labels), key=f"order_type_label_{ticker}")
+        side = side_labels[side_label]
+        order_type = order_type_labels[order_type_label]
         limit_price = st.number_input(
-            "지정가",
-            min_value=0.0,
-            value=0.0,
-            step=10.0,
+            "지정가 (시장가 선택 시 무시)", min_value=0.0, value=0.0, step=10.0,
             key=f"limit_price_{ticker}",
         )
-
-    r1, r2 = st.columns(2)
-    target = r1.number_input(
-        "익절 기준 수익률(%)",
-        value=float(selected.get("target_return") or 0.0),
-        step=0.1,
-        key=f"target_{ticker}",
-    )
-    stop = r2.number_input(
-        "손절 기준 수익률(%)",
-        value=float(selected.get("stop_return") or 0.0),
-        step=0.1,
-        key=f"stop_{ticker}",
-    )
-
-    price_phrase = "시장가로" if order_type == "MARKET" else f"{float(limit_price):,.0f}원 지정가로"
-    summary = f"{label} {int(quantity)}주를 {price_phrase} {side_label}합니다."
-    risk_summary = f"목표 수익률 {float(target):+.1f}% · 손절 기준 {float(stop):+.1f}%"
-    st.markdown(
-        f"""
-        <div class="order-summary">
-          <div class="order-summary-label">주문 요약</div>
-          <div class="order-summary-main">{summary}</div>
-          <div class="order-summary-risk">{risk_summary}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        r1, r2 = st.columns(2)
+        target = r1.number_input(
+            "익절 기준 수익률(%)", value=float(selected.get("target_return") or 0.0),
+            step=0.1, key=f"target_{ticker}",
+        )
+        stop = r2.number_input(
+            "손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0),
+            step=0.1, key=f"stop_{ticker}",
+        )
+        submitted = st.form_submit_button("주문 요청 만들기", type="primary", width="stretch")
 
     if not validated:
-        st.caption("미검증 종목도 주문 리스트와 주문 입력은 유지됩니다. 매수 요청 전 검증 조언 확인을 권장합니다.")
+        st.caption("미검증 종목입니다. 매수 요청 전 검증 조언 확인을 권장합니다.")
     elif not eligible and side == "BUY":
-        st.warning(f"현재 검증 조언은 {_decision_label(decision)}입니다. 주문 전 사용자가 직접 판단해야 합니다.")
-
+        st.warning(f"현재 검증 조언은 {_decision_label(decision)}입니다. 주문 전 직접 판단해야 합니다.")
     invalid_limit = order_type == "LIMIT" and float(limit_price) <= 0
-    if invalid_limit:
-        st.warning("지정가 주문은 0원보다 큰 가격을 입력해야 합니다.")
-
-    if st.button(
-        "주문 요청 만들기",
-        type="primary",
-        use_container_width=True,
-        key=f"create_order_{ticker}",
-        disabled=invalid_limit,
-    ):
+    if submitted and invalid_limit:
+        st.error("지정가 주문은 0원보다 큰 가격을 입력해야 합니다.")
+    elif submitted:
         request_id = service.create_request(
             ticker=ticker,
             name=selected.get("name"),
@@ -469,7 +447,7 @@ def _render_pending_approval(st, service, recommendations: list[dict]) -> None:
             +
             f"{display_symbol(pending[i].get('name'), pending[i]['ticker'], 'kr')} · "
             f"{normalize_ticker(pending[i]['ticker'], 'kr')} {pending[i]['side']} {pending[i]['quantity']}주 · "
-            f"{pending[i].get('created_at') or '-'}"
+            f"{_kst_text(pending[i].get('created_at'))}"
         ),
     )
     row = pending[request_index]
@@ -500,25 +478,25 @@ def _render_pending_approval(st, service, recommendations: list[dict]) -> None:
 def _render_execution_and_history(st, service) -> None:
     st.markdown("### 3. 주문 결과·체결 확인")
     a, b, c = st.columns(3)
-    if a.button("체결내역 새로고침", use_container_width=True):
+    if a.button("체결내역 새로고침", width="stretch"):
         try:
             rows = service.refresh_executions()
             st.success(f"KIS 주문·체결 {len(rows)}건 확인")
         except Exception as exc:
             st.error(f"체결 조회 실패: {exc}")
-    if b.button("보유종목 자동 반영", use_container_width=True):
+    if b.button("보유종목 자동 반영", width="stretch"):
         try:
             rows = service.sync_positions()
             st.success(f"보유종목 {len(rows)}개 동기화")
         except Exception as exc:
             st.error(f"보유종목 동기화 실패: {exc}")
     create_sell = c.checkbox("손절·익절 발생 시 매도요청 생성", value=False)
-    if st.button("손절·익절 조건 점검", use_container_width=True):
+    if st.button("손절·익절 조건 점검", width="stretch"):
         try:
             actions = service.monitor_risk(create_sell_requests=create_sell)
             if actions:
                 st.warning(f"조건 충족 {len(actions)}건")
-                st.dataframe(pd.DataFrame(actions), use_container_width=True, hide_index=True)
+                st.dataframe(pd.DataFrame(actions), width="stretch", hide_index=True)
             else:
                 st.success("현재 손절·익절 조건 충족 종목이 없습니다.")
         except Exception as exc:
@@ -527,23 +505,25 @@ def _render_execution_and_history(st, service) -> None:
     st.markdown("### 주문 요청 이력")
     history = pd.DataFrame(service.pending_requests(100))
     if not history.empty:
+        history["created_at"] = history["created_at"].map(_kst_text)
         history["종목코드"] = history["ticker"].map(lambda value: normalize_ticker(value, "kr"))
         history["종목"] = history.apply(lambda row: display_symbol(row.get("name"), row.get("ticker"), "kr"), axis=1)
         keep = [c for c in [
             "created_at", "source_run_id", "source_rank", "종목", "종목코드", "side", "quantity",
             "order_type", "limit_price", "status", "broker_order_id", "broker_message", "error_message",
         ] if c in history.columns]
-        st.dataframe(history[keep], use_container_width=True, hide_index=True)
+        st.dataframe(history[keep], width="stretch", hide_index=True)
 
     st.markdown("### 체결 이력")
     executions = pd.DataFrame(service.latest_executions(100))
     if not executions.empty:
+        executions["captured_at"] = executions["captured_at"].map(_kst_text)
         executions["종목코드"] = executions["ticker"].map(lambda value: normalize_ticker(value, "kr"))
         keep = [c for c in [
             "captured_at", "broker_order_id", "종목코드", "side", "ordered_quantity",
             "filled_quantity", "filled_price", "status",
         ] if c in executions.columns]
-        st.dataframe(executions[keep], use_container_width=True, hide_index=True)
+        st.dataframe(executions[keep], width="stretch", hide_index=True)
 
     st.caption("손절·익절 감시는 자동 매도를 직접 전송하지 않고 승인 대기 매도요청만 생성합니다.")
 

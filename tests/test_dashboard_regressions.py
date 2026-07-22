@@ -230,3 +230,17 @@ def test_approved_dashboard_design_features_are_present() -> None:
     assert "기본 보기" in ui and "상세 보기" in ui
     assert "with st.container(border=True)" in kr
     assert "① 주문 입력 → ② 내용 확인 → ③ 승인 대기" in us
+
+
+def test_visual_system_theme_and_chart_conventions() -> None:
+    root = Path(__file__).resolve().parents[1]
+    theme = (root / ".streamlit" / "config.toml").read_text(encoding="utf-8")
+    charts = (root / "dashboard" / "charts.py").read_text(encoding="utf-8")
+    kr = (root / "dashboard" / "trading_desk_app.py").read_text(encoding="utf-8")
+    assert 'primaryColor = "#1D4ED8"' in theme
+    assert 'backgroundColor = "#F6F8FB"' in theme
+    assert "Pretendard" in theme
+    assert 'increasing_line_color="#DC2626"' in charts
+    assert 'decreasing_line_color="#2563EB"' in charts
+    assert "height: int = 520" in charts
+    assert "max-width:1480px" in kr

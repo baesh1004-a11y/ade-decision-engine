@@ -177,7 +177,11 @@ def _render_live_chart(st, ticker: str, label: str) -> None:
             with st.expander("오류 원인 확인"):
                 st.code(error)
     else:
-        st.plotly_chart(build_trading_chart(frame, f"{label} ({ticker})"), width="stretch", config=CHART_CONFIG)
+        chart_height = 360 if _is_mobile_request(st) else 520
+        st.plotly_chart(
+            build_trading_chart(frame, f"{label} ({ticker})", height=chart_height),
+            width="stretch", config=CHART_CONFIG,
+        )
         st.caption("Yahoo Finance 5분봉 · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
     if st.button("다시 조회", icon=":material/refresh:", width="stretch", key=f"refresh_us_chart_{ticker}"):
         _load_us_chart.clear()
@@ -328,21 +332,40 @@ def _render_execution(st, service) -> None:
     order_df = pd.DataFrame(service.order_history(100))
     if not order_df.empty:
         order_df["created_at"] = order_df["created_at"].map(_kst_text)
+        order_df["status"] = order_df["status"].map(status_text)
         keep = [column for column in [
             "created_at", "ticker", "name", "exchange", "side", "quantity", "limit_price",
             "status", "broker_order_id", "broker_message", "error_message",
         ] if column in order_df.columns]
-        st.dataframe(order_df[keep], width="stretch", hide_index=True)
+        st.dataframe(
+            order_df[keep], width="stretch", hide_index=True, row_height=40,
+            column_config={
+                "ticker": st.column_config.TextColumn("티커", pinned=True),
+                "status": st.column_config.TextColumn("상태", pinned=True),
+                "quantity": st.column_config.NumberColumn("수량", format="%d주"),
+                "limit_price": st.column_config.NumberColumn("지정가", format="$%.2f"),
+            },
+        )
 
     st.markdown("### 미국 체결 이력")
     execution_df = pd.DataFrame(service.execution_history(100))
     if not execution_df.empty:
         execution_df["captured_at"] = execution_df["captured_at"].map(_kst_text)
+        execution_df["status"] = execution_df["status"].map(status_text)
         keep = [column for column in [
             "captured_at", "broker_order_id", "ticker", "exchange", "side", "ordered_quantity",
             "filled_quantity", "filled_price", "status",
         ] if column in execution_df.columns]
-        st.dataframe(execution_df[keep], width="stretch", hide_index=True)
+        st.dataframe(
+            execution_df[keep], width="stretch", hide_index=True, row_height=40,
+            column_config={
+                "ticker": st.column_config.TextColumn("티커", pinned=True),
+                "status": st.column_config.TextColumn("상태", pinned=True),
+                "ordered_quantity": st.column_config.NumberColumn("주문", format="%d주"),
+                "filled_quantity": st.column_config.NumberColumn("체결", format="%d주"),
+                "filled_price": st.column_config.NumberColumn("체결가", format="$%.2f"),
+            },
+        )
     if not order_df.empty:
         st.markdown("### 선택 주문 진행 과정")
         timeline_index = st.selectbox(
@@ -373,16 +396,16 @@ def _style(st) -> None:
     st.markdown(
         """
         <style>
-        .stApp{background:linear-gradient(135deg,#eef7ff,#fbfdff 48%,#eaf3ff);color:#13253a}
-        .block-container{max-width:1800px;padding-top:1rem}
-        .status-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 24px;border-radius:22px;background:rgba(255,255,255,.9);border:1px solid rgba(72,145,210,.22);box-shadow:0 14px 40px rgba(64,106,147,.11);margin-bottom:12px}
-        .status-hero h1{margin:2px 0;font-size:2rem}.status-hero p{margin:3px 0;color:#51677d}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
+        .stApp{background:#F6F8FB;color:#172033;font-family:Pretendard,"Malgun Gothic",Arial,sans-serif}
+        .block-container{max-width:1480px;padding:24px 24px 32px;margin:0 auto}
+        .status-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 24px;border-radius:16px;background:#FFFFFF;border:1px solid #D9E0EA;box-shadow:0 2px 8px rgba(23,32,51,.05);margin-bottom:24px}
+        .status-hero h1{margin:2px 0;font-size:32px;font-weight:600}.status-hero p{margin:8px 0 0;color:#64748B;font-size:15px}.eyebrow{font-size:12px;letter-spacing:.12em;font-weight:600;color:#1D4ED8}
         .status-cluster{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
-        .status-badge{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:.84rem;font-weight:750;border:1px solid transparent}
+        .status-badge{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid transparent}
         .status-badge.safe{color:#137044;background:#e9f8f0;border-color:#bde8cf}.status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}.status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}.status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
         div.stButton > button:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
         [data-testid="stCaptionContainer"]{color:#51677d}
-        @media(max-width:900px){.status-hero{align-items:flex-start;flex-direction:column}.status-cluster{justify-content:flex-start}.block-container{padding-bottom:5.5rem}}
+        @media(max-width:900px){.block-container{padding:16px 14px 72px}.status-hero{align-items:flex-start;flex-direction:column;padding:16px}.status-hero h1{font-size:26px}.status-cluster{justify-content:flex-start}}
         </style>
         """,
         unsafe_allow_html=True,

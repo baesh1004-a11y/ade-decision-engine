@@ -16,7 +16,7 @@ def stochastic_ohlc(df: pd.DataFrame, period: int = 14, smooth: int = 3):
     return k, d
 
 
-def build_trading_chart(data: pd.DataFrame, title: str) -> go.Figure:
+def build_trading_chart(data: pd.DataFrame, title: str, *, height: int = 520) -> go.Figure:
     df = data.copy()
     df["Date"] = pd.to_datetime(df["Date"])
     for column in ["Open", "High", "Low", "Close", "Volume"]:
@@ -40,34 +40,34 @@ def build_trading_chart(data: pd.DataFrame, title: str) -> go.Figure:
         go.Candlestick(
             x=df["Date"], open=df["Open"], high=df["High"], low=df["Low"], close=df["Close"],
             name=title,
-            increasing_line_color="#16a085", increasing_fillcolor="#16a085",
-            decreasing_line_color="#ef5350", decreasing_fillcolor="#ef5350",
+            increasing_line_color="#DC2626", increasing_fillcolor="#DC2626",
+            decreasing_line_color="#2563EB", decreasing_fillcolor="#2563EB",
         ),
         row=1, col=1,
     )
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["BB_UPPER"], name="BB 상단", line=dict(color="#ef5350", width=1.4)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["SMA20"], name="SMA20", line=dict(color="#2962ff", width=1.7)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df["Date"], y=df["BB_LOWER"], name="BB 하단", line=dict(color="#26a69a", width=1.4), fill="tonexty", fillcolor="rgba(38,166,154,.05)"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df["Date"], y=df["BB_UPPER"], name="BB 상단", line=dict(color="#C76B00", width=1.2)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df["Date"], y=df["SMA20"], name="SMA20", line=dict(color="#1E3A8A", width=1.8)), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df["Date"], y=df["BB_LOWER"], name="BB 하단", line=dict(color="#64748B", width=1.2), fill="tonexty", fillcolor="rgba(100,116,139,.04)"), row=1, col=1)
 
-    volume_colors = ["#16a085" if close >= open_ else "#ef5350" for close, open_ in zip(df["Close"], df["Open"])]
-    fig.add_trace(go.Bar(x=df["Date"], y=df["Volume"], name="거래량", marker_color=volume_colors, opacity=0.72), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df["Date"], y=k, name="STO %K", line=dict(color="#2962ff", width=1.7)), row=3, col=1)
-    fig.add_trace(go.Scatter(x=df["Date"], y=d, name="STO %D", line=dict(color="#ff9800", width=1.7)), row=3, col=1)
+    volume_colors = ["rgba(220,38,38,.42)" if close >= open_ else "rgba(37,99,235,.42)" for close, open_ in zip(df["Close"], df["Open"])]
+    fig.add_trace(go.Bar(x=df["Date"], y=df["Volume"], name="거래량", marker_color=volume_colors), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df["Date"], y=k, name="STO %K", line=dict(color="#1E3A8A", width=1.7)), row=3, col=1)
+    fig.add_trace(go.Scatter(x=df["Date"], y=d, name="STO %D", line=dict(color="#C76B00", width=1.7)), row=3, col=1)
     fig.add_hline(y=80, line_dash="dash", line_color="#8d99a6", row=3, col=1)
     fig.add_hline(y=20, line_dash="dash", line_color="#8d99a6", row=3, col=1)
 
     fig.update_layout(
-        height=700,
-        margin=dict(l=8, r=54, t=40, b=10),
+        height=height,
+        margin=dict(l=6, r=44, t=30, b=6),
         paper_bgcolor="#ffffff",
         plot_bgcolor="#ffffff",
         hovermode="x unified",
         xaxis_rangeslider_visible=False,
         legend=dict(orientation="h", y=1.02, x=0, bgcolor="rgba(255,255,255,.7)"),
-        font=dict(color="#22364a", size=11),
+        font=dict(color="#64748B", size=12, family="Pretendard, Malgun Gothic, Arial, sans-serif"),
     )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(150,165,180,.16)", rangeslider_visible=False)
-    fig.update_yaxes(showgrid=True, gridcolor="rgba(150,165,180,.16)", side="right")
+    fig.update_xaxes(showgrid=False, rangeslider_visible=False)
+    fig.update_yaxes(showgrid=True, gridcolor="#E5E7EB", side="right")
     fig.update_yaxes(range=[0, 100], row=3, col=1)
     return fig
 

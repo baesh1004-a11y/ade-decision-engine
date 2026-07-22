@@ -20,6 +20,8 @@ STATUS_META = {
 
 
 def status_text(status: object) -> str:
+    if str(status or "").startswith(("✓ ", "↻ ", "▲ ", "■ ", "— ")):
+        return str(status)
     raw = str(status or "UNKNOWN").upper()
     icon, label, _color = STATUS_META.get(raw, ("—", raw, "gray"))
     return f"{icon} {label}"

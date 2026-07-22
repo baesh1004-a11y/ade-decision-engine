@@ -346,26 +346,7 @@ def _yahoo_tickers(ticker: str) -> list[str]:
 
 def _yahoo_ticker(ticker: str) -> str:
     """Compatibility helper for callers that only need the first candidate."""
-   ߎ��G����ƭy�r(radar.market_signal))
-        b.metric("해당 업종 JP Radar", str(radar.sector_signal))
-
-    if st.session_state.get(f"validation_open_{ticker}"):
-        decision = str(selected.get("decision") or "UNVALIDATED")
-        st.markdown(f"**추천 검증 조언:** {_decision_label(decision)}")
-        cols = st.columns(3)
-        cols[0].metric("전체 시장", _score_label(selected.get("market_score")))
-        cols[1].metric("해당 업종", _score_label(selected.get("sector_score")))
-        cols[2].metric("종목 위험", _risk_label(selected.get("risk_score")))
-        if decision == "UNVALIDATED":
-            st.info("아직 저장된 검증 조언이 없습니다. 통합 추천 워크벤치에서 이 종목의 환경 조언을 실행하세요.")
-            st.page_link("pages/2_Meta_Score.py", label="추천 검증 화면 열기", icon="✅", width="stretch")
-
-
-def _render_order_form(st, service, selected: dict, ticker: str, label: str, run_id: str) -> None:
-    st.markdown("### ① 주문 입력 → ② 내용 확인 → ③ 승인 대기")
-    decision = str(selected.get("decision") or "UNVALIDATED")
-    validated = bool(selected.get("validation_available"))
-    eligible = decision in ELIGIBLE_DECISIONS
+   �m�G����ƭy�sion in ELIGIBLE_DECISIONS
     st.markdown(f"**선택 종목:** {label}")
     side_labels = {"매수": "BUY", "매도": "SELL"}
     order_type_labels = {"시장가": "MARKET", "지정가": "LIMIT"}
@@ -495,24 +476,44 @@ def _render_execution_and_history(st, service) -> None:
     history = pd.DataFrame(service.pending_requests(100))
     if not history.empty:
         history["created_at"] = history["created_at"].map(_kst_text)
+        history["status"] = history["status"].map(status_text)
         history["종목코드"] = history["ticker"].map(lambda value: normalize_ticker(value, "kr"))
         history["종목"] = history.apply(lambda row: display_symbol(row.get("name"), row.get("ticker"), "kr"), axis=1)
         keep = [c for c in [
             "created_at", "source_run_id", "source_rank", "종목", "종목코드", "side", "quantity",
             "order_type", "limit_price", "status", "broker_order_id", "broker_message", "error_message",
         ] if c in history.columns]
-        st.dataframe(history[keep], width="stretch", hide_index=True)
+        st.dataframe(
+            history[keep], width="stretch", hide_index=True, row_height=40,
+            column_config={
+                "종목": st.column_config.TextColumn("종목", pinned=True),
+                "status": st.column_config.TextColumn("상태", pinned=True),
+                "quantity": st.column_config.NumberColumn("수량", format="%d주"),
+                "limit_price": st.column_config.NumberColumn("지정가", format="%,.0f원"),
+                "created_at": st.column_config.TextColumn("생성 시각"),
+            },
+        )
 
     st.markdown("### 체결 이력")
     executions = pd.DataFrame(service.latest_executions(100))
     if not executions.empty:
         executions["captured_at"] = executions["captured_at"].map(_kst_text)
+        executions["status"] = executions["status"].map(status_text)
         executions["종목코드"] = executions["ticker"].map(lambda value: normalize_ticker(value, "kr"))
         keep = [c for c in [
             "captured_at", "broker_order_id", "종목코드", "side", "ordered_quantity",
             "filled_quantity", "filled_price", "status",
         ] if c in executions.columns]
-        st.dataframe(executions[keep], width="stretch", hide_index=True)
+        st.dataframe(
+            executions[keep], width="stretch", hide_index=True, row_height=40,
+            column_config={
+                "종목코드": st.column_config.TextColumn("종목", pinned=True),
+                "status": st.column_config.TextColumn("상태", pinned=True),
+                "ordered_quantity": st.column_config.NumberColumn("주문", format="%d주"),
+                "filled_quantity": st.column_config.NumberColumn("체결", format="%d주"),
+                "filled_price": st.column_config.NumberColumn("체결가", format="%,.0f원"),
+            },
+        )
 
     if not history.empty:
         st.markdown("### 선택 주문 진행 과정")
@@ -569,39 +570,39 @@ def _style(st) -> None:
     st.markdown(
         """
         <style>
-        .stApp{background:linear-gradient(135deg,#eef7ff,#fbfdff 48%,#eaf3ff);color:#13253a}
-        .block-container{max-width:1800px;padding-top:.75rem}
-        .status-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:18px 24px;border-radius:22px;background:rgba(255,255,255,.88);border:1px solid rgba(72,145,210,.22);box-shadow:0 14px 40px rgba(64,106,147,.11);margin-bottom:12px}
-        .status-hero h1{margin:2px 0;font-size:2rem}.status-hero p{margin:3px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}
+        .stApp{background:#F6F8FB;color:#172033;font-family:Pretendard,"Malgun Gothic",Arial,sans-serif}
+        .block-container{max-width:1480px;padding:24px 24px 32px;margin:0 auto}
+        .status-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 24px;border-radius:16px;background:#FFFFFF;border:1px solid #D9E0EA;box-shadow:0 2px 8px rgba(23,32,51,.05);margin-bottom:24px}
+        .status-hero h1{margin:2px 0;font-size:32px;font-weight:600}.status-hero p{margin:8px 0 0;color:#64748B;font-size:15px}.eyebrow{font-size:12px;letter-spacing:.12em;font-weight:600;color:#1D4ED8}
         .status-cluster{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
-        .status-badge{display:inline-flex;align-items:center;padding:7px 11px;border-radius:999px;font-size:.84rem;font-weight:750;white-space:nowrap;border:1px solid transparent}
+        .status-badge{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;border:1px solid transparent}
         .status-badge.safe{color:#137044;background:#e9f8f0;border-color:#bde8cf}
         .status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}
         .status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}
         .status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
-        .confidence-card{margin:12px 0 16px;padding:17px 19px;border-radius:18px;background:rgba(255,255,255,.9);border:1px solid rgba(72,145,210,.24);box-shadow:0 10px 28px rgba(64,106,147,.09)}
+        .confidence-card{margin:16px 0;padding:20px;border-radius:12px;background:#FFFFFF;border:1px solid #D9E0EA;box-shadow:0 2px 8px rgba(23,32,51,.04)}
         .confidence-card.high{border-left:6px solid #26a269}.confidence-card.good{border-left:6px solid #3479b9}.confidence-card.neutral{border-left:6px solid #d28b26}.confidence-card.low{border-left:6px solid #c43d36}
         .confidence-head{display:flex;align-items:center;justify-content:space-between;gap:18px}
         .confidence-eyebrow{font-size:.76rem;font-weight:800;letter-spacing:.09em;color:#6a8095;text-transform:uppercase}
-        .confidence-title{margin-top:2px;font-size:1.16rem;font-weight:800;color:#17324d}
-        .confidence-score{font-size:2rem;font-weight:850;line-height:1;color:#17324d}.confidence-score span{font-size:.85rem;margin-left:2px;color:#6d8194}
+        .confidence-title{margin-top:2px;font-size:18px;font-weight:600;color:#172033}
+        .confidence-score{font-size:30px;font-weight:600;line-height:1;color:#172033;font-variant-numeric:tabular-nums}.confidence-score span{font-size:13px;margin-left:2px;color:#64748B}
         .confidence-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:14px 0 10px}
         .confidence-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px;padding:9px 10px;border-radius:11px;background:#f5f9fc;font-size:.84rem;color:#5b7186}
         .confidence-row strong{color:#203a54}.signal.high{color:#26a269}.signal.mid{color:#d28b26}.signal.low{color:#c43d36}.signal.unknown{color:#9aa9b6}
         .confidence-opinion{padding:11px 13px;border-radius:12px;background:#eef6fc;color:#314d67;line-height:1.5}
         .confidence-note{margin-top:7px;font-size:.75rem;color:#7d8fa0}
-        .order-summary{margin:14px 0 10px;padding:16px 18px;border-radius:16px;background:rgba(255,255,255,.86);border:1px solid rgba(72,145,210,.24);box-shadow:0 8px 24px rgba(64,106,147,.08)}
+        .order-summary{margin:16px 0 20px;padding:20px;border-radius:12px;background:#FFFFFF;border:1px solid #D9E0EA;box-shadow:0 2px 8px rgba(23,32,51,.04)}
         .order-summary-label{font-size:.78rem;font-weight:800;letter-spacing:.08em;color:#3479b9;text-transform:uppercase;margin-bottom:5px}
-        .order-summary-main{font-size:1.08rem;font-weight:760;color:#17324d}
-        .order-summary-risk{margin-top:4px;color:#62788e;font-size:.93rem}
+        .order-summary-main{font-size:18px;font-weight:600;color:#172033;font-variant-numeric:tabular-nums}
+        .order-summary-risk{margin-top:8px;color:#64748B;font-size:13px}
         div[role="radiogroup"]{gap:.45rem}
-        div[role="radiogroup"] label{padding:.68rem .75rem;border:1px solid rgba(72,145,210,.18);border-radius:12px;background:rgba(255,255,255,.72);line-height:1.35}
+        div[role="radiogroup"] label{padding:12px;border:1px solid #D9E0EA;border-radius:12px;background:#FFFFFF;line-height:1.4}
         div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}
         div.stButton > button{min-height:2.75rem;text-align:left;border-radius:14px}
         div.stButton > button:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
         [data-testid="stCaptionContainer"]{color:#51677d}
         @media(max-width:1100px){.confidence-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-        @media(max-width:900px){.status-hero{align-items:flex-start;flex-direction:column}.status-cluster{justify-content:flex-start}}
+        @media(max-width:900px){.block-container{padding:16px 14px 72px}.status-hero{align-items:flex-start;flex-direction:column;padding:16px}.status-hero h1{font-size:26px}.status-cluster{justify-content:flex-start}}
         </style>
         """,
         unsafe_allow_html=True,

@@ -1,10 +1,45 @@
 [theme]
 base = "light"
-primaryColor = "#2F80ED"
-backgroundColor = "#F4F8FC"
-secondaryBackgroundColor = "#EAF2FA"
-textColor = "#14263A"
-font = "sans serif"
+primaryColor = "#1D4ED8"
+backgroundColor = "#F6F8FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#172033"
+linkColor = "#1D4ED8"
+borderColor = "#D9E0EA"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "8px"
+buttonRadius = "8px"
+font = "Pretendard:https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+headingFont = "Pretendard:https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
+codeFont = "monospace"
+baseFontSize = 15
+baseFontWeight = 400
+headingFontSizes = ["32px", "22px", "18px", "16px", "14px", "12px"]
+headingFontWeights = [600, 600, 600, 500, 500, 500]
+redColor = "#DC2626"
+redBackgroundColor = "#FEECEC"
+redTextColor = "#991B1B"
+blueColor = "#2563EB"
+blueBackgroundColor = "#EAF1FF"
+blueTextColor = "#1E40AF"
+greenColor = "#16803C"
+greenBackgroundColor = "#E9F7EE"
+greenTextColor = "#166534"
+orangeColor = "#C76B00"
+orangeBackgroundColor = "#FFF3DF"
+orangeTextColor = "#92400E"
+grayColor = "#64748B"
+dataframeBorderColor = "#D9E0EA"
+dataframeHeaderBackgroundColor = "#EEF2F7"
+chartCategoricalColors = ["#1D4ED8", "#DC2626", "#16803C", "#C76B00", "#7C3AED", "#64748B"]
+
+[theme.sidebar]
+backgroundColor = "#EEF2F7"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#172033"
+borderColor = "#D9E0EA"
+primaryColor = "#1D4ED8"
 
 [client]
 showSidebarNavigation = true

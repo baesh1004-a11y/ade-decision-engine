@@ -1,5 +1,24 @@
 # Changelog
 
+## ADE v1.0.4
+
+### Visual system
+
+- Replaced the pervasive blue gradient with a neutral gray canvas, white cards, and a single navy accent.
+- Standardized the dashboard on Pretendard with Korean and system-font fallbacks.
+- Defined consistent heading, body, caption, badge, and key-number sizes.
+- Limited desktop content to 1480px and tightened the recommendation-to-chart layout.
+- Applied an 8px spacing rhythm with consistent section, card, and mobile-bottom spacing.
+- Unified card borders, 12px radii, restrained shadows, and selected/risk accents.
+- Added tabular numeric emphasis and Korean-market red/blue direction labels.
+- Improved order and execution tables with 40px rows, pinned identity/status columns, and numeric formats.
+- Simplified trading charts with Korean-market candle colors, quieter volume/grid lines, and 520px/360px responsive heights.
+
+### Notes
+
+- Button size and emphasis rules were intentionally unchanged because design proposal 47 was passed.
+- Backup branch: `backup/dashboard-before-41-50-20260722`.
+
 ## ADE v1.0.3
 
 ### Dashboard design

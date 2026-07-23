@@ -29,7 +29,7 @@
 | 6 | Signal Engine | 완료 | Candidate 구현 존재 | 기존 테스트 확인 필요 | 미확인 | `strategy/candidate.py`에서 초기 신호 역할 수행 |
 | 7 | Risk Engine | 완료 | 기존 구현 존재 | 기존 테스트 존재 | 미확인 | 새 설계와 현 구현 정합성 점검 필요 |
 | 8 | Decision Engine Core | 완료 | 미확인 | 미확인 | 미확인 | BUY/HOLD/REDUCE/SELL/REJECT/NO_ACTION 설계 |
-| 9 | Order Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 주문 생성, 검증, 전송 준비. 운영 모드는 별도 승인 전 제한 |
+| 9 | Order Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 기본 주문 생성, 검증, 전송 모드 설계 |
 | 10 | Execution Monitor | 완료 | 미구현 | 계획 완료 | 미확인 | 체결, 미체결, 실패 추적과 포트폴리오/리포트 이벤트 발행 |
 | 11 | Backtest Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 과거 데이터 기반 전략 검증과 시뮬레이션 결과 산출 |
 | 12 | Report Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 일일 의사결정, 포트폴리오, 체결, 백테스트 리포트 생성 |
@@ -44,11 +44,12 @@
 | 21 | Signal Generation & Ranking Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 종목 신호, 신뢰도, 순위, 후보 선정 |
 | 22 | Portfolio Risk & Exposure Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 종목·섹터·상관 군집·현금·총 익스포저 한도 평가 |
 | 23 | Decision & Position Sizing Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 최종 행동, 목표 금액·수량, 하루 1종목 선정, 보호 규칙 |
+| 24 | Order Validation & Routing Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | 주문 직전 재검증, 가격 보호, 멱등성, 브로커 라우팅, 불확실 응답 격리 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 현재 계획된 핵심 판단·운영·감사 계층 설계 완료
+[██████████] 현재 계획된 핵심 판단·주문·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -59,7 +60,8 @@
 4. 고정 CSV fixture 기반 스모크 테스트
 5. Candidate → Signal → Portfolio Risk → Decision 계약 정합성 검증
 6. Decision & Position Sizing 최소 코드 구현
-7. Order Validation & Routing Engine v2 상세 설계
+7. OrderIntent와 순수 검증 함수 최소 구현
+8. idempotency reservation과 DRY_RUN 경로 구현
 
 ## 다음 작업
 
@@ -69,8 +71,10 @@
 4. 기존 파이프라인을 Orchestrator stage로 래핑
 5. DataHub → Feature → Signal → Risk → Decision fixture 통합 테스트
 6. `decision/models.py`, `decision/sizing.py`, `decision/engine.py` 최소 구현
-7. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-8. Report Engine용 최소 JSON fixture 생성
+7. `order/models.py`, `order/contract.py`, `order/pretrade.py`, `order/pricing.py` 최소 구현
+8. SQLite idempotency reservation과 `DryRunBrokerAdapter` 구현
+9. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+10. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -89,3 +93,7 @@
 - Decision Engine의 매수 금액과 수량은 Risk 승인값을 초과할 수 없다.
 - 신규 진입은 하루 최대 1종목이며 매도·축소는 이 한도에 포함하지 않는다.
 - 만료되거나 서로 다른 run의 Signal/Risk Snapshot은 결합하지 않는다.
+- Order Engine은 Decision/Risk 승인 수량과 금액을 확대할 수 없다.
+- 동일 주문 의도는 멱등성 키 기준으로 최대 한 번만 브로커에 전송한다.
+- 불확실 브로커 응답은 `VERIFY_REQUIRED`로 격리하며 자동 재주문하지 않는다.
+- `LIVE_BLOCKED`에서는 실계좌 브로커 submit 호출이 발생해서는 안 된다.

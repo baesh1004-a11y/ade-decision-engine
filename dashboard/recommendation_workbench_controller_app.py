@@ -7,6 +7,7 @@ import streamlit as st
 
 from dashboard import recommendation_workbench_v2_app as base
 from dashboard.daily_center_app import _initialize_widget_state, _persist_widget_state
+from dashboard.design_system import StatusBadge, apply_design_system, page_header, step_header
 from maintenance.recommendation_runner import get_status, start_job
 from markets.profiles import get_market_profile
 from markets.symbol_display import build_name_map, normalize_ticker
@@ -15,14 +16,14 @@ from recommendation.run_context import load_latest_context
 
 def run() -> None:
     st.set_page_config(page_title="ADE 투자 워크벤치", page_icon="📊", layout="wide")
-    base._style(st)
+    apply_design_system()
 
     title_col, market_col = st.columns([5, 1])
     with title_col:
-        st.markdown(
-            '<div class="page-title"><h1>투자 워크벤치</h1>'
-            '<p>왼쪽 추천 목록에서 종목을 선택하면 분석·검증·주문 영역이 함께 변경됩니다.</p></div>',
-            unsafe_allow_html=True,
+        page_header(
+            "투자 워크벤치",
+            "추천 종목 선택부터 분석, 환경 검증, 주문 연결까지 한 화면에서 처리합니다.",
+            badges=[StatusBadge("AI DECISION WORKSPACE", "info")],
         )
     with market_col:
         market = st.segmented_control(
@@ -62,16 +63,16 @@ def run() -> None:
 
         left, center, right = st.columns([1.2, 3.2, 1.2], gap="medium")
         with left:
-            base._step_title(st, 1, "추천 목록", "행을 클릭하면 전체 화면의 선택 종목이 변경됩니다.")
+            step_header(1, "추천 목록", "종목을 선택하면 분석과 주문 영역이 함께 변경됩니다.")
             _render_controller(st, recommendations, selected, profile.code)
         with center:
-            base._step_title(st, 2, "분석 및 검증", "현재 차트와 과거 급등 직전 패턴을 비교합니다.")
+            step_header(2, "분석 및 검증", "현재 차트와 과거 급등 직전 패턴을 비교합니다.")
             base._comparison_panel(
                 st, selected, current, historical, pattern, payload,
                 profile.code, profile.db_path, context.run_id, validation,
             )
         with right:
-            base._step_title(st, 3, "주문", "선택 종목의 주문 화면으로 연결합니다.")
+            step_header(3, "주문", "선택 종목의 주문 화면으로 연결합니다.")
             base._order_panel(st, selected, profile.code, validation, context)
     finally:
         conn.close()

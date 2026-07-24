@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from dashboard.ade_design_system import apply_premium_theme, render_hero, render_section
 from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from recommendation.run_context import load_latest_context
 
@@ -13,14 +14,21 @@ def run() -> None:
     import streamlit as st
 
     st.set_page_config(page_title="ADE 종합 검증 리포트", page_icon="📋", layout="wide")
-    st.title("종합 검증 리포트")
-    st.caption("한국·미국 최신 완료 추천 실행의 검증 현황을 한 화면에서 비교합니다.")
+    apply_premium_theme(st, page="validation-report")
+    render_hero(
+        st,
+        "종합 검증 리포트",
+        "한국·미국 최신 완료 추천 실행의 검증 상태와 판단 분포를 한 화면에서 비교합니다.",
+        eyebrow="ADE · VALIDATION INTELLIGENCE",
+        chip="LATEST COMPLETED RUNS",
+    )
 
     market = st.segmented_control(
         "시장",
         options=["all", "kr", "us"],
         default="all",
         format_func=lambda value: {"all": "전체", "kr": "🇰🇷 한국", "us": "🇺🇸 미국"}[value],
+        label_visibility="collapsed",
     )
 
     targets = []
@@ -47,6 +55,7 @@ def run() -> None:
     total = len(report)
     decisions = report[report["검증여부"].eq("완료")]["검증결과"].value_counts()
 
+    render_section(st, "핵심 지표", "추천군 · 검증률 · 판단 분포")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("전체 추천", f"{total}개")
     c2.metric("검증 완료", f"{validated}개")
@@ -55,14 +64,22 @@ def run() -> None:
     c5.metric("관찰", f"{int(decisions.get('관찰', 0))}개")
 
     if run_cards:
-        st.markdown("### 최신 실행 요약")
+        render_section(st, "최신 실행 요약", "시장별 run_id와 완료 시각")
+        st.markdown('<div class="ade-status-grid">', unsafe_allow_html=True)
         for item in run_cards:
-            st.caption(
-                f"{item['시장']} · run_id {item['run_id']} · 완료 {item['완료시각']} · "
-                f"추천 {item['추천수']}개 · 검증 {item['검증수']}개"
+            st.markdown(
+                f"""
+                <div><span>MARKET</span><strong>{item['시장']}</strong></div>
+                <div><span>RUN ID</span><strong>{item['run_id']}</strong></div>
+                <div><span>COMPLETED</span><strong>{item['완료시각']}</strong></div>
+                <div><span>RECOMMENDATIONS</span><strong>{item['추천수']}개</strong></div>
+                <div><span>VALIDATED</span><strong>{item['검증수']}개</strong></div>
+                """,
+                unsafe_allow_html=True,
             )
+        st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown("### 추천군 검증 결과")
+    render_section(st, "추천군 검증 결과", "필터링 후 CSV로 내보낼 수 있습니다")
     decision_filter = st.multiselect(
         "검증결과 필터",
         options=["매수 검토", "관찰", "보류", "제외", "미검증"],
@@ -73,10 +90,11 @@ def run() -> None:
 
     csv = filtered.to_csv(index=False).encode("utf-8-sig")
     st.download_button(
-        "CSV 다운로드",
+        "검증 리포트 CSV 다운로드",
         data=csv,
         file_name="ade_validation_report.csv",
         mime="text/csv",
+        use_container_width=True,
     )
 
 

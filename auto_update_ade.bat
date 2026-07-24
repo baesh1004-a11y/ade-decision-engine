@@ -53,6 +53,30 @@ if errorlevel 1 (
 )
 
 echo.
+echo Checking Python packages...
+call :log "Checking Streamlit installation..."
+py -m streamlit --version >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+    echo Streamlit is missing. Installing it now...
+    call :log "Streamlit missing. Running py -m pip install streamlit..."
+    py -m pip install streamlit >> "%LOG_FILE%" 2>&1
+    if errorlevel 1 (
+        echo.
+        echo ERROR: Streamlit installation failed.
+        echo Run this command manually:
+        echo   py -m pip install streamlit
+        echo See %LOG_FILE% for details.
+        call :log "ERROR: Streamlit installation failed."
+        pause
+        exit /b 1
+    )
+    echo Streamlit installation completed.
+    call :log "Streamlit installation completed."
+) else (
+    echo Streamlit is installed.
+)
+
+echo.
 echo Closing an existing ADE window...
 call :log "Stopping existing ADE window..."
 taskkill /FI "WINDOWTITLE eq ADE*" /T /F >> "%LOG_FILE%" 2>&1
@@ -74,8 +98,7 @@ echo.
 echo ADE launch command completed.
 echo Browser URL: %APP_URL%
 echo.
-echo If ADE did not start, look at the separate window titled ADE.
-echo That window will show the actual Python error.
+echo Keep the separate ADE window open while using the app.
 call :log "Launch command completed."
 
 pause

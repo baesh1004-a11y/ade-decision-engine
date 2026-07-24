@@ -53,28 +53,52 @@ if errorlevel 1 (
 )
 
 echo.
-echo Checking Python packages...
-call :log "Checking Streamlit installation..."
-py -m streamlit --version >> "%LOG_FILE%" 2>&1
+echo Checking Python and ADE dependencies...
+call :log "Checking Python launcher..."
+py --version >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
-    echo Streamlit is missing. Installing it now...
-    call :log "Streamlit missing. Running py -m pip install streamlit..."
-    py -m pip install streamlit >> "%LOG_FILE%" 2>&1
-    if errorlevel 1 (
-        echo.
-        echo ERROR: Streamlit installation failed.
-        echo Run this command manually:
-        echo   py -m pip install streamlit
-        echo See %LOG_FILE% for details.
-        call :log "ERROR: Streamlit installation failed."
-        pause
-        exit /b 1
-    )
-    echo Streamlit installation completed.
-    call :log "Streamlit installation completed."
-) else (
-    echo Streamlit is installed.
+    echo ERROR: Python launcher 'py' was not found.
+    echo Install Python and enable the Python launcher.
+    call :log "ERROR: Python launcher not found."
+    pause
+    exit /b 1
 )
+
+if not exist "requirements.txt" (
+    echo ERROR: requirements.txt was not found.
+    call :log "ERROR: requirements.txt not found."
+    pause
+    exit /b 1
+)
+
+call :log "Installing/updating dependencies from requirements.txt..."
+echo Installing or repairing required packages...
+py -m pip install --upgrade pip >> "%LOG_FILE%" 2>&1
+py -m pip install -r requirements.txt >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+    echo.
+    echo ERROR: Dependency installation failed.
+    echo Run this command manually:
+    echo   py -m pip install -r requirements.txt
+    echo See %LOG_FILE% for details.
+    call :log "ERROR: requirements installation failed."
+    pause
+    exit /b 1
+)
+
+call :log "Verifying core imports..."
+py -c "import streamlit, plotly, pandas, numpy, requests, dotenv; print('Core dependencies OK')" >> "%LOG_FILE%" 2>&1
+if errorlevel 1 (
+    echo.
+    echo ERROR: One or more core packages still cannot be imported.
+    echo See %LOG_FILE% for details.
+    call :log "ERROR: core dependency import verification failed."
+    pause
+    exit /b 1
+)
+
+echo Dependencies are ready.
+call :log "Dependencies ready."
 
 echo.
 echo Closing an existing ADE window...
@@ -88,7 +112,7 @@ call :log "Starting ADE via py run_ade.py..."
 start "ADE" cmd /k "cd /d ""%~dp0"" && py run_ade.py"
 
 echo Waiting for startup...
-timeout /t 10 /nobreak >nul
+timeout /t 12 /nobreak >nul
 
 echo Opening browser...
 call :log "Opening browser: %APP_URL%"

@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 
 import pandas as pd
-
+from dashboard.ade_design_system import apply_premium_theme, render_hero, render_section, render_status_grid
 from dashboard.data import PaperDashboardData
 from dashboard.paper_app import (
     _capital_timeline,
@@ -36,8 +36,9 @@ def _fmt(value: object, digits: int = 2) -> str:
 def _run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="ADE AI Trading Cockpit", page_icon="◈", layout="wide")
+    st.set_page_config(page_title="ADE Portfolio Cockpit", page_icon="◈", layout="wide")
     _inject_style(st)
+    apply_premium_theme(st, page="portfolio")
 
     data = PaperDashboardData(db_path)
     try:
@@ -48,18 +49,22 @@ def _run(db_path: str = "datahub/market.db") -> None:
     finally:
         data.close()
 
-    st.markdown(
-        """
-        <div class="top-hero">
-          <div>
-            <div class="eyebrow">ADE v5 · INTEGRATED DECISION COCKPIT</div>
-            <h1>AI Decision Engine</h1>
-            <p>추천 생성 · 추천 검증 · 보유 판단 · 사용자 승인 모의매도를 한 화면에서 확인합니다.</p>
-          </div>
-          <div class="hero-status"><span class="pulse"></span>PAPER MODE</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    render_hero(
+        st,
+        "Portfolio Cockpit",
+        "보유 포지션, 자본 흐름, 주문 이력과 매도 판단을 하나의 투자 성과 화면으로 통합합니다.",
+        eyebrow="ADE · PORTFOLIO INTELLIGENCE",
+        chip="PAPER MODE",
+    )
+    render_status_grid(
+        st,
+        [
+            ("INVESTED", f"{metrics.invested_amount:,.0f}원"),
+            ("VALUATION", f"{metrics.evaluation_amount:,.0f}원"),
+            ("RETURN", f"{metrics.pnl_rate:+.2f}%"),
+            ("POSITIONS", f"{len(positions)}개"),
+            ("WIN / LOSS", f"{metrics.winners} / {metrics.losers}"),
+        ],
     )
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
@@ -70,8 +75,7 @@ def _run(db_path: str = "datahub/market.db") -> None:
     _metric(k5, "보유종목", f"{len(positions)}개", "Open positions")
     _metric(k6, "승 / 패", f"{metrics.winners} / {metrics.losers}", "Positive / Negative")
 
-    st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
-
+    render_section(st, "포트폴리오 분석", "자본 · 포지션 · 주문 · 검증")
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
         ["◈ Cockpit", "▣ Positions", "⌁ Replay Basis", "◎ Orders", "📑 추천 검증 리포트", "🔻 매도 판단"]
     )
@@ -112,7 +116,7 @@ def _run(db_path: str = "datahub/market.db") -> None:
     with tab6:
         render_sell_panel(st, db_path, positions)
 
-    st.caption("ADE Integrated Dashboard · 매도는 자동 실행하지 않으며 사용자가 직접 승인한 KIS 모의주문만 전송합니다.")
+    st.caption("ADE Portfolio Cockpit · 매도는 자동 실행하지 않으며 사용자가 직접 승인한 KIS 모의주문만 전송합니다.")
 
 
 def _recommendation_report(st: object, db_path: str) -> None:
@@ -239,115 +243,11 @@ def _recommendation_report(st: object, db_path: str) -> None:
     _metric(m3, "평균 Replay 수익", f"{avg_return:+.2f}%", "Top1 historical max return", avg_return)
     _metric(m4, "최악 Replay MDD", f"{worst_mdd:.2f}%", "Top1 historical drawdown", worst_mdd)
 
-    st.markdown("<div class='panel-title'>1. 오늘 추천종목 전체 요약</div>", unsafe_allow_html=True)
     st.dataframe(summary, use_container_width=True, hide_index=True)
-
-    selected = st.selectbox(
-        "상세 검증 종목",
-        list(range(len(rows))),
-        format_func=lambda i: f"#{i + 1} {rows[i].name or rows[i].ticker} · {rows[i].ticker}",
-    )
-    item = rows[selected]
-
-    st.markdown(
-        f"""
-        <div class="replay-card">
-          <div>
-            <div class="eyebrow">RECOMMENDATION #{selected + 1}</div>
-            <h2>{item.name or item.ticker} <small>{item.market.upper()}:{item.ticker}</small></h2>
-          </div>
-          <div class="replay-score">{_fmt(item.final_similarity)}%</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    s1, s2, s3, s4, s5, s6 = st.columns(6)
-    _metric(s1, "Decision", str(item.decision), "ADE decision")
-    _metric(s2, "Final", f"{_fmt(item.final_similarity)}%", "Combined similarity")
-    _metric(s3, "Weekly", f"{_fmt(item.weekly_similarity)}%", "Weekly shape")
-    _metric(s4, "STO", f"{_fmt(item.sto_similarity)}%", "3-layer structure")
-    _metric(s5, "Top1 Max Return", f"{_fmt(item.matched_max_return)}%", "Historical outcome")
-    _metric(s6, "Top1 MDD", f"{_fmt(item.matched_max_drawdown)}%", "Historical risk")
-
-    st.markdown("<div class='panel-title'>2. 추천 사유</div>", unsafe_allow_html=True)
-    if item.reasons:
-        for reason in item.reasons:
-            st.markdown(f"- {reason}")
-    else:
-        st.info("저장된 추천 사유가 없습니다.")
-
-    st.markdown("<div class='panel-title'>3. Top5 Replay 비교</div>", unsafe_allow_html=True)
-    match_table = pd.DataFrame(
-        [
-            {
-                "rank": f"Top {idx}",
-                "event_id": match.event_id,
-                "market": match.market.upper(),
-                "ticker": match.ticker,
-                "name": match.name,
-                "final": match.final_similarity,
-                "weekly": match.weekly_similarity,
-                "sto": match.sto_similarity,
-                "max_return": match.max_return,
-                "mdd": match.max_drawdown,
-                "same_as_now_week": match.equivalent_week_index,
-                "future_weeks": match.future_weeks_available,
-            }
-            for idx, match in enumerate(item.replay_matches[:5], start=1)
-        ]
-    )
-    st.dataframe(match_table, use_container_width=True, hide_index=True)
-
-    if not item.replay_matches:
-        st.warning("표시할 Replay 매치가 없습니다.")
-        return
-
-    st.markdown("<div class='panel-title'>4. 현재 차트 vs Replay 차트</div>", unsafe_allow_html=True)
-    match_idx = st.selectbox(
-        "차트로 확인할 Replay",
-        list(range(min(5, len(item.replay_matches)))),
-        format_func=lambda i: f"Top {i + 1} · {item.replay_matches[i].name or item.replay_matches[i].ticker} · {item.replay_matches[i].event_id}",
-    )
-
-    col_a, col_b = st.columns(2)
-    generate_selected = col_a.button("선택 Replay 차트 생성")
-    generate_all = col_b.button("Top5 차트 모두 생성")
-
-    chart_key = f"{item.market}:{item.ticker}:{selected}"
-    charts = st.session_state.setdefault("dashboard_report_charts", {})
-
-    if generate_selected or generate_all:
-        viewer = RecommendationChartViewer(db_path=db_path, output_dir="output/dashboard_report_charts")
-        try:
-            targets = range(min(5, len(item.replay_matches))) if generate_all else [match_idx]
-            for idx in targets:
-                chart_path = viewer.render_replay_match(item, item.replay_matches[idx], selected + 1, idx + 1)
-                if chart_path:
-                    charts[f"{chart_key}:{idx}"] = str(chart_path)
-        finally:
-            viewer.close()
-
-    selected_path = charts.get(f"{chart_key}:{match_idx}")
-    if selected_path and Path(selected_path).exists():
-        st.image(selected_path, use_container_width=True)
-    else:
-        st.info("차트 생성 버튼을 누르면 현재 6개월 주봉과 Replay 이후 실제 흐름이 표시됩니다.")
-
-    with st.expander("Top5 Replay 차트 전체 보기"):
-        shown = False
-        for idx, match in enumerate(item.replay_matches[:5]):
-            path = charts.get(f"{chart_key}:{idx}")
-            if path and Path(path).exists():
-                st.markdown(f"**Top {idx + 1} · {match.name or match.ticker} · {match.event_id}**")
-                st.image(path, use_container_width=True)
-                shown = True
-        if not shown:
-            st.caption("Top5 차트 모두 생성 버튼을 누르면 이 영역에 전체 비교차트가 표시됩니다.")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ADE Integrated Dashboard")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="datahub/market.db")
     args = parser.parse_args()
     _run(args.db)

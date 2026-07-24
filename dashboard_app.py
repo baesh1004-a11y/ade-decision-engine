@@ -21,6 +21,7 @@ PAGES = {
     "3. 주문 실행": [
         st.Page("pages/9_Trading_Desk.py", title="한국 주문", icon="🇰🇷"),
         st.Page("pages/12_US_Trading_Desk.py", title="미국 주문", icon="🇺🇸"),
+        st.Page("pages/15_Scheduled_Orders.py", title="예약주문", icon="🗓️"),
     ],
     "4. 투자 성과": [
         st.Page("pages/1_ADE_Cockpit.py", title="포트폴리오", icon="💼"),
@@ -38,6 +39,7 @@ MOBILE_QUICK_PAGES = {
     "홈": st.Page("ade_home.py", title="Command Center", icon="🏠", default=True),
     "워크벤치": st.Page("pages/14_Recommendation_Workbench.py", title="투자 워크벤치", icon="📊"),
     "주문": st.Page("pages/9_Trading_Desk.py", title="주문 실행", icon="💳"),
+    "예약": st.Page("pages/15_Scheduled_Orders.py", title="예약주문", icon="🗓️"),
     "포트폴리오": st.Page("pages/1_ADE_Cockpit.py", title="포트폴리오", icon="💼"),
 }
 

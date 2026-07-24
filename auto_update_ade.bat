@@ -1,134 +1,102 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
-
 cd /d "%~dp0"
 
 set "BRANCH=main"
+set "APP_URL=http://127.0.0.1:8501"
 set "LOG_DIR=logs"
 set "LOG_FILE=%LOG_DIR%\auto_update_ade.log"
-set "APP_URL=http://127.0.0.1:8501"
+set "STAMP_FILE=runtime\requirements.sha"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
+if not exist "runtime" mkdir "runtime"
 
-call :log "Launching ADE updater..."
 echo.
-echo ================================
-echo ADE update and launch
-echo ================================
+echo ========================================
+echo ADE - One Click Update and Run
+echo ========================================
 echo.
+call :log "Launcher started."
 
+echo [1/4] Checking GitHub...
 git fetch origin %BRANCH% >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
-    call :log "WARNING: git fetch failed. Continuing with local files."
-    echo WARNING: GitHub update check failed.
-    echo Starting the local ADE version instead.
+    echo WARNING: GitHub check failed. Starting local version.
+    call :log "WARNING: git fetch failed."
 ) else (
     for /f %%A in ('git rev-parse HEAD') do set "LOCAL_SHA=%%A"
     for /f %%A in ('git rev-parse origin/%BRANCH%') do set "REMOTE_SHA=%%A"
 
     if not "!LOCAL_SHA!"=="!REMOTE_SHA!" (
-        echo New GitHub update found.
-        call :log "Update found: !LOCAL_SHA! -> !REMOTE_SHA!"
-
         set "HAS_CHANGES="
         for /f "delims=" %%A in ('git status --porcelain') do set "HAS_CHANGES=1"
 
         if defined HAS_CHANGES (
-            echo WARNING: Local changes exist, so git pull was skipped.
-            call :log "WARNING: Local changes detected. Pull skipped."
+            echo WARNING: Local changes exist. GitHub update skipped.
+            call :log "WARNING: local changes found; update skipped."
         ) else (
-            git pull --ff-only origin %BRANCH% >> "%LOG_FILE%" 2>&1
+            echo Applying latest GitHub version...
+            git reset --hard origin/%BRANCH% >> "%LOG_FILE%" 2>&1
             if errorlevel 1 (
-                echo WARNING: git pull failed. Starting the local version.
-                call :log "WARNING: git pull failed."
+                echo WARNING: GitHub update failed. Starting local version.
+                call :log "WARNING: git reset failed."
             ) else (
-                echo GitHub update completed.
-                call :log "GitHub update completed."
+                echo GitHub update complete.
+                call :log "GitHub update complete."
             )
         )
     ) else (
-        echo GitHub version is already current.
+        echo GitHub version is current.
         call :log "No update."
     )
 )
 
 echo.
-echo Checking Python and ADE dependencies...
-call :log "Checking Python launcher..."
-py --version >> "%LOG_FILE%" 2>&1
-if errorlevel 1 (
-    echo ERROR: Python launcher 'py' was not found.
-    echo Install Python and enable the Python launcher.
-    call :log "ERROR: Python launcher not found."
-    pause
-    exit /b 1
-)
+echo [2/4] Checking Python environment...
+for /f %%A in ('certutil -hashfile requirements.txt SHA256 ^| findstr /R /V "hash CertUtil"') do set "REQ_SHA=%%A"
+set "SAVED_SHA="
+if exist "%STAMP_FILE%" set /p SAVED_SHA=<"%STAMP_FILE%"
 
-if not exist "requirements.txt" (
-    echo ERROR: requirements.txt was not found.
-    call :log "ERROR: requirements.txt not found."
-    pause
-    exit /b 1
-)
+py -c "import streamlit, plotly, pandas, numpy" >> "%LOG_FILE%" 2>&1
+set "IMPORT_ERROR=!ERRORLEVEL!"
 
-call :log "Installing/updating dependencies from requirements.txt..."
-echo Installing or repairing required packages...
-py -m pip install --upgrade pip >> "%LOG_FILE%" 2>&1
-py -m pip install -r requirements.txt >> "%LOG_FILE%" 2>&1
-if errorlevel 1 (
-    echo.
-    echo ERROR: Dependency installation failed.
-    echo Run this command manually:
-    echo   py -m pip install -r requirements.txt
-    echo See %LOG_FILE% for details.
-    call :log "ERROR: requirements installation failed."
-    pause
-    exit /b 1
-)
+if not "!REQ_SHA!"=="!SAVED_SHA!" set "NEED_INSTALL=1"
+if not "!IMPORT_ERROR!"=="0" set "NEED_INSTALL=1"
 
-call :log "Verifying core imports..."
-py -c "import streamlit, plotly, pandas, numpy, requests, dotenv; print('Core dependencies OK')" >> "%LOG_FILE%" 2>&1
-if errorlevel 1 (
-    echo.
-    echo ERROR: One or more core packages still cannot be imported.
-    echo See %LOG_FILE% for details.
-    call :log "ERROR: core dependency import verification failed."
-    pause
-    exit /b 1
+if defined NEED_INSTALL (
+    echo Installing or updating required packages...
+    py -m pip install --disable-pip-version-check -r requirements.txt >> "%LOG_FILE%" 2>&1
+    if errorlevel 1 (
+        echo ERROR: Package installation failed.
+        echo See: %LOG_FILE%
+        call :log "ERROR: requirements install failed."
+        pause
+        exit /b 1
+    )
+    >"%STAMP_FILE%" echo !REQ_SHA!
+) else (
+    echo Python packages are already ready.
 )
-
-echo Dependencies are ready.
-call :log "Dependencies ready."
 
 echo.
-echo Closing an existing ADE window...
-call :log "Stopping existing ADE window..."
+echo [3/4] Starting ADE...
 taskkill /FI "WINDOWTITLE eq ADE*" /T /F >> "%LOG_FILE%" 2>&1
-
 timeout /t 1 /nobreak >nul
-
-echo Starting ADE...
-call :log "Starting ADE via py run_ade.py..."
 start "ADE" cmd /k "cd /d ""%~dp0"" && py run_ade.py"
 
-echo Waiting for startup...
-timeout /t 12 /nobreak >nul
-
-echo Opening browser...
-call :log "Opening browser: %APP_URL%"
+echo.
+echo [4/4] Opening browser...
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$url='%APP_URL%'; for($i=0; $i -lt 20; $i++){ try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 1; if($r.StatusCode -ge 200){ exit 0 } } catch {}; Start-Sleep -Milliseconds 500 }; exit 1" >> "%LOG_FILE%" 2>&1
 start "" "%APP_URL%"
+call :log "ADE launch command completed."
 
 echo.
-echo ADE launch command completed.
-echo Browser URL: %APP_URL%
-echo.
-echo Keep the separate ADE window open while using the app.
-call :log "Launch command completed."
-
-pause
+echo ADE launch completed: %APP_URL%
+echo No manual git pull is needed next time.
+timeout /t 2 /nobreak >nul
 exit /b 0
 
 :log
 for /f "tokens=1-3 delims=/:. " %%a in ("%date% %time%") do set "STAMP=%date% %time%"
-echo [%STAMP%] %~1>> "%LOG_FILE%"
+echo [!STAMP!] %~1>> "%LOG_FILE%"
 exit /b 0

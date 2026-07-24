@@ -15,6 +15,7 @@ if not exist "runtime" mkdir "runtime"
 2>nul mkdir "%LOCK_DIR%"
 if errorlevel 1 (
     echo ADE update is already running.
+    echo Delete runtime\auto_update_ade.lock if no updater is actually running.
     pause
     exit /b 0
 )
@@ -24,7 +25,7 @@ echo Checking GitHub for updates...
 
 git fetch origin %BRANCH% >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
-    call :log "ERROR: git fetch failed. Continuing with local copy."
+    call :log "WARNING: git fetch failed. Continuing with local copy."
     echo WARNING: git fetch failed. Starting local ADE anyway.
 ) else (
     for /f %%A in ('git rev-parse HEAD') do set "LOCAL_SHA=%%A"
@@ -54,35 +55,29 @@ if errorlevel 1 (
 )
 
 call :log "Stopping existing ADE-related Python processes..."
-echo Restarting ADE...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process | Where-Object { ($_.Name -match '^python(w)?\.exe$' -or $_.Name -eq 'py.exe') -and $_.CommandLine -match 'run_ade\.py' }; foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }" >> "%LOG_FILE%" 2>&1
+echo Stopping existing ADE process...
 
+powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe' OR Name='py.exe'\" | Where-Object { $_.CommandLine -like '*run_ade.py*' } | ForEach-Object { Invoke-CimMethod -InputObject $_ -MethodName Terminate | Out-Null }; exit 0" >> "%LOG_FILE%" 2>&1
+
+call :log "Process stop command completed."
 timeout /t 2 /nobreak >nul
 
 call :log "Starting ADE..."
+echo Starting ADE...
 start "ADE" cmd /k "cd /d ""%~dp0"" && py run_ade.py"
 
-call :log "Waiting for ADE web server..."
-echo Waiting for ADE web server...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$url='%APP_URL%'; for($i=0; $i -lt 45; $i++){ try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2; if($r.StatusCode -ge 200){ exit 0 } } catch {}; Start-Sleep -Seconds 1 }; exit 1" >> "%LOG_FILE%" 2>&1
-
-if errorlevel 1 (
-    call :log "WARNING: ADE web server did not respond within 45 seconds. Opening browser anyway."
-    echo WARNING: ADE did not respond within 45 seconds.
-) else (
-    call :log "ADE web server is ready."
-    echo ADE web server is ready.
-)
+call :log "Waiting briefly before opening browser..."
+echo Opening browser in 8 seconds...
+timeout /t 8 /nobreak >nul
 
 call :log "Opening browser: %APP_URL%"
-echo Opening browser...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '%APP_URL%'" >> "%LOG_FILE%" 2>&1
-if errorlevel 1 start "" "%APP_URL%"
+start "" "%APP_URL%"
 
 call :log "ADE launch sequence completed."
 echo ADE launch sequence completed.
-echo Update log: %LOG_FILE%
+echo URL: %APP_URL%
 echo Keep the ADE window open while using the app.
+echo Update log: %LOG_FILE%
 
 timeout /t 5 /nobreak >nul
 goto :cleanup_ok

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import streamlit as st
 
+from dashboard.design_system import apply_design_system
+
 
 PAGES = {
     "홈": [
@@ -9,14 +11,14 @@ PAGES = {
     ],
     "1. 오늘의 투자": [
         st.Page("pages/14_Recommendation_Workbench.py", title="투자 워크벤치", icon="📊"),
+        st.Page("pages/7_Daily_Center.py", title="한국 추천", icon="🇰🇷"),
+        st.Page("pages/10_US_Daily_Center.py", title="미국 추천", icon="🇺🇸"),
     ],
-    "2. 운영 관리": [
-        st.Page("pages/7_Daily_Center.py", title="한국 추천 배치", icon="🇰🇷"),
-        st.Page("pages/10_US_Daily_Center.py", title="미국 추천 배치", icon="🇺🇸"),
+    "2. 분석 · 검증": [
         st.Page("pages/13_Surge_Pattern_Lab.py", title="종합 검증 리포트", icon="🔍"),
-        st.Page("pages/5_JP_Radar_Live.py", title="AI 레이더", icon="🎯"),
         st.Page("pages/2_Meta_Score.py", title="한국 검증 이력", icon="✅"),
         st.Page("pages/11_US_Meta_Score.py", title="미국 검증 이력", icon="✅"),
+        st.Page("pages/5_JP_Radar_Live.py", title="AI 레이더", icon="🎯"),
     ],
     "3. 주문 실행": [
         st.Page("pages/9_Trading_Desk.py", title="한국 주문", icon="🇰🇷"),
@@ -45,7 +47,13 @@ MOBILE_QUICK_PAGES = {
 
 
 def main() -> None:
-    navigation = st.navigation(PAGES, position="sidebar", expanded=True)
+    apply_design_system()
+    mobile_mode = st.query_params.get("view") == "mobile"
+    navigation = st.navigation(
+        MOBILE_QUICK_PAGES if mobile_mode else PAGES,
+        position="top" if mobile_mode else "sidebar",
+        expanded=not mobile_mode,
+    )
     navigation.run()
 
 

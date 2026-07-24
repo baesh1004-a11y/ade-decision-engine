@@ -7,7 +7,7 @@ set "BRANCH=main"
 set "LOG_DIR=logs"
 set "LOG_FILE=%LOG_DIR%\auto_update_ade.log"
 set "LOCK_DIR=runtime\auto_update_ade.lock"
-set "FORCE_START=%~1"
+set "APP_URL=http://localhost:8501"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "runtime" mkdir "runtime"
@@ -64,6 +64,22 @@ timeout /t 2 /nobreak >nul
 
 call :log "Starting ADE..."
 start "ADE" /min cmd /c "cd /d ""%~dp0"" && py run_ade.py >> ""%LOG_DIR%\ade_runtime.log"" 2>&1"
+
+call :log "Waiting for ADE web server..."
+echo Waiting for ADE web server...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$url='%APP_URL%'; $ready=$false; for($i=0; $i -lt 30; $i++){ try { $response=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2; if($response.StatusCode -ge 200 -and $response.StatusCode -lt 500){ $ready=$true; break } } catch {}; Start-Sleep -Seconds 1 }; if($ready){ exit 0 } else { exit 1 }" >> "%LOG_FILE%" 2>&1
+
+if errorlevel 1 (
+    call :log "WARNING: ADE web server did not respond within 30 seconds. Opening browser anyway."
+    echo WARNING: ADE did not respond within 30 seconds.
+) else (
+    call :log "ADE web server is ready."
+    echo ADE web server is ready.
+)
+
+call :log "Opening browser: %APP_URL%"
+echo Opening browser...
+start "" "%APP_URL%"
 
 call :log "ADE started successfully."
 echo ADE started successfully.

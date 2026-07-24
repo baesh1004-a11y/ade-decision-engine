@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from dashboard.ade_design_system import apply_premium_theme, render_hero, render_section
+
 
 def run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
@@ -12,8 +14,14 @@ def run(db_path: str = "datahub/market.db") -> None:
     market_code = "us" if "us_market" in db_path else "kr"
     market_name = "미국" if market_code == "us" else "한국"
     st.set_page_config(page_title=f"ADE {market_name} 검증 이력", page_icon="🧾", layout="wide")
-    st.title(f"{market_name} 검증 이력")
-    st.caption("추천 실행별 검증 건수와 판단 분포를 시간순으로 확인합니다.")
+    apply_premium_theme(st, page="validation-history")
+    render_hero(
+        st,
+        f"{market_name} 검증 이력",
+        "추천 실행별 검증 건수와 판단 분포를 시간순으로 추적합니다.",
+        eyebrow="ADE · VALIDATION HISTORY",
+        chip=f"{market_name} MARKET",
+    )
 
     path = Path(db_path)
     if not path.exists():
@@ -33,25 +41,40 @@ def run(db_path: str = "datahub/market.db") -> None:
         total_recommendations = int(history["추천수"].sum())
         total_validations = int(history["검증수"].sum())
 
+        render_section(st, "누적 현황", "완료 실행과 검증 추이")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("완료 실행", f"{total_runs}회")
         c2.metric("검증 실행", f"{validated_runs}회")
         c3.metric("누적 추천", f"{total_recommendations}개")
         c4.metric("누적 검증", f"{total_validations}개")
 
-        st.markdown("### 실행별 검증 현황")
-        st.dataframe(history, width="stretch", hide_index=True, height=620)
+        render_section(st, "실행별 검증 현황", "최근 100개 완료 실행")
+        st.dataframe(history, width="stretch", hide_index=True, height=560)
 
+        render_section(st, "선택 실행 상세", "run_id 기준 종목별 검증 결과")
         selected_run = st.selectbox(
             "상세 실행 선택",
             history["run_id"].tolist(),
             format_func=lambda run_id: _run_label(history, run_id),
+            label_visibility="collapsed",
+        )
+        selected_row = history.loc[history["run_id"] == selected_run].iloc[0]
+        st.markdown(
+            f"""
+            <div class="ade-status-grid">
+              <div><span>RUN ID</span><strong>{selected_run}</strong></div>
+              <div><span>COMPLETED</span><strong>{selected_row['완료시각']}</strong></div>
+              <div><span>RECOMMENDATIONS</span><strong>{selected_row['추천수']}개</strong></div>
+              <div><span>VALIDATED</span><strong>{selected_row['검증수']}개</strong></div>
+              <div><span>VALIDATION RATE</span><strong>{selected_row['검증률']}%</strong></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
         details = _load_details(conn, selected_run, market_code)
         if details.empty:
             st.info("선택한 실행에는 검증 결과가 없습니다.")
         else:
-            st.markdown("### 선택 실행 상세")
             st.dataframe(details, width="stretch", hide_index=True, height=480)
     finally:
         conn.close()

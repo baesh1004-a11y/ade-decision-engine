@@ -7,7 +7,7 @@ set "BRANCH=main"
 set "LOG_DIR=logs"
 set "LOG_FILE=%LOG_DIR%\auto_update_ade.log"
 set "LOCK_DIR=runtime\auto_update_ade.lock"
-set "APP_URL=http://localhost:8501"
+set "APP_URL=http://127.0.0.1:8501"
 
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if not exist "runtime" mkdir "runtime"
@@ -24,54 +24,51 @@ echo Checking GitHub for updates...
 
 git fetch origin %BRANCH% >> "%LOG_FILE%" 2>&1
 if errorlevel 1 (
-    call :log "ERROR: git fetch failed."
-    echo ERROR: git fetch failed.
-    echo See %LOG_FILE%
-    goto :cleanup_error
-)
-
-for /f %%A in ('git rev-parse HEAD') do set "LOCAL_SHA=%%A"
-for /f %%A in ('git rev-parse origin/%BRANCH%') do set "REMOTE_SHA=%%A"
-
-if not "%LOCAL_SHA%"=="%REMOTE_SHA%" (
-    call :log "Update found: %LOCAL_SHA% -> %REMOTE_SHA%"
-    echo Update found. Pulling latest main...
-
-    for /f "delims=" %%A in ('git status --porcelain') do (
-        call :log "ERROR: Local changes detected. Update cancelled to protect local work."
-        echo ERROR: Local changes detected. Update cancelled.
-        echo Commit or stash local changes first.
-        goto :cleanup_error
-    )
-
-    git pull --ff-only origin %BRANCH% >> "%LOG_FILE%" 2>&1
-    if errorlevel 1 (
-        call :log "ERROR: git pull failed."
-        echo ERROR: git pull failed.
-        echo See %LOG_FILE%
-        goto :cleanup_error
-    )
+    call :log "ERROR: git fetch failed. Continuing with local copy."
+    echo WARNING: git fetch failed. Starting local ADE anyway.
 ) else (
-    call :log "No update."
-    echo Already up to date.
+    for /f %%A in ('git rev-parse HEAD') do set "LOCAL_SHA=%%A"
+    for /f %%A in ('git rev-parse origin/%BRANCH%') do set "REMOTE_SHA=%%A"
+
+    if not "!LOCAL_SHA!"=="!REMOTE_SHA!" (
+        call :log "Update found: !LOCAL_SHA! -> !REMOTE_SHA!"
+        echo Update found. Pulling latest main...
+
+        set "HAS_CHANGES="
+        for /f "delims=" %%A in ('git status --porcelain') do set "HAS_CHANGES=1"
+
+        if defined HAS_CHANGES (
+            call :log "WARNING: Local changes detected. Skipping git pull and starting local ADE."
+            echo WARNING: Local changes detected. Update skipped.
+        ) else (
+            git pull --ff-only origin %BRANCH% >> "%LOG_FILE%" 2>&1
+            if errorlevel 1 (
+                call :log "WARNING: git pull failed. Starting local ADE anyway."
+                echo WARNING: git pull failed. Starting local ADE anyway.
+            )
+        )
+    ) else (
+        call :log "No update."
+        echo Already up to date.
+    )
 )
 
-call :log "Stopping existing run_ade.py process..."
+call :log "Stopping existing ADE-related Python processes..."
 echo Restarting ADE...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process | Where-Object { $_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -match '(^|[\\/ ])run_ade\.py([\" ]|$)' }; foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }" >> "%LOG_FILE%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$procs = Get-CimInstance Win32_Process | Where-Object { ($_.Name -match '^python(w)?\.exe$' -or $_.Name -eq 'py.exe') -and $_.CommandLine -match 'run_ade\.py' }; foreach ($p in $procs) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }" >> "%LOG_FILE%" 2>&1
 
 timeout /t 2 /nobreak >nul
 
 call :log "Starting ADE..."
-start "ADE" /min cmd /c "cd /d ""%~dp0"" && py run_ade.py >> ""%LOG_DIR%\ade_runtime.log"" 2>&1"
+start "ADE" cmd /k "cd /d ""%~dp0"" && py run_ade.py"
 
 call :log "Waiting for ADE web server..."
 echo Waiting for ADE web server...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$url='%APP_URL%'; $ready=$false; for($i=0; $i -lt 30; $i++){ try { $response=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2; if($response.StatusCode -ge 200 -and $response.StatusCode -lt 500){ $ready=$true; break } } catch {}; Start-Sleep -Seconds 1 }; if($ready){ exit 0 } else { exit 1 }" >> "%LOG_FILE%" 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$url='%APP_URL%'; for($i=0; $i -lt 45; $i++){ try { $r=Invoke-WebRequest -Uri $url -UseBasicParsing -TimeoutSec 2; if($r.StatusCode -ge 200){ exit 0 } } catch {}; Start-Sleep -Seconds 1 }; exit 1" >> "%LOG_FILE%" 2>&1
 
 if errorlevel 1 (
-    call :log "WARNING: ADE web server did not respond within 30 seconds. Opening browser anyway."
-    echo WARNING: ADE did not respond within 30 seconds.
+    call :log "WARNING: ADE web server did not respond within 45 seconds. Opening browser anyway."
+    echo WARNING: ADE did not respond within 45 seconds.
 ) else (
     call :log "ADE web server is ready."
     echo ADE web server is ready.
@@ -79,13 +76,15 @@ if errorlevel 1 (
 
 call :log "Opening browser: %APP_URL%"
 echo Opening browser...
-start "" "%APP_URL%"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process '%APP_URL%'" >> "%LOG_FILE%" 2>&1
+if errorlevel 1 start "" "%APP_URL%"
 
-call :log "ADE started successfully."
-echo ADE started successfully.
-echo Runtime log: %LOG_DIR%\ade_runtime.log
+call :log "ADE launch sequence completed."
+echo ADE launch sequence completed.
+echo Update log: %LOG_FILE%
+echo Keep the ADE window open while using the app.
 
-timeout /t 3 /nobreak >nul
+timeout /t 5 /nobreak >nul
 goto :cleanup_ok
 
 :log
@@ -96,8 +95,3 @@ exit /b 0
 :cleanup_ok
 rmdir "%LOCK_DIR%" 2>nul
 exit /b 0
-
-:cleanup_error
-rmdir "%LOCK_DIR%" 2>nul
-pause
-exit /b 1

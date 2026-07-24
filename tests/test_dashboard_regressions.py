@@ -244,3 +244,23 @@ def test_visual_system_theme_and_chart_conventions() -> None:
     assert 'decreasing_line_color="#2563EB"' in charts
     assert "height: int = 520" in charts
     assert "max-width:1480px" in kr
+
+
+def test_workflow_navigation_targets_real_purpose_built_pages() -> None:
+    root = Path(__file__).resolve().parents[1]
+    navigation = (root / "dashboard_app.py").read_text(encoding="utf-8")
+    assert 'pages/15_Validation_Report.py' in navigation
+    assert 'pages/16_KR_Validation_History.py' in navigation
+    assert 'pages/17_US_Validation_History.py' in navigation
+    assert 'MOBILE_PAGES if mobile else PAGES' in navigation
+    assert 'position="top" if mobile else "sidebar"' in navigation
+
+
+def test_validation_report_and_history_pages_are_not_aliases() -> None:
+    root = Path(__file__).resolve().parents[1]
+    report = (root / "dashboard" / "validation_report_app.py").read_text(encoding="utf-8")
+    history = (root / "dashboard" / "validation_history_app.py").read_text(encoding="utf-8")
+    assert "종합 검증 리포트" in report
+    assert "한국·미국 최신 완료 추천 실행" in report
+    assert "검증 이력" in history
+    assert "실행별 검증 현황" in history

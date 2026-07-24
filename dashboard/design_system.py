@@ -53,9 +53,9 @@ BASE_CSS = """
 .ade-shell p{margin:0;color:var(--ade-muted);font-size:14px}
 .ade-shell-meta{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
 .ade-pill,.ade-badge{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:8px 11px;font-size:12px;font-weight:820;border:1px solid var(--ade-line);background:rgba(255,255,255,.86);color:#34536e}
-.ade-badge.good{color:var(--ade-green);background:#eefaf5;border-color:#cdeadd}
-.ade-badge.warn{color:var(--ade-amber);background:#fff7e8;border-color:#f0ddb4}
-.ade-badge.bad{color:var(--ade-red);background:#fff0f0;border-color:#efcdcd}
+.ade-badge.good,.ade-badge.success{color:var(--ade-green);background:#eefaf5;border-color:#cdeadd}
+.ade-badge.warn,.ade-badge.warning{color:var(--ade-amber);background:#fff7e8;border-color:#f0ddb4}
+.ade-badge.bad,.ade-badge.error{color:var(--ade-red);background:#fff0f0;border-color:#efcdcd}
 .ade-badge.info{color:var(--ade-blue-deep);background:#edf5ff;border-color:#cfe2f7}
 .ade-section{display:flex;justify-content:space-between;align-items:center;gap:18px;margin:21px 0 10px}
 .ade-section h2{font-size:20px;margin:0;letter-spacing:-.03em}
@@ -88,6 +88,11 @@ def apply_design_system() -> None:
     st.markdown(BASE_CSS, unsafe_allow_html=True)
 
 
+def apply_global_style(streamlit_module=None) -> None:
+    target = streamlit_module or st
+    target.markdown(BASE_CSS, unsafe_allow_html=True)
+
+
 def page_header(title: str, subtitle: str, eyebrow: str = "ADE · INVESTMENT OPERATIONS", badges: Iterable[StatusBadge] = ()) -> None:
     badge_html = "".join(
         f'<span class="ade-badge {html.escape(item.tone)}">{html.escape(item.label)}</span>'
@@ -108,11 +113,42 @@ def page_header(title: str, subtitle: str, eyebrow: str = "ADE · INVESTMENT OPE
     )
 
 
+def page_hero(streamlit_module, title: str, subtitle: str, eyebrow: str = "ADE · INVESTMENT OPERATIONS", badge: str | None = None) -> None:
+    target = streamlit_module or st
+    meta = f'<span class="ade-pill">{html.escape(badge)}</span>' if badge else f'<span class="ade-pill">{datetime.now():%Y-%m-%d %H:%M}</span>'
+    target.markdown(
+        f"""
+        <div class="ade-shell">
+          <div>
+            <div class="ade-eyebrow">{html.escape(eyebrow)}</div>
+            <h1>{html.escape(title)}</h1>
+            <p>{html.escape(subtitle)}</p>
+          </div>
+          <div class="ade-shell-meta">{meta}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def section(title: str, caption: str = "") -> None:
     st.markdown(
         f'<div class="ade-section"><h2>{html.escape(title)}</h2><span>{html.escape(caption)}</span></div>',
         unsafe_allow_html=True,
     )
+
+
+def section_header(streamlit_module, title: str, caption: str = "") -> None:
+    target = streamlit_module or st
+    target.markdown(
+        f'<div class="ade-section"><h2>{html.escape(title)}</h2><span>{html.escape(caption)}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def status_badge(label: str, tone: str = "neutral") -> str:
+    normalized = {"success": "success", "warning": "warning", "error": "error", "danger": "error"}.get(tone, tone)
+    return f'<span class="ade-badge {html.escape(normalized)}">{html.escape(label)}</span>'
 
 
 def kpi_card(label: str, value: str, note: str = "") -> str:

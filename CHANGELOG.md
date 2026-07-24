@@ -106,6 +106,7 @@
 - Portfolio Risk & Exposure Engine v1 specification.
 - Decision & Position Sizing Engine v1 specification.
 - Order Validation & Routing Engine v2 specification.
+- Execution Reconciliation & Recovery Engine v2 specification.
 
 ### Updated
 
@@ -126,6 +127,8 @@
 - Extended the Order boundary with approval TTL, snapshot consistency, latest buying-power and sellable-quantity revalidation, quote freshness, price collars, tick normalization, route policy, and broker circuit breakers.
 - Added atomic submission reservations, order fingerprints, idempotency keys, unresolved cash/quantity reservations, and concurrent duplicate protection.
 - Defined `VERIFY_REQUIRED` for ambiguous broker responses and prohibited automatic resubmission until broker-side reconciliation confirms the result.
+- Added broker-evidence reconciliation for uncertain submissions, partial fills, cancellations, rejections, and missed execution events.
+- Added broker execution ID deduplication, reservation recovery, cash/position reconciliation, append-only recovery actions, and manual-review escalation.
 
 ### Notes
 
@@ -146,16 +149,21 @@
 - Order validation may reduce or reject execution but must never increase Decision or Risk-approved quantity, amount, or aggressiveness.
 - `LIVE_BLOCKED` must result in zero live broker submission calls.
 - Ambiguous transport failures are isolated as `VERIFY_REQUIRED`; they are not treated as confirmed failures and are not automatically retried.
+- The same broker execution ID may update positions and accounting only once.
+- Reconciliation recovery appends evidence and corrective events; it does not overwrite original execution history.
+- Internal fills greater than broker-confirmed fills require manual review rather than automatic correction.
 
 ### Next
 
 - Implement the minimal Decision & Position Sizing models and pure sizing functions.
 - Implement OrderIntent, contract/pre-trade/price validators, and the DRY_RUN path.
 - Implement atomic idempotency reservation and unresolved order reservations.
-- Design Execution Reconciliation & Recovery Engine v2.
+- Implement broker execution ID deduplication and single-order `VERIFY_REQUIRED` reconciliation.
+- Implement partial-fill reconciliation and reservation recalculation.
+- Design Portfolio Rebalancing & Exit Orchestration Engine v1.
 - Implement `db/migrations/001_create_run_state.sql`.
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.
 - Wrap the existing analysis pipeline with an Orchestrator adapter.
-- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision → Order smoke test.
+- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision → Order → Reconciliation smoke test.
 - Generate minimal Report Engine JSON fixture output.

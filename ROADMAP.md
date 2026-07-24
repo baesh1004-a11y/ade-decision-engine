@@ -45,11 +45,12 @@
 | 22 | Portfolio Risk & Exposure Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 종목·섹터·상관 군집·현금·총 익스포저 한도 평가 |
 | 23 | Decision & Position Sizing Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 최종 행동, 목표 금액·수량, 하루 1종목 선정, 보호 규칙 |
 | 24 | Order Validation & Routing Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | 주문 직전 재검증, 가격 보호, 멱등성, 브로커 라우팅, 불확실 응답 격리 |
+| 25 | Execution Reconciliation & Recovery Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | VERIFY_REQUIRED, 부분체결, 중복체결, 응답 유실, 원장 불일치 대사·복구 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 현재 계획된 핵심 판단·주문·운영·감사 계층 설계 완료
+[██████████] 현재 계획된 핵심 판단·주문·체결복구·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -62,6 +63,7 @@
 6. Decision & Position Sizing 최소 코드 구현
 7. OrderIntent와 순수 검증 함수 최소 구현
 8. idempotency reservation과 DRY_RUN 경로 구현
+9. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
 
 ## 다음 작업
 
@@ -73,8 +75,10 @@
 6. `decision/models.py`, `decision/sizing.py`, `decision/engine.py` 최소 구현
 7. `order/models.py`, `order/contract.py`, `order/pretrade.py`, `order/pricing.py` 최소 구현
 8. SQLite idempotency reservation과 `DryRunBrokerAdapter` 구현
-9. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-10. Report Engine용 최소 JSON fixture 생성
+9. `execution/reconciliation/` 모델·중복 제거·resolver 최소 구현
+10. VERIFY_REQUIRED → broker evidence → 상태 확정 fixture 테스트
+11. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+12. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -97,3 +101,7 @@
 - 동일 주문 의도는 멱등성 키 기준으로 최대 한 번만 브로커에 전송한다.
 - 불확실 브로커 응답은 `VERIFY_REQUIRED`로 격리하며 자동 재주문하지 않는다.
 - `LIVE_BLOCKED`에서는 실계좌 브로커 submit 호출이 발생해서는 안 된다.
+- 동일 broker execution ID는 포트폴리오와 회계 원장에 한 번만 반영한다.
+- 대사 복구는 원본 이벤트를 수정하지 않고 append-only recovery event로 기록한다.
+- 내부 체결 수량이 브로커 체결 수량보다 큰 경우 자동 복구하지 않고 수동 검토한다.
+- 미해결 주문이 존재하는 동안 예약금·예약수량을 임의 해제하지 않는다.

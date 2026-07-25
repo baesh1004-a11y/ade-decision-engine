@@ -28,3 +28,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $runtime | Out-Null
           Set-Content -Path $flag -Value '${{ github.sha }}' -Encoding UTF8
           Write-Host "ADE update signal written: $flag"
+
+      - name: Confirm runner test
+        shell: powershell
+        run: |
+          Write-Host "ADE runner test completed at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"

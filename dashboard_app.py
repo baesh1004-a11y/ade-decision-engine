@@ -37,28 +37,11 @@ PAGES = {
 }
 
 
-MOBILE_PAGES = {
-    "모바일": [
-        st.Page("ade_home.py", title="홈", icon="🏠", default=True),
-        st.Page("pages/14_Recommendation_Workbench.py", title="추천", icon="📊"),
-        st.Page("pages/9_Trading_Desk.py", title="주문", icon="💳"),
-        st.Page("pages/15_Scheduled_Orders.py", title="예약", icon="🗓️"),
-        st.Page("pages/1_ADE_Cockpit.py", title="성과", icon="💼"),
-    ]
-}
-
-
-def _is_mobile_request() -> bool:
-    view = str(st.query_params.get("view", "")).strip().lower()
-    return view in {"mobile", "phone", "app"}
-
-
 def main() -> None:
     apply_design_system()
-    mobile_mode = _is_mobile_request()
     navigation = st.navigation(
-        MOBILE_PAGES if mobile_mode else PAGES,
-        position="hidden" if mobile_mode else "sidebar",
+        PAGES,
+        position="sidebar",
         expanded=False,
     )
     navigation.run()

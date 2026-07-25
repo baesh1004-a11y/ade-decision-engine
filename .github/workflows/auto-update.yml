@@ -1,0 +1,26 @@
+name: ADE Auto Update
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ade-auto-update
+  cancel-in-progress: true
+
+jobs:
+  update-and-restart:
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+    timeout-minutes: 15
+
+    steps:
+      - name: Run ADE updater
+        shell: cmd
+        run: |
+          cd /d "C:\Project\ADE\ade-decision-engine"
+          call auto_update_ade.bat

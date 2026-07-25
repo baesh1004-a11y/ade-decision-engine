@@ -39,20 +39,25 @@ PAGES = {
 
 MOBILE_QUICK_PAGES = {
     "홈": st.Page("ade_home.py", title="상황판", icon="🏠", default=True),
-    "추천": st.Page("pages/14_Recommendation_Workbench.py", title="추천 워크벤치", icon="📊"),
-    "주문": st.Page("pages/9_Trading_Desk.py", title="주문 실행", icon="💳"),
-    "예약": st.Page("pages/15_Scheduled_Orders.py", title="예약 주문", icon="🗓️"),
-    "성과": st.Page("pages/1_ADE_Cockpit.py", title="포트폴리오", icon="💼"),
+    "추천": st.Page("pages/14_Recommendation_Workbench.py", title="추천", icon="📊"),
+    "주문": st.Page("pages/9_Trading_Desk.py", title="주문", icon="💳"),
+    "예약": st.Page("pages/15_Scheduled_Orders.py", title="예약", icon="🗓️"),
+    "성과": st.Page("pages/1_ADE_Cockpit.py", title="성과", icon="💼"),
 }
+
+
+def _is_mobile_request() -> bool:
+    view = str(st.query_params.get("view", "")).lower()
+    return view in {"mobile", "phone", "app"}
 
 
 def main() -> None:
     apply_design_system()
-    mobile_mode = st.query_params.get("view") == "mobile"
+    mobile_mode = _is_mobile_request()
     navigation = st.navigation(
         MOBILE_QUICK_PAGES if mobile_mode else PAGES,
         position="top" if mobile_mode else "sidebar",
-        expanded=not mobile_mode,
+        expanded=False,
     )
     navigation.run()
 

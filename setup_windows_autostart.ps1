@@ -45,7 +45,7 @@ if (Test-Path $runnerServiceMarker) {
     Write-Step "GitHub Runner service is already configured."
     try {
         Push-Location $RunnerDir
-        & .\svc.cmd start | Out-Host
+        & $runnerServiceHelper start | Out-Host
     }
     catch {
         Write-Warning "Runner service could not be started automatically: $($_.Exception.Message)"
@@ -54,7 +54,7 @@ if (Test-Path $runnerServiceMarker) {
         Pop-Location
     }
 }
-elif (Test-Path $runnerServiceHelper) {
+elseif (Test-Path $runnerServiceHelper) {
     Write-Warning "Runner is not installed as a Windows service. Creating a Startup-folder launcher instead."
     $runnerLauncher = Join-Path $startupDir "GitHub ADE Runner.cmd"
     $runnerLauncherContent = @"

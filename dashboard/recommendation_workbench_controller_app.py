@@ -158,29 +158,77 @@ def _controller_selection(recommendations, market: str):
 
 
 def _render_controller(st, recommendations, selected, market: str) -> None:
-    rows = []
-    for row in recommendations[:20]:
-        rows.append({
-            "순위": int(row["rank_no"]),
-            "종목": row["symbol"],
-            "주봉": round(float(row["weekly_similarity"]), 1),
-            "STO": round(float(row["sto_similarity"]), 1),
-            "ticker": str(row["ticker"]),
-        })
-    frame = pd.DataFrame(rows)
-    event = st.dataframe(
-        frame[["순위", "종목", "주봉", "STO"]],
-        use_container_width=True,
-        hide_index=True,
-        height=650,
-        on_select="rerun",
-        selection_mode="single-row",
-        key=f"workbench_controller_{market}",
+    st.markdown(
+        """
+        <style>
+        .wb-mobile-cards{display:none}
+        @media(max-width:640px){
+          .wb-desktop-table{display:none!important}
+          .wb-mobile-cards{display:block}
+          .wb-mobile-card-wrap{margin:0 0 8px}
+          .wb-mobile-card-wrap .stButton>button{
+            min-height:66px!important;padding:9px 11px!important;border-radius:13px!important;
+            text-align:left!important;justify-content:flex-start!important;background:#fff!important;
+            border:1px solid #dbe6f0!important;color:#18324a!important;font-size:13px!important;
+          }
+          .wb-mobile-card-wrap.selected .stButton>button{
+            background:#edf5ff!important;border-color:#8fbbe7!important;
+            box-shadow:inset 3px 0 0 #2f78d6!important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
-    selected_rows = getattr(getattr(event, "selection", None), "rows", [])
-    if selected_rows:
-        ticker = frame.iloc[int(selected_rows[0])]["ticker"]
-        if ticker != st.session_state.get(f"workbench_selected_{market}"):
+
+    with st.container():
+        st.markdown('<div class="wb-desktop-table">', unsafe_allow_html=True)
+        rows = []
+        for row in recommendations[:20]:
+            rows.append({
+                "순위": int(row["rank_no"]),
+                "종목": row["symbol"],
+                "주봉": round(float(row["weekly_similarity"]), 1),
+                "STO": round(float(row["sto_similarity"]), 1),
+                "ticker": str(row["ticker"]),
+            })
+        frame = pd.DataFrame(rows)
+        event = st.dataframe(
+            frame[["순위", "종목", "주봉", "STO"]],
+            use_container_width=True,
+            hide_index=True,
+            height=650,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"workbench_controller_{market}",
+        )
+        selected_rows = getattr(getattr(event, "selection", None), "rows", [])
+        if selected_rows:
+            ticker = frame.iloc[int(selected_rows[0])]["ticker"]
+            if ticker != st.session_state.get(f"workbench_selected_{market}"):
+                st.session_state[f"workbench_selected_{market}"] = ticker
+                st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="wb-mobile-cards">', unsafe_allow_html=True)
+    for row in recommendations[:12]:
+        ticker = str(row["ticker"])
+        is_selected = ticker == str(selected["ticker"])
+        rank_no = int(row["rank_no"])
+        weekly = float(row["weekly_similarity"])
+        sto = float(row["sto_similarity"])
+        label = f"#{rank_no}  {row['symbol']}\n주봉 {weekly:.1f}%  ·  STO {sto:.1f}%"
+        st.markdown(
+            f'<div class="wb-mobile-card-wrap {"selected" if is_selected else ""}">',
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            label,
+            key=f"workbench_mobile_card_{market}_{ticker}",
+            use_container_width=True,
+        ):
             st.session_state[f"workbench_selected_{market}"] = ticker
             st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
     st.caption(f"현재 선택: {selected['symbol']}")

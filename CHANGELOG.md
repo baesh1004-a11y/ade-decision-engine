@@ -107,6 +107,7 @@
 - Decision & Position Sizing Engine v1 specification.
 - Order Validation & Routing Engine v2 specification.
 - Execution Reconciliation & Recovery Engine v2 specification.
+- Portfolio Rebalancing & Exit Orchestration Engine v1 specification.
 
 ### Updated
 
@@ -129,6 +130,8 @@
 - Defined `VERIFY_REQUIRED` for ambiguous broker responses and prohibited automatic resubmission until broker-side reconciliation confirms the result.
 - Added broker-evidence reconciliation for uncertain submissions, partial fills, cancellations, rejections, and missed execution events.
 - Added broker execution ID deduplication, reservation recovery, cash/position reconciliation, append-only recovery actions, and manual-review escalation.
+- Added portfolio-level exit orchestration for stop-loss, trailing stop, profit protection, signal weakening, concentration recovery, cash recovery, exposure reduction, and drawdown control.
+- Defined deterministic Exit Proposal ranking, overlapping-rule merge, sellable-quantity limits, unresolved-order blocking, proposal expiry, and projected-portfolio verification.
 
 ### Notes
 
@@ -152,18 +155,22 @@
 - The same broker execution ID may update positions and accounting only once.
 - Reconciliation recovery appends evidence and corrective events; it does not overwrite original execution history.
 - Internal fills greater than broker-confirmed fills require manual review rather than automatic correction.
+- FORCE_EXIT, stop-loss, and forced reduction rules take precedence over HOLD and new-entry decisions.
+- Exit Proposal quantity may not exceed holdings, sellable quantity, or quantities reserved by open sell orders.
+- Positions with unresolved execution reconciliation are excluded from automatic rebalancing and escalated to manual review.
 
 ### Next
 
 - Implement the minimal Decision & Position Sizing models and pure sizing functions.
+- Implement Portfolio Rebalancing models and pure stop-loss, trailing-stop, profit-protection, constraint, ranking, and sizing functions.
+- Add a fixed-portfolio Rebalancing → Decision → OrderIntent integration fixture.
 - Implement OrderIntent, contract/pre-trade/price validators, and the DRY_RUN path.
 - Implement atomic idempotency reservation and unresolved order reservations.
 - Implement broker execution ID deduplication and single-order `VERIFY_REQUIRED` reconciliation.
 - Implement partial-fill reconciliation and reservation recalculation.
-- Design Portfolio Rebalancing & Exit Orchestration Engine v1.
 - Implement `db/migrations/001_create_run_state.sql`.
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.
 - Wrap the existing analysis pipeline with an Orchestrator adapter.
-- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision → Order → Reconciliation smoke test.
+- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision → Rebalancing → Order → Reconciliation smoke test.
 - Generate minimal Report Engine JSON fixture output.

@@ -119,17 +119,34 @@ def _render_context_banner(st, context) -> None:
 
 def _render_kpis(st, context, recommendations) -> None:
     avg_weekly = sum(float(row["weekly_similarity"]) for row in recommendations) / len(recommendations)
-    cards = [
-        ("오늘 추천 종목", f"{len(recommendations)}개", "현재 완료 실행"),
-        ("평균 주봉 유사도", f"{avg_weekly:.1f}%", "추천 순위 기준"),
-        ("환경 조언", f"{len(context.validations)}개", "사용자 선택 실행"),
-        ("미확인", f"{max(0, len(recommendations) - len(context.validations))}개", "조언 확인은 선택사항"),
+    primary_cards = [
+        ("오늘 추천", f"{len(recommendations)}개", "완료된 최신 실행"),
+        ("평균 주봉 유사도", f"{avg_weekly:.1f}%", "추천 품질 기준"),
+    ]
+    secondary_cards = [
         ("현재 실행 주문", f"{len(context.current_orders)}건", "승인 전 요청"),
+        ("환경 조언", f"{len(context.validations)}개", "선택 종목 확인"),
+        ("미확인", f"{max(0, len(recommendations) - len(context.validations))}개", "조언 미실행"),
         ("최근 실행", str(context.finished_at or "없음")[:16], str(context.run_type or "-")),
     ]
-    cols = st.columns(6, gap="small")
-    for col, (label, value, note) in zip(cols, cards):
-        col.markdown(f'<div class="kpi-card"><span>{label}</span><strong>{value}</strong><small>{note}</small></div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="kpi-group kpi-group-primary">', unsafe_allow_html=True)
+    cols = st.columns(2, gap="small")
+    for col, (label, value, note) in zip(cols, primary_cards):
+        col.markdown(
+            f'<div class="kpi-card kpi-card-primary"><span>{label}</span><strong>{value}</strong><small>{note}</small></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="kpi-group kpi-group-secondary">', unsafe_allow_html=True)
+    cols = st.columns(4, gap="small")
+    for col, (label, value, note) in zip(cols, secondary_cards):
+        col.markdown(
+            f'<div class="kpi-card kpi-card-secondary"><span>{label}</span><strong>{value}</strong><small>{note}</small></div>',
+            unsafe_allow_html=True,
+        )
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _enrich_recommendations(rows, name_map, market):
@@ -248,49 +265,47 @@ def _render_validation_summary(st, validation) -> None:
     checks = [
         ("전체 시장 상태", _status_text(float(validation.get("market_score", 0)))),
         ("해당 업종 상태", _status_text(float(validation.get("sector_score", 0)))),
+        ("종목 위험도", _risk_text(float(validation.get("risk_score", 0)))),
     ]
-    cols = st.columns(2)
-    for col, (title, value) in zip(cols, checks):
-        col.markdown(f'<div class="validation-row"><b>{title}</b><span>{value}</span></div>', unsafe_allow_html=True)
+    for name, value in checks:
+        st.markdown(f'<div class="validation-row"><span>{name}</span><b>{value}</b></div>', unsafe_allow_html=True)
 
 
 def _order_panel(st, selected, market, validation, context) -> None:
-    if validation is None:
-        state = "주문 가능 · 환경 미확인"
-        note = "시장·업종 환경 조언은 선택사항입니다."
-    else:
+    st.markdown(
+        f'<div class="order-highlight"><span>현재 주문 종목</span><strong>{selected["symbol"]}</strong></div>',
+        unsafe_allow_html=True,
+    )
+    if validation is not None:
         decision = str(validation.get("decision"))
-        state = "주문 가능" if decision in {"FINAL BUY", "BUY WATCH"} else "환경 조언 주의"
-        note = "시장·업종 환경 조언을 참고해 최종 판단하세요."
-    st.markdown(f'<div class="order-highlight"><span>{selected["symbol"]}</span><strong>{state}</strong></div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-    c1.metric("현재 실행 주문", len(context.current_orders))
-    c2.metric("환경 조언", "확인" if validation else "선택 안 함")
-    target = "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py"
-    st.page_link(target, label="주문관리 열기", icon="🛒", use_container_width=True)
-    st.caption(f"{note} · 연결 run_id: {context.run_id}")
+        label = {"FINAL BUY": "매수 검토", "BUY WATCH": "관찰", "HOLD": "보류", "PASS": "제외"}.get(decision, decision)
+        st.caption(f"환경 조언: {label}")
+    st.page_link(
+        "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py",
+        label="주문 화면 열기",
+        icon="💳",
+        use_container_width=True,
+    )
+    st.page_link("pages/15_Scheduled_Orders.py", label="예약 주문 확인", icon="🗓️", use_container_width=True)
+    st.caption(f"현재 실행 주문 {len(context.current_orders)}건")
 
 
 def _selected_pattern(conn, payload):
-    matches = payload.get("replay_matches") or []
-    if not matches:
+    pattern_id = payload.get("selected_pattern_id")
+    if not pattern_id:
         return None
-    return conn.execute("SELECT * FROM surge_patterns WHERE pattern_id=?", (matches[0].get("event_id"),)).fetchone()
+    return conn.execute("SELECT * FROM surge_patterns WHERE pattern_id=?", (pattern_id,)).fetchone()
 
 
 def _current_bars(conn, market, ticker, source):
     rows = conn.execute(
-        """SELECT trade_date AS Date, open AS Open, high AS High, low AS Low, close AS Close, volume AS Volume
-        FROM price_bars WHERE market=? AND ticker=? AND source=? ORDER BY trade_date DESC LIMIT 120""",
-        (market, ticker, source),
+        f"SELECT * FROM {source} WHERE ticker=? ORDER BY date DESC LIMIT 140",
+        (ticker,),
     ).fetchall()
-    if not rows:
-        rows = conn.execute(
-            """SELECT trade_date AS Date, open AS Open, high AS High, low AS Low, close AS Close, volume AS Volume
-            FROM price_bars WHERE market=? AND ticker=? ORDER BY trade_date DESC LIMIT 120""",
-            (market, ticker),
-        ).fetchall()
-    return pd.DataFrame([dict(row) for row in reversed(rows)])
+    frame = pd.DataFrame([dict(row) for row in rows])
+    if not frame.empty:
+        frame = frame.sort_values("date")
+    return frame
 
 
 def _pattern_bars(conn, pattern):
@@ -338,12 +353,25 @@ def _style(st) -> None:
         .context-banner{display:flex;gap:18px;align-items:center;padding:10px 14px;border:1px solid #cfe1f1;border-radius:12px;background:#eef7ff;margin:8px 0}.context-banner span{color:#557086;font-size:12px}.context-banner b{color:#1768bd}
         .kpi-card{min-height:100px;padding:15px;border-radius:15px;background:var(--panel);border:1px solid var(--line)}
         .kpi-card span,.kpi-card small{display:block;color:var(--muted)}.kpi-card strong{display:block;font-size:24px;margin:7px 0 4px}
+        .kpi-group-primary{margin-bottom:8px}.kpi-card-primary{border-left:4px solid var(--blue);background:linear-gradient(135deg,#fff,#f3f8ff)}
+        .kpi-card-secondary{min-height:88px;padding:13px}.kpi-card-secondary strong{font-size:20px}
         .step-header{display:flex;gap:10px;padding:13px 14px;margin-top:12px;border:1px solid var(--line);border-radius:14px 14px 0 0;background:linear-gradient(135deg,#fff,#f2f7fc)}
         .step-header>span{display:flex;align-items:center;justify-content:center;width:29px;height:29px;border-radius:8px;background:#2778da;color:white;font-weight:900}.step-header b{display:block;color:#165ea9;font-size:16px}.step-header small{display:block;color:var(--muted)}
         .selected-stock{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;margin:9px 0;border-radius:11px;background:#eef6ff;border:1px solid #d9e9f8}.selected-stock b{display:block;font-size:20px}.selected-stock small,.selected-stock span{display:block;color:var(--muted)}.selected-stock strong{display:block;color:#1976d2;text-align:right}
         .mini-card,.validation-result,.order-highlight{padding:11px 12px;border-radius:11px;background:white;border:1px solid var(--line);margin-bottom:8px}.mini-card span,.validation-result span{display:block;color:var(--muted);font-size:11px}.mini-card b,.validation-result strong{display:block;font-size:17px;margin-top:3px}
         .validation-row{display:flex;justify-content:space-between;padding:11px 12px;margin-top:7px;border-radius:10px;background:white;border:1px solid var(--line)}
         div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:white}
+        @media(max-width:640px){
+          .context-banner{gap:7px;padding:8px 10px;overflow-x:auto;white-space:nowrap;border-radius:10px}.context-banner span{font-size:10px}
+          .kpi-group-primary div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+          .kpi-group-primary div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
+          .kpi-group-secondary div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+          .kpi-group-secondary div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
+          .kpi-card{min-height:84px;padding:12px;border-radius:13px;box-shadow:none}
+          .kpi-card span{font-size:11px}.kpi-card strong{font-size:21px;margin:5px 0 2px}.kpi-card small{font-size:10px}
+          .kpi-card-primary{border-left:3px solid var(--blue)}
+          .kpi-card-secondary{min-height:72px;padding:10px}.kpi-card-secondary strong{font-size:17px}
+        }
         </style>
         """,
         unsafe_allow_html=True,

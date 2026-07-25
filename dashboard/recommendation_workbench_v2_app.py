@@ -292,22 +292,46 @@ def _overall_environment_status(checks) -> str:
 
 
 def _order_panel(st, selected, market, validation, context) -> None:
-    st.markdown(
-        f'<div class="order-highlight"><span>현재 주문 종목</span><strong>{selected["symbol"]}</strong></div>',
-        unsafe_allow_html=True,
-    )
     if validation is not None:
         decision = str(validation.get("decision"))
-        label = {"FINAL BUY": "매수 검토", "BUY WATCH": "관찰", "HOLD": "보류", "PASS": "제외"}.get(decision, decision)
-        st.caption(f"환경 조언: {label}")
-    st.page_link(
-        "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py",
-        label="주문 화면 열기",
-        icon="💳",
-        use_container_width=True,
+        environment_label = {"FINAL BUY": "매수 검토", "BUY WATCH": "관찰", "HOLD": "보류", "PASS": "제외"}.get(decision, decision)
+        environment_tone = {
+            "FINAL BUY": "good",
+            "BUY WATCH": "warn",
+            "HOLD": "warn",
+            "PASS": "bad",
+        }.get(decision, "neutral")
+    else:
+        environment_label = "미확인"
+        environment_tone = "neutral"
+
+    st.markdown(
+        f'<div class="order-summary">'
+        f'<div><span>주문 대상</span><strong>{selected["symbol"]}</strong></div>'
+        f'<b class="order-status order-status-{environment_tone}">{environment_label}</b>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
-    st.page_link("pages/15_Scheduled_Orders.py", label="예약 주문 확인", icon="🗓️", use_container_width=True)
-    st.caption(f"현재 실행 주문 {len(context.current_orders)}건")
+
+    primary, secondary = st.columns([1.45, 1], gap="small")
+    with primary:
+        st.page_link(
+            "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py",
+            label="주문 화면",
+            icon="💳",
+            use_container_width=True,
+        )
+    with secondary:
+        st.page_link(
+            "pages/15_Scheduled_Orders.py",
+            label="예약 주문",
+            icon="🗓️",
+            use_container_width=True,
+        )
+    st.markdown(
+        f'<div class="order-count">현재 실행 주문 <b>{len(context.current_orders)}건</b></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _selected_pattern(conn, payload):
@@ -384,6 +408,11 @@ def _style(st) -> None:
         .validation-status{display:inline-flex;align-items:center;justify-content:center;min-width:54px;padding:6px 10px;border-radius:999px;font-size:12px}
         .validation-result-good .validation-status{background:#dff3e9;color:#237451}.validation-result-warn .validation-status{background:#fceccc;color:#96641b}.validation-result-bad .validation-status{background:#f8dddd;color:#a64646}
         .validation-row{display:flex;justify-content:space-between;padding:11px 12px;margin-top:7px;border-radius:10px;background:white;border:1px solid var(--line)}
+        .order-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 13px;margin-bottom:8px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(135deg,#fff,#f5f9fd)}
+        .order-summary span{display:block;color:var(--muted);font-size:11px}.order-summary strong{display:block;margin-top:3px;font-size:18px;color:var(--ink)}
+        .order-status{display:inline-flex;align-items:center;justify-content:center;min-width:66px;padding:6px 10px;border-radius:999px;font-size:11px;white-space:nowrap;background:#eef2f6;color:#5e7184}
+        .order-status-good{background:#dff3e9;color:#237451}.order-status-warn{background:#fceccc;color:#96641b}.order-status-bad{background:#f8dddd;color:#a64646}
+        .order-count{margin-top:6px;color:var(--muted);font-size:12px;text-align:right}.order-count b{color:var(--ink)}
         div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:white}
         @media(max-width:640px){
           .context-banner{gap:7px;padding:8px 10px;overflow-x:auto;white-space:nowrap;border-radius:10px}.context-banner span{font-size:10px}
@@ -398,6 +427,8 @@ def _style(st) -> None:
           .validation-result{padding:10px 11px;border-radius:12px;margin-bottom:6px}.validation-result strong{font-size:16px}.validation-status{min-width:48px;padding:5px 8px;font-size:11px}
           [data-testid="stExpander"] summary{font-size:13px!important}
           .validation-row{padding:9px 10px;margin-top:5px;border-radius:9px;font-size:12px}
+          .order-summary{padding:10px 11px;border-radius:11px;margin-bottom:7px}.order-summary strong{font-size:16px}.order-status{min-width:58px;padding:5px 8px;font-size:10px}
+          .order-count{font-size:11px;margin-top:4px}
         }
         </style>
         """,

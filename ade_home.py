@@ -29,7 +29,7 @@ class PortfolioSummary:
 def main() -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="ADE Command Center", page_icon="📊", layout="wide")
+    st.set_page_config(page_title="ADE 상황판", page_icon="📊", layout="wide")
     apply_global_style(st)
     st.markdown(
         """
@@ -54,7 +54,7 @@ def main() -> None:
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     page_hero(
         st,
-        "Command Center",
+        "상황판",
         "오늘 해야 할 일, 시장 준비도, 승인 대기 주문과 계좌 상태를 한 화면에서 확인합니다.",
         eyebrow="ADE · INVESTMENT OPERATIONS TERMINAL",
         badge=f"KIS {mode} · {now}",
@@ -220,287 +220,233 @@ def main() -> None:
 
 def _action_card(column, title: str, value: str, description: str, target: str, label: str, icon: str) -> None:
     column.markdown(
-        f'<div class="action-card"><h3>{title}</h3><p><b>{value}</b></p><p>{description}</p></div>',
+        f'<div class="action-card"><h3>{icon} {title}</h3><p><strong>{value}</strong></p><p>{description}</p></div>',
         unsafe_allow_html=True,
     )
-    column.page_link(target, label=label, icon=icon, width="stretch")
+    column.page_link(target, label=label, width="stretch")
 
 
-def _system_box(column, title: str, detail: str, healthy: bool | None) -> None:
-    tone = "success" if healthy is True else "neutral" if healthy is None else "danger"
-    state_text = "정상" if healthy is True else "연결 미확인" if healthy is None else "확인 필요"
+def _system_box(column, title: str, detail: str, ok: bool | None) -> None:
+    tone = "success" if ok else "warning" if ok is False else "neutral"
+    badge = status_badge("정상" if ok else "확인 필요" if ok is False else "확인 불가", tone)
     column.markdown(
-        f'<div class="system-card"><h3>{title}</h3><p>{status_badge(state_text, tone)}</p><p>{detail}</p></div>',
+        f'<div class="system-card"><h3>{title} {badge}</h3><p>{detail}</p></div>',
         unsafe_allow_html=True,
     )
 
 
-def _latest_recommendation_count(path: Path) -> int | None:
-    if not path.exists():
-        return None
-    conn = sqlite3.connect(str(path))
-    try:
-        if not _table_exists(conn, "recommendation_runs"):
-            return 0
-        row = conn.execute(
-            "SELECT recommendation_count FROM recommendation_runs WHERE status='COMPLETED' ORDER BY started_at DESC LIMIT 1"
-        ).fetchone()
-        return int(row[0]) if row else 0
-    except sqlite3.Error:
-        return None
-    finally:
-        conn.close()
+def _latest_recommendation_count(db_path: Path) -> int | None:
+    query = """
+        SELECT COUNT(*)
+        FROM recommendation_results
+        WHERE run_id = (SELECT MAX(run_id) FROM recommendation_results)
+    """
+    return _scalar(db_path, query)
 
 
-def _latest_validation_count(path: Path) -> int | None:
-    if not path.exists():
-        return None
-    conn = sqlite3.connect(str(path))
-    try:
-        for table in ("final_decisions", "meta_score_results", "recommendation_validations"):
-            if not _table_exists(conn, table):
-                continue
-            columns = _columns(conn, table)
-            if "source_run_id" in columns:
-                row = conn.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE source_run_id=(SELECT run_id FROM recommendation_runs WHERE status='COMPLETED' ORDER BY started_at DESC LIMIT 1)"
-                ).fetchone()
-            elif "run_id" in columns:
-                row = conn.execute(
-                    f"SELECT COUNT(*) FROM {table} WHERE run_id=(SELECT run_id FROM recommendation_runs WHERE status='COMPLETED' ORDER BY started_at DESC LIMIT 1)"
-                ).fetchone()
-            else:
-                continue
-            return int(row[0]) if row else 0
-        return 0
-    except sqlite3.Error:
-        return None
-    finally:
-        conn.close()
-
-
-def _pending_count(path: Path, table: str) -> int | None:
-    if not path.exists():
-        return None
-    conn = sqlite3.connect(str(path))
-    try:
-        if not _table_exists(conn, table):
-            return 0
-        return int(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE status='PENDING_APPROVAL'").fetchone()[0])
-    except sqlite3.Error:
-        return None
-    finally:
-        conn.close()
-
-
-def _scheduled_order_summary(path: Path) -> dict[str, int]:
-    result = {"active": 0, "due_today": 0, "retry": 0, "failed": 0}
-    if not path.exists():
-        return result
-    conn = sqlite3.connect(str(path))
-    try:
-        table = next((name for name in ("scheduled_orders", "trade_scheduled_orders") if _table_exists(conn, name)), None)
-        if table is None:
-            return result
-        columns = _columns(conn, table)
-        status_col = "status" if "status" in columns else None
-        next_col = next((name for name in ("next_run_at", "scheduled_at", "trigger_at") if name in columns), None)
-        if status_col:
-            rows = conn.execute(f"SELECT {status_col}, COUNT(*) FROM {table} GROUP BY {status_col}").fetchall()
-            counts = {str(status or "").upper(): int(count) for status, count in rows}
-            result["active"] = sum(counts.get(key, 0) for key in ("ACTIVE", "SCHEDULED", "READY"))
-            result["retry"] = sum(counts.get(key, 0) for key in ("RETRY", "RETRY_WAIT", "WAITING_RETRY"))
-            result["failed"] = counts.get("FAILED", 0)
-        if next_col:
-            result["due_today"] = int(conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE date({next_col})=date('now','localtime')"
-            ).fetchone()[0])
-        return result
-    except sqlite3.Error:
-        return result
-    finally:
-        conn.close()
-
-
-def _portfolio_summary(kr_path: Path, us_path: Path) -> PortfolioSummary:
-    kr_holdings, krw_value, krw_cash = _domestic_portfolio_summary(kr_path)
-    us_holdings, usd_value = _us_portfolio_summary(us_path)
-    return PortfolioSummary(
-        kr_holdings=kr_holdings,
-        us_holdings=us_holdings,
-        krw_value=krw_value,
-        krw_cash=krw_cash,
-        usd_value=usd_value,
-    )
-
-
-def _domestic_portfolio_summary(path: Path) -> tuple[int, float | None, float | None]:
-    if not path.exists():
-        return 0, None, None
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    try:
-        holdings = 0
-        positions_value = 0.0
-        positions_found = False
-        for table in ("portfolio_positions", "account_positions", "positions", "kis_holdings"):
-            if not _table_exists(conn, table):
-                continue
-            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
-            holdings = len(rows)
-            positions_value = sum(
-                _first_number(dict(row), ("evaluation_amount", "market_value", "eval_amount", "value")) or 0.0
-                for row in rows
-            )
-            positions_found = True
-            break
-
-        cash: float | None = None
-        account_value: float | None = None
-        for table in ("portfolio_state", "account_summary", "kis_account_summary"):
-            if not _table_exists(conn, table):
-                continue
-            row = conn.execute(f"SELECT * FROM {table} ORDER BY rowid DESC LIMIT 1").fetchone()
-            if row:
-                data = dict(row)
-                cash = _first_number(data, ("cash", "available_cash", "cash_balance", "deposit"))
-                account_value = _first_number(data, ("total_equity", "evaluation_amount", "account_value", "total_asset"))
-            break
-        if account_value is None and (positions_found or cash is not None):
-            account_value = positions_value + (cash or 0.0)
-        return holdings, account_value, cash
-    except sqlite3.Error:
-        return 0, None, None
-    finally:
-        conn.close()
-
-
-def _us_portfolio_summary(path: Path) -> tuple[int, float | None]:
-    if not path.exists():
-        return 0, None
-    conn = sqlite3.connect(str(path))
-    conn.row_factory = sqlite3.Row
-    try:
-        if not _table_exists(conn, "us_position_snapshots"):
-            return 0, None
-        latest = conn.execute("SELECT MAX(captured_at) FROM us_position_snapshots").fetchone()[0]
-        if not latest:
-            return 0, None
-        rows = conn.execute(
-            "SELECT ticker, evaluation_amount FROM us_position_snapshots WHERE captured_at=?",
-            (latest,),
-        ).fetchall()
-        return len(rows), sum(float(row["evaluation_amount"] or 0.0) for row in rows)
-    except (sqlite3.Error, TypeError, ValueError):
-        return 0, None
-    finally:
-        conn.close()
-
-
-def _kis_connection_status() -> tuple[str, bool | None]:
-    load_kis_env()
-    missing = []
-    if not os.getenv("KIS_APP_KEY"):
-        missing.append("APP_KEY")
-    if not os.getenv("KIS_APP_SECRET"):
-        missing.append("APP_SECRET")
-    if not (os.getenv("KIS_ACCOUNT") or os.getenv("KIS_ACCOUNT_NO")):
-        missing.append("ACCOUNT")
-    if missing:
-        return "설정 누락: " + ", ".join(missing), False
-    return "인증정보 설정됨 · 실제 API 연결은 아직 확인하지 않음", None
-
-
-def _recent_activity(kr_path: Path, us_path: Path) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    for market, path in (("한국", kr_path), ("미국", us_path)):
-        if not path.exists():
-            continue
-        conn = sqlite3.connect(str(path))
-        conn.row_factory = sqlite3.Row
-        try:
-            if _table_exists(conn, "recommendation_runs"):
-                columns = _columns(conn, "recommendation_runs")
-                time_col = "finished_at" if "finished_at" in columns else "started_at"
-                for row in conn.execute(
-                    f"SELECT * FROM recommendation_runs ORDER BY {time_col} DESC LIMIT 4"
-                ).fetchall():
-                    data = dict(row)
-                    rows.append({
-                        "시각": data.get(time_col) or "-",
-                        "시장": market,
-                        "구분": "추천 생성",
-                        "상태": data.get("status") or "-",
-                        "내용": f"추천 {int(data.get('recommendation_count') or 0)}개",
-                    })
-            order_table = "trade_order_requests" if market == "한국" else "us_trade_order_requests"
-            if _table_exists(conn, order_table):
-                columns = _columns(conn, order_table)
-                time_col = next((c for c in ("updated_at", "created_at", "requested_at") if c in columns), None)
-                if time_col:
-                    for row in conn.execute(f"SELECT * FROM {order_table} ORDER BY {time_col} DESC LIMIT 3").fetchall():
-                        data = dict(row)
-                        rows.append({
-                            "시각": data.get(time_col) or "-",
-                            "시장": market,
-                            "구분": "주문",
-                            "상태": data.get("status") or "-",
-                            "내용": str(data.get("ticker") or data.get("symbol") or "-")
-                        })
-        except sqlite3.Error:
-            pass
-        finally:
-            conn.close()
-    if not rows:
-        return pd.DataFrame(columns=["시각", "시장", "구분", "상태", "내용"])
-    frame = pd.DataFrame(rows)
-    return frame.sort_values("시각", ascending=False).head(8)
-
-
-def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    return conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone() is not None
-
-
-def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
-    return {str(row[1]) for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
-
-
-def _first_number(data: dict[str, object], keys: tuple[str, ...]) -> float | None:
-    for key in keys:
-        value = data.get(key)
-        if value in (None, ""):
-            continue
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            continue
+def _latest_validation_count(db_path: Path) -> int | None:
+    candidates = [
+        "SELECT COUNT(*) FROM recommendation_validations WHERE run_id = (SELECT MAX(run_id) FROM recommendation_validations)",
+        "SELECT COUNT(*) FROM validation_results WHERE run_id = (SELECT MAX(run_id) FROM validation_results)",
+    ]
+    for query in candidates:
+        value = _scalar(db_path, query)
+        if value is not None:
+            return value
     return None
 
 
-def _format_money(value: float | None) -> str:
-    if value is None:
-        return "미연동"
-    if abs(value) >= 100_000_000:
-        return f"{value / 100_000_000:,.1f}억원"
-    if abs(value) >= 10_000:
-        return f"{value / 10_000:,.0f}만원"
-    return f"{value:,.0f}원"
+def _pending_count(db_path: Path, table: str) -> int | None:
+    queries = [
+        f"SELECT COUNT(*) FROM {table} WHERE LOWER(COALESCE(status, 'pending')) IN ('pending', 'ready', 'waiting', 'requested')",
+        f"SELECT COUNT(*) FROM {table}",
+    ]
+    for query in queries:
+        value = _scalar(db_path, query)
+        if value is not None:
+            return value
+    return None
 
 
-def _format_usd(value: float | None) -> str:
-    return "미연동" if value is None else f"${value:,.2f}"
+def _scheduled_order_summary(db_path: Path) -> dict[str, int]:
+    defaults = {"active": 0, "failed": 0, "retry": 0, "due_today": 0}
+    if not db_path.exists():
+        return defaults
+    try:
+        with sqlite3.connect(db_path) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            table = next((name for name in ("scheduled_orders", "scheduled_order_requests", "trade_order_schedules") if name in tables), None)
+            if not table:
+                return defaults
+            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            status_col = next((name for name in ("status", "state") if name in columns), None)
+            run_at_col = next((name for name in ("scheduled_at", "run_at", "execute_at", "next_run_at") if name in columns), None)
+            retry_col = next((name for name in ("retry_count", "attempt_count", "retries") if name in columns), None)
+            if status_col:
+                rows = conn.execute(f"SELECT LOWER(COALESCE({status_col}, '')) AS status, COUNT(*) FROM {table} GROUP BY 1").fetchall()
+                for status, count in rows:
+                    if status in {"active", "pending", "scheduled", "ready"}:
+                        defaults["active"] += count
+                    if status in {"failed", "error"}:
+                        defaults["failed"] += count
+                    if status in {"retry", "retrying"}:
+                        defaults["retry"] += count
+            else:
+                defaults["active"] = int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+            if retry_col:
+                defaults["retry"] = max(defaults["retry"], int(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE COALESCE({retry_col}, 0) > 0").fetchone()[0]))
+            if run_at_col:
+                defaults["due_today"] = int(conn.execute(f"SELECT COUNT(*) FROM {table} WHERE date({run_at_col}) = date('now', 'localtime')").fetchone()[0])
+    except (sqlite3.Error, TypeError, ValueError):
+        return defaults
+    return defaults
+
+
+def _portfolio_summary(kr_db: Path, us_db: Path) -> PortfolioSummary:
+    kr_holdings = _first_scalar(kr_db, [
+        "SELECT COUNT(*) FROM portfolio_positions WHERE COALESCE(quantity, 0) > 0",
+        "SELECT COUNT(*) FROM positions WHERE COALESCE(quantity, 0) > 0",
+        "SELECT COUNT(*) FROM holdings WHERE COALESCE(quantity, 0) > 0",
+    ]) or 0
+    us_holdings = _first_scalar(us_db, [
+        "SELECT COUNT(*) FROM portfolio_positions WHERE COALESCE(quantity, 0) > 0",
+        "SELECT COUNT(*) FROM us_positions WHERE COALESCE(quantity, 0) > 0",
+        "SELECT COUNT(*) FROM holdings WHERE COALESCE(quantity, 0) > 0",
+    ]) or 0
+    krw_value = _first_scalar_float(kr_db, [
+        "SELECT SUM(COALESCE(market_value, evaluation_amount, quantity * current_price, 0)) FROM portfolio_positions",
+        "SELECT SUM(COALESCE(market_value, evaluation_amount, quantity * current_price, 0)) FROM positions",
+    ])
+    krw_cash = _first_scalar_float(kr_db, [
+        "SELECT cash_balance FROM account_snapshots ORDER BY rowid DESC LIMIT 1",
+        "SELECT available_cash FROM account_snapshots ORDER BY rowid DESC LIMIT 1",
+        "SELECT cash FROM portfolio_summary ORDER BY rowid DESC LIMIT 1",
+    ])
+    usd_value = _first_scalar_float(us_db, [
+        "SELECT SUM(COALESCE(market_value, evaluation_amount, quantity * current_price, 0)) FROM portfolio_positions",
+        "SELECT SUM(COALESCE(market_value, evaluation_amount, quantity * current_price, 0)) FROM us_positions",
+    ])
+    return PortfolioSummary(kr_holdings, us_holdings, krw_value, krw_cash, usd_value)
+
+
+def _recent_activity(kr_db: Path, us_db: Path) -> pd.DataFrame:
+    frames: list[pd.DataFrame] = []
+    specs = [
+        (kr_db, "한국 추천", "recommendation_results"),
+        (kr_db, "한국 주문", "trade_order_requests"),
+        (us_db, "미국 추천", "recommendation_results"),
+        (us_db, "미국 주문", "us_trade_order_requests"),
+    ]
+    for db_path, source, table in specs:
+        frame = _recent_table(db_path, table, source)
+        if not frame.empty:
+            frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    result = pd.concat(frames, ignore_index=True)
+    return result.sort_values("시각", ascending=False).head(12)
+
+
+def _recent_table(db_path: Path, table: str, source: str) -> pd.DataFrame:
+    if not db_path.exists():
+        return pd.DataFrame()
+    try:
+        with sqlite3.connect(db_path) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if table not in tables:
+                return pd.DataFrame()
+            columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            time_col = next((name for name in ("created_at", "requested_at", "updated_at", "run_at", "date") if name in columns), None)
+            symbol_col = next((name for name in ("symbol", "ticker", "code") if name in columns), None)
+            status_col = next((name for name in ("status", "decision", "action", "side") if name in columns), None)
+            selected = [name for name in (time_col, symbol_col, status_col) if name]
+            if not selected:
+                return pd.DataFrame()
+            order = f" ORDER BY {time_col} DESC" if time_col else " ORDER BY rowid DESC"
+            rows = conn.execute(f"SELECT {', '.join(selected)} FROM {table}{order} LIMIT 5").fetchall()
+            records = []
+            for row in rows:
+                values = dict(zip(selected, row))
+                records.append({
+                    "시각": str(values.get(time_col, "-")) if time_col else "-",
+                    "구분": source,
+                    "종목": str(values.get(symbol_col, "-")) if symbol_col else "-",
+                    "상태": str(values.get(status_col, "-")) if status_col else "-",
+                })
+            return pd.DataFrame(records)
+    except sqlite3.Error:
+        return pd.DataFrame()
+
+
+def _kis_connection_status() -> tuple[str, bool | None]:
+    try:
+        env = load_kis_env()
+    except Exception as exc:
+        return f"설정 확인 필요: {exc}", False
+    keys = [getattr(env, name, None) for name in ("app_key", "app_secret", "account_no")]
+    if all(keys):
+        return "API 키와 계좌 설정 확인됨", True
+    return "일부 API 또는 계좌 설정이 비어 있습니다.", False
+
+
+def _scalar(db_path: Path, query: str) -> int | None:
+    if not db_path.exists():
+        return None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(query).fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
+    except (sqlite3.Error, TypeError, ValueError):
+        return None
+
+
+def _scalar_float(db_path: Path, query: str) -> float | None:
+    if not db_path.exists():
+        return None
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute(query).fetchone()
+            return float(row[0]) if row and row[0] is not None else None
+    except (sqlite3.Error, TypeError, ValueError):
+        return None
+
+
+def _first_scalar(db_path: Path, queries: list[str]) -> int | None:
+    for query in queries:
+        value = _scalar(db_path, query)
+        if value is not None:
+            return value
+    return None
+
+
+def _first_scalar_float(db_path: Path, queries: list[str]) -> float | None:
+    for query in queries:
+        value = _scalar_float(db_path, query)
+        if value is not None:
+            return value
+    return None
 
 
 def _count_sum(*values: int | None) -> int | None:
-    return None if any(value is None for value in values) else sum(int(value) for value in values if value is not None)
+    if any(value is None for value in values):
+        return None
+    return sum(value for value in values if value is not None)
 
 
 def _count_text(value: int | None) -> str:
-    return "확인 불가" if value is None else f"{value:,}"
+    return "조회 실패" if value is None else f"{value:,}"
 
 
 def _count_with_unit(value: int | None, unit: str) -> str:
-    return "확인 불가" if value is None else f"{value:,}{unit}"
+    return "조회 실패" if value is None else f"{value:,}{unit}"
+
+
+def _format_money(value: float | None) -> str:
+    return "조회 불가" if value is None else f"₩{value:,.0f}"
+
+
+def _format_usd(value: float | None) -> str:
+    return "조회 불가" if value is None else f"${value:,.2f}"
 
 
 if __name__ == "__main__":

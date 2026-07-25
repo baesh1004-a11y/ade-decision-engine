@@ -261,14 +261,34 @@ def _run_selected_validation(db_path, run_id, selected, payload) -> None:
 def _render_validation_summary(st, validation) -> None:
     decision = str(validation.get("decision"))
     label = {"FINAL BUY": "매수 검토", "BUY WATCH": "관찰", "HOLD": "보류", "PASS": "제외"}.get(decision, decision)
-    st.markdown(f'<div class="validation-result"><span>시장·업종 환경 조언</span><strong>{label}</strong></div>', unsafe_allow_html=True)
     checks = [
-        ("전체 시장 상태", _status_text(float(validation.get("market_score", 0)))),
-        ("해당 업종 상태", _status_text(float(validation.get("sector_score", 0)))),
-        ("종목 위험도", _risk_text(float(validation.get("risk_score", 0)))),
+        ("전체 시장", _status_text(float(validation.get("market_score", 0)))),
+        ("해당 업종", _status_text(float(validation.get("sector_score", 0)))),
+        ("종목 위험", _risk_text(float(validation.get("risk_score", 0)))),
     ]
-    for name, value in checks:
-        st.markdown(f'<div class="validation-row"><span>{name}</span><b>{value}</b></div>', unsafe_allow_html=True)
+    overall = _overall_environment_status(checks)
+    tone = {"양호": "good", "보통": "warn", "주의": "bad"}.get(overall, "warn")
+    st.markdown(
+        f'<div class="validation-result validation-result-{tone}">'
+        f'<div><span>환경 조언</span><strong>{label}</strong></div>'
+        f'<b class="validation-status">{overall}</b></div>',
+        unsafe_allow_html=True,
+    )
+    with st.expander("세부 상태 보기", expanded=False):
+        for name, value in checks:
+            st.markdown(
+                f'<div class="validation-row"><span>{name}</span><b>{value}</b></div>',
+                unsafe_allow_html=True,
+            )
+
+
+def _overall_environment_status(checks) -> str:
+    values = [value for _, value in checks]
+    if any(value in {"주의", "높음"} for value in values):
+        return "주의"
+    if any(value == "보통" for value in values):
+        return "보통"
+    return "양호"
 
 
 def _order_panel(st, selected, market, validation, context) -> None:
@@ -359,6 +379,10 @@ def _style(st) -> None:
         .step-header>span{display:flex;align-items:center;justify-content:center;width:29px;height:29px;border-radius:8px;background:#2778da;color:white;font-weight:900}.step-header b{display:block;color:#165ea9;font-size:16px}.step-header small{display:block;color:var(--muted)}
         .selected-stock{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;margin:9px 0;border-radius:11px;background:#eef6ff;border:1px solid #d9e9f8}.selected-stock b{display:block;font-size:20px}.selected-stock small,.selected-stock span{display:block;color:var(--muted)}.selected-stock strong{display:block;color:#1976d2;text-align:right}
         .mini-card,.validation-result,.order-highlight{padding:11px 12px;border-radius:11px;background:white;border:1px solid var(--line);margin-bottom:8px}.mini-card span,.validation-result span{display:block;color:var(--muted);font-size:11px}.mini-card b,.validation-result strong{display:block;font-size:17px;margin-top:3px}
+        .validation-result{display:flex;align-items:center;justify-content:space-between;gap:12px}
+        .validation-result-good{background:#eef9f4;border-color:#cce7db}.validation-result-warn{background:#fff7e9;border-color:#ecd9b5}.validation-result-bad{background:#fff1f1;border-color:#eccdcd}
+        .validation-status{display:inline-flex;align-items:center;justify-content:center;min-width:54px;padding:6px 10px;border-radius:999px;font-size:12px}
+        .validation-result-good .validation-status{background:#dff3e9;color:#237451}.validation-result-warn .validation-status{background:#fceccc;color:#96641b}.validation-result-bad .validation-status{background:#f8dddd;color:#a64646}
         .validation-row{display:flex;justify-content:space-between;padding:11px 12px;margin-top:7px;border-radius:10px;background:white;border:1px solid var(--line)}
         div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:white}
         @media(max-width:640px){
@@ -371,6 +395,9 @@ def _style(st) -> None:
           .kpi-card span{font-size:11px}.kpi-card strong{font-size:21px;margin:5px 0 2px}.kpi-card small{font-size:10px}
           .kpi-card-primary{border-left:3px solid var(--blue)}
           .kpi-card-secondary{min-height:72px;padding:10px}.kpi-card-secondary strong{font-size:17px}
+          .validation-result{padding:10px 11px;border-radius:12px;margin-bottom:6px}.validation-result strong{font-size:16px}.validation-status{min-width:48px;padding:5px 8px;font-size:11px}
+          [data-testid="stExpander"] summary{font-size:13px!important}
+          .validation-row{padding:9px 10px;margin-top:5px;border-radius:9px;font-size:12px}
         }
         </style>
         """,

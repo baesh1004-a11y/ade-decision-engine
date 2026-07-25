@@ -1,4 +1,4 @@
-name: ADE Auto Update
+name: ADE Auto Update Signal
 
 on:
   push:
@@ -11,16 +11,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  update-and-restart:
+  signal-update:
     runs-on:
       - self-hosted
       - Windows
       - X64
-    timeout-minutes: 15
+    timeout-minutes: 5
 
     steps:
-      - name: Run ADE updater
-        shell: cmd
+      - name: Signal ADE update
+        shell: powershell
         run: |
-          cd /d "C:\Project\ADE\ade-decision-engine"
-          call auto_update_ade.bat
+          $project = 'C:\Project\ADE\ade-decision-engine'
+          $runtime = Join-Path $project 'runtime'
+          $flag = Join-Path $runtime 'update.flag'
+          New-Item -ItemType Directory -Force -Path $runtime | Out-Null
+          Set-Content -Path $flag -Value '${{ github.sha }}' -Encoding UTF8
+          Write-Host "ADE update signal written: $flag"

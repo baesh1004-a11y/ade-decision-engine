@@ -89,19 +89,57 @@ def _render_shared_generation_controls(profile, runtime, context) -> None:
     sto_key = f"{profile.code}_sto"
     top_key = f"{profile.code}_top_n"
 
+    st.markdown(
+        """
+        <style>
+        @media(max-width:640px){
+          .wb-settings-grid div[data-testid="stHorizontalBlock"]{
+            display:grid!important;
+            grid-template-columns:repeat(2,minmax(0,1fr))!important;
+            gap:8px!important;
+          }
+          .wb-settings-grid div[data-testid="stColumn"]{
+            min-width:0!important;width:auto!important;flex:none!important;
+          }
+          .wb-settings-grid label{font-size:11px!important}
+          .wb-settings-grid input{min-height:42px!important;font-size:14px!important}
+          .wb-settings-actions div[data-testid="stHorizontalBlock"]{
+            display:grid!important;
+            grid-template-columns:1fr 1fr!important;
+            gap:8px!important;
+          }
+          .wb-settings-actions div[data-testid="stColumn"]{
+            min-width:0!important;width:auto!important;flex:none!important;
+          }
+          .wb-settings-actions div[data-testid="stColumn"]:first-child{
+            grid-column:1 / -1!important;
+          }
+          .wb-settings-actions .stButton>button,
+          .wb-settings-actions [data-testid="stPageLink-NavLink"]{
+            min-height:44px!important;font-size:13px!important;border-radius:12px!important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     with st.expander("추천 생성 설정 · 한국/미국 추천 메뉴와 공용", expanded=False):
         st.caption(
             "이 영역과 시장별 추천 메뉴는 동일한 설정 파일, 동일한 실행 작업, 동일한 DB 결과를 사용합니다. "
             "한 화면에서 시작한 작업은 다른 화면에서도 같은 상태로 표시됩니다."
         )
+        st.markdown('<div class="wb-settings-grid">', unsafe_allow_html=True)
         c1, c2, c3, c4, c5 = st.columns(5)
         c1.number_input("과거 패턴 기간(년)", 1, 10, step=1, key=years_key, on_change=_persist_widget_state, args=(st, profile.code))
         c2.number_input("비교할 과거 패턴 수", 10, 1000, step=10, key=pool_key, on_change=_persist_widget_state, args=(st, profile.code))
         c3.number_input("최소 주봉 유사도", 0.0, 100.0, step=1.0, key=weekly_key, on_change=_persist_widget_state, args=(st, profile.code))
         c4.number_input("STO 통과 기준", 0.0, 100.0, step=1.0, key=sto_key, on_change=_persist_widget_state, args=(st, profile.code))
         c5.number_input("저장할 추천 종목 수", 1, 50, step=1, key=top_key, on_change=_persist_widget_state, args=(st, profile.code))
+        st.markdown('</div>', unsafe_allow_html=True)
 
         running = bool(runtime.get("running"))
+        st.markdown('<div class="wb-settings-actions">', unsafe_allow_html=True)
         b1, b2, b3 = st.columns([3, 1, 1])
         if b1.button("추천 생성 및 저장", type="primary", use_container_width=True, disabled=running, key=f"workbench_run_{profile.code}"):
             _persist_widget_state(st, profile.code)
@@ -126,6 +164,7 @@ def _render_shared_generation_controls(profile, runtime, context) -> None:
             st.rerun()
         target = "pages/7_Daily_Center.py" if profile.code == "kr" else "pages/10_US_Daily_Center.py"
         b3.page_link(target, label=f"{profile.name} 추천 화면", use_container_width=True)
+        st.markdown('</div>', unsafe_allow_html=True)
 
         current_runtime = get_status(profile.code)
         state = str(current_runtime.get("state") or "IDLE")

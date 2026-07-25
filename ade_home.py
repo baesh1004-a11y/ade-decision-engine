@@ -4,6 +4,7 @@ import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 import pandas as pd
@@ -45,6 +46,18 @@ def main() -> None:
         .flow{padding:16px 18px;border-radius:17px;background:var(--ade-panel);border:1px solid var(--ade-line);min-height:95px}.flow strong{color:var(--ade-blue)}.flow span{display:block;margin-top:6px;color:var(--ade-muted);font-size:13px}
         .mobile-shell{display:none}
         .mobile-bottom-nav{display:none}
+        .recent-mobile{display:none}
+        .recent-card{padding:14px 15px;border:1px solid rgba(255,255,255,.09);border-radius:16px;background:linear-gradient(145deg,rgba(26,37,51,.96),rgba(17,25,36,.96));box-shadow:0 10px 24px rgba(0,0,0,.18)}
+        .recent-card+.recent-card{margin-top:10px}
+        .recent-card-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+        .recent-card-title{font-size:15px;font-weight:800;color:#f4f8fc}
+        .recent-card-symbol{margin-top:8px;font-size:21px;font-weight:850;letter-spacing:.02em;color:#fff}
+        .recent-card-time{margin-top:7px;font-size:12px;color:#93a5b8;word-break:break-all}
+        .recent-status{display:inline-flex;align-items:center;padding:5px 8px;border-radius:999px;font-size:11px;font-weight:800;border:1px solid transparent}
+        .recent-status.pending{background:rgba(245,184,73,.14);border-color:rgba(245,184,73,.3);color:#ffd889}
+        .recent-status.filled{background:rgba(49,189,132,.14);border-color:rgba(49,189,132,.3);color:#7ee2b5}
+        .recent-status.expired,.recent-status.failed,.recent-status.rejected{background:rgba(233,93,93,.14);border-color:rgba(233,93,93,.3);color:#ffaaaa}
+        .recent-status.neutral{background:rgba(132,156,184,.14);border-color:rgba(132,156,184,.3);color:#cad6e3}
         @media(max-width:900px){.ops-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:640px){
           .ops-strip{grid-template-columns:1fr}
@@ -57,6 +70,8 @@ def main() -> None:
           .mobile-bottom-nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:48px;color:#aeb8c6!important;text-decoration:none!important;font-size:11px;font-weight:700;border-radius:12px}
           .mobile-bottom-nav a span:first-child{font-size:19px;line-height:1}
           .mobile-bottom-nav a.active{background:#152840;color:#7fc4ff!important}
+          .recent-desktop{display:none}
+          .recent-mobile{display:block}
           [data-testid="stAppViewContainer"] .main .block-container{padding-bottom:96px!important;padding-top:.5rem!important}
           [data-testid="stSidebarCollapsedControl"]{top:74px!important}
         }
@@ -165,7 +180,10 @@ def main() -> None:
     if recent.empty:
         st.info("최근 실행 이력이 없습니다.")
     else:
+        st.markdown('<div class="recent-desktop">', unsafe_allow_html=True)
         st.dataframe(recent, width="stretch", hide_index=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown(_recent_activity_cards(recent), unsafe_allow_html=True)
 
     section_header(st, "빠른 실행", "자주 사용하는 기능")
     q1, q2, q3, q4, q5 = st.columns(5)
@@ -187,6 +205,36 @@ def _system_box(column, title: str, detail: str, healthy: bool | None) -> None:
     tone = "success" if healthy is True else "warning" if healthy is False else "neutral"
     state = "정상" if healthy is True else "확인 필요" if healthy is False else "알 수 없음"
     column.markdown(f'<div class="system-card"><h3>{title} {status_badge(state, tone)}</h3><p>{detail}</p></div>', unsafe_allow_html=True)
+
+
+def _recent_activity_cards(frame: pd.DataFrame) -> str:
+    cards: list[str] = []
+    for row in frame.to_dict("records"):
+        event_type = escape(str(row.get("구분", "-")))
+        symbol = escape(str(row.get("종목", "-")))
+        status = str(row.get("상태", "-")).upper()
+        time_text = escape(str(row.get("시각", "-")))
+        status_class = _status_class(status)
+        cards.append(
+            f'<article class="recent-card">'
+            f'<div class="recent-card-top"><span class="recent-card-title">{event_type}</span>'
+            f'<span class="recent-status {status_class}">{escape(status)}</span></div>'
+            f'<div class="recent-card-symbol">{symbol}</div>'
+            f'<div class="recent-card-time">{time_text}</div>'
+            f'</article>'
+        )
+    return '<div class="recent-mobile">' + "".join(cards) + "</div>"
+
+
+def _status_class(status: str) -> str:
+    normalized = status.upper()
+    if normalized in {"PENDING", "WAITING", "QUEUED"}:
+        return "pending"
+    if normalized in {"FILLED", "COMPLETED", "DONE", "SUCCESS"}:
+        return "filled"
+    if normalized in {"EXPIRED", "FAILED", "REJECTED", "CANCELLED", "CANCELED"}:
+        return normalized.lower()
+    return "neutral"
 
 
 def _latest_recommendation_count(db_path: Path) -> int | None:

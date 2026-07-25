@@ -17,7 +17,47 @@ from recommendation.run_context import load_latest_context
 def run() -> None:
     st.set_page_config(page_title="ADE 투자 워크벤치", page_icon="📊", layout="wide")
     apply_design_system()
+    st.markdown(
+        """
+        <style>
+        @media(max-width:640px){
+          .wb-header-row div[data-testid="stHorizontalBlock"]{
+            display:block!important;
+          }
+          .wb-header-row div[data-testid="stColumn"]{
+            min-width:0!important;width:100%!important;flex:none!important;
+          }
+          .wb-market-selector{
+            margin:-3px 0 10px;
+          }
+          .wb-market-selector [data-testid="stSegmentedControl"]{
+            width:100%!important;
+          }
+          .wb-market-selector [data-testid="stSegmentedControl"]>div{
+            display:grid!important;
+            grid-template-columns:repeat(2,minmax(0,1fr))!important;
+            width:100%!important;
+            gap:6px!important;
+            padding:4px!important;
+            border:1px solid #d9e5ef!important;
+            border-radius:12px!important;
+            background:#edf3f8!important;
+          }
+          .wb-market-selector button{
+            width:100%!important;
+            min-height:36px!important;
+            padding:0 8px!important;
+            border-radius:9px!important;
+            font-size:12px!important;
+            font-weight:800!important;
+          }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
+    st.markdown('<div class="wb-header-row">', unsafe_allow_html=True)
     title_col, market_col = st.columns([5, 1])
     with title_col:
         page_header(
@@ -26,11 +66,14 @@ def run() -> None:
             badges=[StatusBadge("AI DECISION WORKSPACE", "info")],
         )
     with market_col:
+        st.markdown('<div class="wb-market-selector">', unsafe_allow_html=True)
         market = st.segmented_control(
             "시장", options=["kr", "us"], default="kr",
             format_func=lambda value: "🇰🇷 한국" if value == "kr" else "🇺🇸 미국",
             label_visibility="collapsed",
         )
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     profile = get_market_profile(str(market or "kr"))
     if not profile.db_path.exists():

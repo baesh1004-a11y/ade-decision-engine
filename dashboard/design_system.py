@@ -152,6 +152,10 @@ div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid
   .ade-section{display:block;margin:20px 0 9px}
   .ade-section h2{font-size:19px;color:var(--ade-ink)}
   .ade-section span{display:block;margin-top:4px;font-size:12px;color:var(--ade-muted)}
+  .ade-step{align-items:center;gap:8px;padding:8px 2px 7px;margin:14px 0 7px;border:0;border-bottom:1px solid #dfe8f1;border-radius:0;background:transparent;box-shadow:none}
+  .ade-step>span{width:22px;height:22px;border-radius:7px;font-size:11px;box-shadow:none;background:var(--ade-blue)}
+  .ade-step b{font-size:15px;line-height:1.2;color:var(--ade-ink)}
+  .ade-step small{display:none}
   .ade-card,.ade-kpi,.ade-panel,.action-card,.market-card,.system-card,.flow,.ops-card{background:#fff!important;border:1px solid var(--ade-line)!important;border-radius:18px!important;box-shadow:var(--ade-shadow-soft)!important}
   .ade-card,.ade-panel{padding:16px!important}.ade-kpi{padding:15px!important;min-height:104px!important}
   .ade-kpi span,.ade-kpi small,.ade-card p,.ade-panel p,.action-card p,.market-card p,.system-card p,.flow span,.ops-card span,.ops-card small{color:var(--ade-muted)!important}

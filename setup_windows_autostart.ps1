@@ -27,6 +27,10 @@ if (-not $pythonLauncher) {
 $runnerRun = Join-Path $RunnerDir "run.cmd"
 Assert-Path $runnerRun "GitHub Runner run.cmd"
 
+$runnerServiceMarker = Join-Path $RunnerDir ".service"
+$runnerServiceHelper = Join-Path $RunnerDir "svc.cmd"
+$runnerUsesService = (Test-Path $runnerServiceMarker) -and (Test-Path $runnerServiceHelper)
+
 $startupDir = [Environment]::GetFolderPath([Environment+SpecialFolder]::Startup)
 if (-not $startupDir) {
     throw "Windows Startup folder could not be resolved."
@@ -38,28 +42,48 @@ $adeLauncherContent = @"
 @echo off
 cd /d "$ProjectDir"
 timeout /t 8 /nobreak >nul
-start "ADE" /min "$($pythonLauncher.Source)" "$runAdePath"
+powershell.exe -NoProfile -WindowStyle Hidden -Command "$target = '$runAdePath'; $running = Get-CimInstance Win32_Process -Filter \"Name='python.exe' OR Name='pythonw.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like ('*' + $target + '*') }; if (-not $running) { Start-Process -FilePath '$($pythonLauncher.Source)' -ArgumentList @($target) -WorkingDirectory '$ProjectDir' -WindowStyle Minimized }"
 "@
 Set-Content -Path $adeLauncher -Value $adeLauncherContent -Encoding ASCII
 
-Write-Step "Creating GitHub Runner startup launcher..."
 $runnerLauncher = Join-Path $startupDir "GitHub ADE Runner.cmd"
-$runnerLauncherContent = @"
+if ($runnerUsesService) {
+    Write-Step "Runner service detected; removing duplicate Startup launcher..."
+    if (Test-Path $runnerLauncher) {
+        Remove-Item $runnerLauncher -Force
+    }
+    try {
+        Push-Location $RunnerDir
+        & $runnerServiceHelper start | Out-Host
+    }
+    catch {
+        Write-Warning "Runner service could not be started automatically: $($_.Exception.Message)"
+    }
+    finally {
+        Pop-Location
+    }
+}
+else {
+    Write-Step "Creating guarded GitHub Runner startup launcher..."
+    $runnerLauncherContent = @"
 @echo off
 cd /d "$RunnerDir"
 timeout /t 3 /nobreak >nul
-start "GitHub ADE Runner" /min "$runnerRun"
+powershell.exe -NoProfile -WindowStyle Hidden -Command "$dir = '$RunnerDir'; $running = Get-CimInstance Win32_Process -Filter \"Name='Runner.Listener.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.ExecutablePath -like ($dir + '*') }; if (-not $running) { Start-Process -FilePath '$runnerRun' -WorkingDirectory '$RunnerDir' -WindowStyle Minimized }"
 "@
-Set-Content -Path $runnerLauncher -Value $runnerLauncherContent -Encoding ASCII
+    Set-Content -Path $runnerLauncher -Value $runnerLauncherContent -Encoding ASCII
+}
 
 Write-Step "Starting GitHub Runner now..."
-$existingRunner = Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.ExecutablePath -like "$RunnerDir*" }
-if (-not $existingRunner) {
-    Start-Process -FilePath $runnerRun -WorkingDirectory $RunnerDir -WindowStyle Minimized
-}
-else {
-    Write-Step "GitHub Runner is already running."
+if (-not $runnerUsesService) {
+    $existingRunner = Get-CimInstance Win32_Process -Filter "Name='Runner.Listener.exe'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.ExecutablePath -like "$RunnerDir*" }
+    if (-not $existingRunner) {
+        Start-Process -FilePath $runnerRun -WorkingDirectory $RunnerDir -WindowStyle Minimized
+    }
+    else {
+        Write-Step "GitHub Runner is already running."
+    }
 }
 
 Write-Step "Starting ADE now..."
@@ -75,11 +99,18 @@ else {
 Write-Host ""
 Write-Host "Setup complete."
 Write-Host "After the next Windows sign-in:"
-Write-Host "  1. GitHub Runner starts automatically from the Startup folder."
+if ($runnerUsesService) {
+    Write-Host "  1. GitHub Runner starts as a Windows service."
+}
+else {
+    Write-Host "  1. GitHub Runner starts once from the Startup folder."
+}
 Write-Host "  2. ADE starts automatically after a short delay."
-Write-Host "  3. GitHub Actions can write runtime\update.flag."
-Write-Host "  4. ADE updates and restarts itself."
+Write-Host "  3. Duplicate Runner sessions are prevented."
+Write-Host "  4. GitHub Actions can write runtime\update.flag."
 Write-Host ""
 Write-Host "Startup files:"
-Write-Host "  $runnerLauncher"
 Write-Host "  $adeLauncher"
+if (-not $runnerUsesService) {
+    Write-Host "  $runnerLauncher"
+}

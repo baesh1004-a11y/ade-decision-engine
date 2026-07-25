@@ -35,6 +35,22 @@ def main() -> None:
     st.markdown(
         """
         <style>
+        :root{
+          --mobile-bg:#0a1018;
+          --mobile-panel:#111a26;
+          --mobile-panel-2:#162231;
+          --mobile-line:rgba(255,255,255,.08);
+          --mobile-text:#f7fbff;
+          --mobile-muted:#92a4b8;
+          --mobile-blue:#68b7ff;
+          --mobile-green:#5ad6a0;
+          --mobile-amber:#ffd27d;
+          --mobile-red:#ff9b9b;
+        }
+        .mobile-app{display:none}
+        .desktop-home{display:block}
+        .mobile-bottom-nav{display:none}
+        .mobile-topbar,.mobile-summary-grid,.mobile-section,.mobile-action-list,.mobile-account,.mobile-events{display:none}
         .ops-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0 20px}
         .ops-card{padding:17px 18px;border:1px solid var(--ade-line);border-radius:18px;background:var(--ade-panel);box-shadow:var(--ade-shadow)}
         .ops-card span{display:block;color:var(--ade-muted);font-size:12px;font-weight:760}.ops-card strong{display:block;margin:8px 0 4px;font-size:22px;color:var(--ade-ink)}
@@ -44,8 +60,6 @@ def main() -> None:
         .market-card,.system-card{padding:18px 19px;border-radius:18px;background:var(--ade-panel);border:1px solid var(--ade-line);box-shadow:var(--ade-shadow);min-height:130px}
         .market-card h3,.system-card h3{margin:0 0 8px;font-size:17px}.market-card p,.system-card p{margin:5px 0;color:var(--ade-muted);font-size:13px}
         .flow{padding:16px 18px;border-radius:17px;background:var(--ade-panel);border:1px solid var(--ade-line);min-height:95px}.flow strong{color:var(--ade-blue)}.flow span{display:block;margin-top:6px;color:var(--ade-muted);font-size:13px}
-        .mobile-shell{display:none}
-        .mobile-bottom-nav{display:none}
         .recent-mobile{display:none}
         .recent-card{padding:14px 15px;border:1px solid rgba(255,255,255,.09);border-radius:16px;background:linear-gradient(145deg,rgba(26,37,51,.96),rgba(17,25,36,.96));box-shadow:0 10px 24px rgba(0,0,0,.18)}
         .recent-card+.recent-card{margin-top:10px}
@@ -56,24 +70,60 @@ def main() -> None:
         .recent-status{display:inline-flex;align-items:center;padding:5px 8px;border-radius:999px;font-size:11px;font-weight:800;border:1px solid transparent}
         .recent-status.pending{background:rgba(245,184,73,.14);border-color:rgba(245,184,73,.3);color:#ffd889}
         .recent-status.filled{background:rgba(49,189,132,.14);border-color:rgba(49,189,132,.3);color:#7ee2b5}
-        .recent-status.expired,.recent-status.failed,.recent-status.rejected{background:rgba(233,93,93,.14);border-color:rgba(233,93,93,.3);color:#ffaaaa}
+        .recent-status.expired,.recent-status.failed,.recent-status.rejected,.recent-status.cancelled,.recent-status.canceled{background:rgba(233,93,93,.14);border-color:rgba(233,93,93,.3);color:#ffaaaa}
         .recent-status.neutral{background:rgba(132,156,184,.14);border-color:rgba(132,156,184,.3);color:#cad6e3}
         @media(max-width:900px){.ops-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
         @media(max-width:640px){
-          .ops-strip{grid-template-columns:1fr}
-          .mobile-shell{display:block;position:sticky;top:0;z-index:999;padding:12px 14px 10px;margin:-1rem -1rem 14px;background:rgba(15,22,32,.94);backdrop-filter:blur(14px);border-bottom:1px solid rgba(255,255,255,.08)}
-          .mobile-shell h1{margin:0;font-size:24px;line-height:1.2;color:#f8fbff;letter-spacing:-.02em}
-          .mobile-shell p{margin:5px 0 10px;font-size:13px;color:#aab7c8}
-          .mobile-shell .meta{display:flex;gap:8px;flex-wrap:wrap}
-          .mobile-shell .chip{display:inline-flex;align-items:center;padding:6px 9px;border-radius:999px;background:#172334;border:1px solid #2d425d;color:#d9e7f7;font-size:11px;font-weight:700}
-          .mobile-bottom-nav{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:0;right:0;bottom:0;z-index:1000;background:rgba(11,17,25,.96);backdrop-filter:blur(14px);border-top:1px solid rgba(255,255,255,.1);padding:7px 6px calc(7px + env(safe-area-inset-bottom));box-shadow:0 -10px 30px rgba(0,0,0,.28)}
-          .mobile-bottom-nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;min-height:48px;color:#aeb8c6!important;text-decoration:none!important;font-size:11px;font-weight:700;border-radius:12px}
+          [data-testid="stSidebar"]{display:none!important}
+          [data-testid="stSidebarCollapsedControl"]{display:none!important}
+          [data-testid="stHeader"]{background:transparent!important}
+          [data-testid="stToolbar"]{display:none!important}
+          [data-testid="stDecoration"]{display:none!important}
+          [data-testid="stAppViewContainer"]{background:var(--mobile-bg)!important}
+          [data-testid="stAppViewContainer"] .main .block-container{max-width:none!important;padding:0 16px 104px!important}
+          .desktop-home{display:none!important}
+          .mobile-app{display:block;color:var(--mobile-text);padding-top:max(10px,env(safe-area-inset-top))}
+          .mobile-topbar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:18px 2px 10px}
+          .mobile-topbar small{display:block;color:var(--mobile-muted);font-size:12px;font-weight:700;letter-spacing:.02em}
+          .mobile-topbar h1{margin:5px 0 0;color:var(--mobile-text);font-size:29px;line-height:1.1;letter-spacing:-.04em}
+          .mobile-status-dot{display:flex;align-items:center;gap:7px;padding:8px 10px;border-radius:999px;background:rgba(90,214,160,.1);border:1px solid rgba(90,214,160,.22);color:#8be9bd;font-size:11px;font-weight:800;white-space:nowrap}
+          .mobile-status-dot:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--mobile-green);box-shadow:0 0 0 4px rgba(90,214,160,.12)}
+          .mobile-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:8px}
+          .mobile-summary-card{padding:16px;border-radius:20px;background:linear-gradient(145deg,var(--mobile-panel-2),var(--mobile-panel));border:1px solid var(--mobile-line);box-shadow:0 14px 30px rgba(0,0,0,.18)}
+          .mobile-summary-card span{display:block;color:var(--mobile-muted);font-size:12px;font-weight:750}
+          .mobile-summary-card strong{display:block;margin-top:8px;color:var(--mobile-text);font-size:26px;line-height:1;font-weight:900;letter-spacing:-.04em}
+          .mobile-summary-card em{display:block;margin-top:7px;color:#b7c4d2;font-size:11px;font-style:normal}
+          .mobile-section{display:block;margin-top:28px}
+          .mobile-section-head{display:flex;align-items:end;justify-content:space-between;gap:12px;margin-bottom:11px}
+          .mobile-section-head h2{margin:0;color:var(--mobile-text);font-size:19px;letter-spacing:-.03em}
+          .mobile-section-head span{color:var(--mobile-muted);font-size:11px}
+          .mobile-action-list{display:grid;gap:10px}
+          .mobile-action{display:grid;grid-template-columns:44px 1fr auto;align-items:center;gap:12px;padding:14px;border-radius:20px;background:var(--mobile-panel);border:1px solid var(--mobile-line);text-decoration:none!important}
+          .mobile-action .icon{display:grid;place-items:center;width:44px;height:44px;border-radius:15px;background:#17293d;font-size:21px}
+          .mobile-action strong{display:block;color:var(--mobile-text);font-size:15px}
+          .mobile-action small{display:block;margin-top:4px;color:var(--mobile-muted);font-size:12px;line-height:1.35}
+          .mobile-action .chev{color:#6f8297;font-size:22px}
+          .mobile-account{display:block;padding:18px;border-radius:24px;background:linear-gradient(145deg,#14314b,#0e2235);border:1px solid rgba(104,183,255,.16);box-shadow:0 18px 36px rgba(0,0,0,.23)}
+          .mobile-account .label{color:#a6bdd2;font-size:12px;font-weight:750}
+          .mobile-account .value{margin-top:7px;color:#fff;font-size:28px;font-weight:900;letter-spacing:-.05em}
+          .mobile-account-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-top:16px}
+          .mobile-account-grid div{padding:12px;border-radius:16px;background:rgba(255,255,255,.055)}
+          .mobile-account-grid span{display:block;color:#9db2c7;font-size:11px}
+          .mobile-account-grid strong{display:block;margin-top:5px;color:#f5fbff;font-size:15px}
+          .mobile-events{display:grid;gap:9px}
+          .mobile-event{display:grid;grid-template-columns:1fr auto;gap:12px;padding:14px 15px;border-radius:18px;background:var(--mobile-panel);border:1px solid var(--mobile-line)}
+          .mobile-event strong{display:block;color:var(--mobile-text);font-size:14px}
+          .mobile-event small{display:block;margin-top:5px;color:var(--mobile-muted);font-size:11px}
+          .mobile-event .symbol{margin-top:7px;color:#dbe8f4;font-size:17px;font-weight:850}
+          .mobile-event .status{align-self:start;padding:5px 8px;border-radius:999px;font-size:10px;font-weight:850}
+          .mobile-event .status.pending{background:rgba(255,210,125,.12);color:var(--mobile-amber)}
+          .mobile-event .status.filled{background:rgba(90,214,160,.12);color:#86e6b9}
+          .mobile-event .status.expired,.mobile-event .status.failed,.mobile-event .status.rejected,.mobile-event .status.cancelled,.mobile-event .status.canceled{background:rgba(255,155,155,.12);color:var(--mobile-red)}
+          .mobile-event .status.neutral{background:rgba(146,164,184,.13);color:#c6d0da}
+          .mobile-bottom-nav{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:0;right:0;bottom:0;z-index:1000;background:rgba(8,13,20,.97);backdrop-filter:blur(18px);border-top:1px solid rgba(255,255,255,.08);padding:8px 8px calc(8px + env(safe-area-inset-bottom));box-shadow:0 -12px 28px rgba(0,0,0,.28)}
+          .mobile-bottom-nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;min-height:48px;color:#8393a5!important;text-decoration:none!important;font-size:10px;font-weight:800;border-radius:14px}
           .mobile-bottom-nav a span:first-child{font-size:19px;line-height:1}
-          .mobile-bottom-nav a.active{background:#152840;color:#7fc4ff!important}
-          .recent-desktop{display:none}
-          .recent-mobile{display:block}
-          [data-testid="stAppViewContainer"] .main .block-container{padding-bottom:96px!important;padding-top:.5rem!important}
-          [data-testid="stSidebarCollapsedControl"]{top:74px!important}
+          .mobile-bottom-nav a.active{background:#15283c;color:#78c5ff!important}
         }
         </style>
         """,
@@ -81,28 +131,7 @@ def main() -> None:
     )
 
     mode = os.getenv("KIS_ENV", "paper").upper()
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    st.markdown(
-        f"""
-        <div class="mobile-shell">
-          <h1>상황판</h1>
-          <p>오늘의 핵심 상태와 주문 흐름을 빠르게 확인합니다.</p>
-          <div class="meta">
-            <span class="chip">KIS {mode}</span>
-            <span class="chip">업데이트 {now}</span>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    page_hero(
-        st,
-        "상황판",
-        "오늘 해야 할 일, 시장 준비도, 승인 대기 주문과 계좌 상태를 한 화면에서 확인합니다.",
-        eyebrow="ADE · INVESTMENT OPERATIONS TERMINAL",
-        badge=f"KIS {mode} · {now}",
-    )
-
+    now = datetime.now().strftime("%m월 %d일 %H:%M")
     kr_db = Path("datahub/market.db")
     us_db = Path("datahub/us_market.db")
     kr = inspect_market_db(str(kr_db), "kr")
@@ -120,6 +149,34 @@ def main() -> None:
     recommendation_total = _count_sum(kr_rec, us_rec)
     portfolio = _portfolio_summary(kr_db, us_db)
     kis_detail, kis_health = _kis_connection_status()
+    recent = _recent_activity(kr_db, us_db)
+
+    st.markdown(
+        _mobile_home(
+            mode=mode,
+            now=now,
+            kr=kr,
+            us=us,
+            recommendation_total=recommendation_total,
+            pending_orders=pending_orders,
+            scheduled=scheduled,
+            validation_total=validation_total,
+            portfolio=portfolio,
+            kis_detail=kis_detail,
+            kis_health=kis_health,
+            recent=recent,
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="desktop-home">', unsafe_allow_html=True)
+    page_hero(
+        st,
+        "상황판",
+        "오늘 해야 할 일, 시장 준비도, 승인 대기 주문과 계좌 상태를 한 화면에서 확인합니다.",
+        eyebrow="ADE · INVESTMENT OPERATIONS TERMINAL",
+        badge=f"KIS {mode} · {now}",
+    )
 
     section_header(st, "오늘의 핵심 상태", "추천 · 검증 · 주문 · 예약 · 계좌")
     a, b, c, d, e, f = st.columns(6)
@@ -176,14 +233,10 @@ def main() -> None:
     w4.markdown('<div class="flow"><strong>04 성과 점검</strong><span>포트폴리오와 성과 분석</span></div>', unsafe_allow_html=True)
 
     section_header(st, "최근 실행", "추천 및 주문 이벤트")
-    recent = _recent_activity(kr_db, us_db)
     if recent.empty:
         st.info("최근 실행 이력이 없습니다.")
     else:
-        st.markdown('<div class="recent-desktop">', unsafe_allow_html=True)
         st.dataframe(recent, width="stretch", hide_index=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-        st.markdown(_recent_activity_cards(recent), unsafe_allow_html=True)
 
     section_header(st, "빠른 실행", "자주 사용하는 기능")
     q1, q2, q3, q4, q5 = st.columns(5)
@@ -192,8 +245,101 @@ def main() -> None:
     q3.page_link("pages/9_Trading_Desk.py", label="한국 주문", icon="💳", width="stretch")
     q4.page_link("pages/12_US_Trading_Desk.py", label="미국 주문", icon="💵", width="stretch")
     q5.page_link("pages/15_Scheduled_Orders.py", label="예약주문", icon="🗓️", width="stretch")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('''<nav class="mobile-bottom-nav"><a class="active" href="/"><span>⌂</span><span>홈</span></a><a href="/Daily_Center"><span>📈</span><span>추천</span></a><a href="/Trading_Desk"><span>💳</span><span>주문</span></a><a href="/Scheduled_Orders"><span>🗓️</span><span>예약</span></a><a href="#"><span>⋯</span><span>더보기</span></a></nav>''', unsafe_allow_html=True)
+
+def _mobile_home(
+    *,
+    mode: str,
+    now: str,
+    kr,
+    us,
+    recommendation_total: int | None,
+    pending_orders: int | None,
+    scheduled: dict[str, int],
+    validation_total: int | None,
+    portfolio: PortfolioSummary,
+    kis_detail: str,
+    kis_health: bool | None,
+    recent: pd.DataFrame,
+) -> str:
+    system_ready = bool(kr.ready and us.ready and kis_health is not False)
+    event_html = _mobile_event_cards(recent)
+    return f'''
+    <div class="mobile-app">
+      <header class="mobile-topbar">
+        <div><small>{escape(now)} · KIS {escape(mode)}</small><h1>상황판</h1></div>
+        <div class="mobile-status-dot">{"정상" if system_ready else "확인 필요"}</div>
+      </header>
+
+      <section class="mobile-summary-grid">
+        {_mobile_summary_card("AI 추천", _count_text(recommendation_total), "누적 추천")}
+        {_mobile_summary_card("승인 대기", _count_text(pending_orders), "확인할 주문")}
+        {_mobile_summary_card("활성 예약", str(scheduled["active"]), f'오늘 {scheduled["due_today"]}건 실행')}
+        {_mobile_summary_card("검증 완료", _count_text(validation_total), "판단 준비")}
+      </section>
+
+      <section class="mobile-section">
+        <div class="mobile-section-head"><h2>바로 실행</h2><span>자주 쓰는 기능</span></div>
+        <div class="mobile-action-list">
+          {_mobile_action("📈", "AI 추천", "한국·미국 추천 결과 확인", "/Recommendation_Workbench")}
+          {_mobile_action("💳", "승인 대기 주문", f'{_count_text(pending_orders)}건 검토 필요', "/Trading_Desk")}
+          {_mobile_action("🗓️", "예약주문", f'활성 {scheduled["active"]}건 · 실패 {scheduled["failed"]}건', "/Scheduled_Orders")}
+          {_mobile_action("💼", "포트폴리오", f'보유 종목 {portfolio.total_holdings}개', "/ADE_Cockpit")}
+        </div>
+      </section>
+
+      <section class="mobile-section">
+        <div class="mobile-section-head"><h2>내 계좌</h2><span>{escape(kis_detail)}</span></div>
+        <div class="mobile-account">
+          <div class="label">한국 계좌 평가</div>
+          <div class="value">{_format_money(portfolio.krw_value)}</div>
+          <div class="mobile-account-grid">
+            <div><span>현금</span><strong>{_format_money(portfolio.krw_cash)}</strong></div>
+            <div><span>미국 평가</span><strong>{_format_usd(portfolio.usd_value)}</strong></div>
+            <div><span>한국시장</span><strong>{"정상" if kr.ready else "확인 필요"}</strong></div>
+            <div><span>미국시장</span><strong>{"정상" if us.ready else "확인 필요"}</strong></div>
+          </div>
+        </div>
+      </section>
+
+      <section class="mobile-section">
+        <div class="mobile-section-head"><h2>최근 이벤트</h2><span>최신 주문</span></div>
+        <div class="mobile-events">{event_html}</div>
+      </section>
+    </div>
+    <nav class="mobile-bottom-nav">
+      <a class="active" href="/"><span>⌂</span><span>홈</span></a>
+      <a href="/Recommendation_Workbench"><span>📈</span><span>추천</span></a>
+      <a href="/Trading_Desk"><span>💳</span><span>주문</span></a>
+      <a href="/Scheduled_Orders"><span>🗓️</span><span>예약</span></a>
+      <a href="/ADE_Cockpit"><span>💼</span><span>자산</span></a>
+    </nav>
+    '''
+
+
+def _mobile_summary_card(label: str, value: str, detail: str) -> str:
+    return f'<div class="mobile-summary-card"><span>{escape(label)}</span><strong>{escape(value)}</strong><em>{escape(detail)}</em></div>'
+
+
+def _mobile_action(icon: str, title: str, detail: str, href: str) -> str:
+    return f'<a class="mobile-action" href="{href}"><span class="icon">{icon}</span><span><strong>{escape(title)}</strong><small>{escape(detail)}</small></span><span class="chev">›</span></a>'
+
+
+def _mobile_event_cards(frame: pd.DataFrame) -> str:
+    if frame.empty:
+        return '<div class="mobile-event"><div><strong>최근 이벤트 없음</strong><small>새 주문과 추천이 여기에 표시됩니다.</small></div></div>'
+    cards: list[str] = []
+    for row in frame.head(5).to_dict("records"):
+        event_type = escape(str(row.get("구분", "-")))
+        symbol = escape(str(row.get("종목", "-")))
+        status = str(row.get("상태", "-")).upper()
+        time_text = escape(str(row.get("시각", "-")))
+        cards.append(
+            f'<article class="mobile-event"><div><strong>{event_type}</strong><div class="symbol">{symbol}</div><small>{time_text}</small></div>'
+            f'<span class="status {_status_class(status)}">{escape(status)}</span></article>'
+        )
+    return "".join(cards)
 
 
 def _action_card(column, title: str, value: str, description: str, target: str, label: str, icon: str) -> None:
@@ -205,25 +351,6 @@ def _system_box(column, title: str, detail: str, healthy: bool | None) -> None:
     tone = "success" if healthy is True else "warning" if healthy is False else "neutral"
     state = "정상" if healthy is True else "확인 필요" if healthy is False else "알 수 없음"
     column.markdown(f'<div class="system-card"><h3>{title} {status_badge(state, tone)}</h3><p>{detail}</p></div>', unsafe_allow_html=True)
-
-
-def _recent_activity_cards(frame: pd.DataFrame) -> str:
-    cards: list[str] = []
-    for row in frame.to_dict("records"):
-        event_type = escape(str(row.get("구분", "-")))
-        symbol = escape(str(row.get("종목", "-")))
-        status = str(row.get("상태", "-")).upper()
-        time_text = escape(str(row.get("시각", "-")))
-        status_class = _status_class(status)
-        cards.append(
-            f'<article class="recent-card">'
-            f'<div class="recent-card-top"><span class="recent-card-title">{event_type}</span>'
-            f'<span class="recent-status {status_class}">{escape(status)}</span></div>'
-            f'<div class="recent-card-symbol">{symbol}</div>'
-            f'<div class="recent-card-time">{time_text}</div>'
-            f'</article>'
-        )
-    return '<div class="recent-mobile">' + "".join(cards) + "</div>"
 
 
 def _status_class(status: str) -> str:

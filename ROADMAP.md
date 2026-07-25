@@ -46,11 +46,12 @@
 | 23 | Decision & Position Sizing Engine | 완료 | 미구현 | 계획 완료 | 미확인 | 최종 행동, 목표 금액·수량, 하루 1종목 선정, 보호 규칙 |
 | 24 | Order Validation & Routing Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | 주문 직전 재검증, 가격 보호, 멱등성, 브로커 라우팅, 불확실 응답 격리 |
 | 25 | Execution Reconciliation & Recovery Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | VERIFY_REQUIRED, 부분체결, 중복체결, 응답 유실, 원장 불일치 대사·복구 |
+| 26 | Portfolio Rebalancing & Exit Orchestration Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 손절·추적손절·이익보호·집중도·현금·낙폭 기반 축소 및 청산 우선순위 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 현재 계획된 핵심 판단·주문·체결복구·운영·감사 계층 설계 완료
+[██████████] 현재 계획된 핵심 판단·주문·체결복구·리밸런싱·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -61,9 +62,10 @@
 4. 고정 CSV fixture 기반 스모크 테스트
 5. Candidate → Signal → Portfolio Risk → Decision 계약 정합성 검증
 6. Decision & Position Sizing 최소 코드 구현
-7. OrderIntent와 순수 검증 함수 최소 구현
-8. idempotency reservation과 DRY_RUN 경로 구현
-9. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
+7. 손절·추적손절·이익보호 순수 함수와 Exit Proposal 모델 구현
+8. OrderIntent와 순수 검증 함수 최소 구현
+9. idempotency reservation과 DRY_RUN 경로 구현
+10. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
 
 ## 다음 작업
 
@@ -73,12 +75,14 @@
 4. 기존 파이프라인을 Orchestrator stage로 래핑
 5. DataHub → Feature → Signal → Risk → Decision fixture 통합 테스트
 6. `decision/models.py`, `decision/sizing.py`, `decision/engine.py` 최소 구현
-7. `order/models.py`, `order/contract.py`, `order/pretrade.py`, `order/pricing.py` 최소 구현
-8. SQLite idempotency reservation과 `DryRunBrokerAdapter` 구현
-9. `execution/reconciliation/` 모델·중복 제거·resolver 최소 구현
-10. VERIFY_REQUIRED → broker evidence → 상태 확정 fixture 테스트
-11. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-12. Report Engine용 최소 JSON fixture 생성
+7. `portfolio/rebalancing/models.py`, `exit_rules.py`, `constraints.py`, `sizing.py` 최소 구현
+8. Rebalancing → Decision → OrderIntent 고정 포트폴리오 fixture 테스트
+9. `order/models.py`, `order/contract.py`, `order/pretrade.py`, `order/pricing.py` 최소 구현
+10. SQLite idempotency reservation과 `DryRunBrokerAdapter` 구현
+11. `execution/reconciliation/` 모델·중복 제거·resolver 최소 구현
+12. VERIFY_REQUIRED → broker evidence → 상태 확정 fixture 테스트
+13. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+14. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -105,3 +109,7 @@
 - 대사 복구는 원본 이벤트를 수정하지 않고 append-only recovery event로 기록한다.
 - 내부 체결 수량이 브로커 체결 수량보다 큰 경우 자동 복구하지 않고 수동 검토한다.
 - 미해결 주문이 존재하는 동안 예약금·예약수량을 임의 해제하지 않는다.
+- 손절·강제축소·강제청산은 신규 매수보다 먼저 평가한다.
+- Exit Proposal 수량은 보유수량·매도가능수량·미체결 예약수량 한도를 초과할 수 없다.
+- 체결 대사가 완료되지 않은 포지션은 자동 리밸런싱하지 않고 수동 검토한다.
+- 동일 입력 스냅샷과 정책은 결정론적인 Exit Proposal과 hash를 생성해야 한다.

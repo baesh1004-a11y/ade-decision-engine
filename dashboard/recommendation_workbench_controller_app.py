@@ -63,13 +63,14 @@ def run() -> None:
           .wb-mobile-flow>.ade-step .ade-step-no{font-size:10px!important}
           .wb-mobile-flow>.ade-step h3{font-size:14px!important;line-height:1.2!important;margin:0!important}
           .wb-mobile-flow>.ade-step p{display:none!important}
+          .wb-mobile-section{display:block!important;width:100%!important;margin:0 0 12px!important}
           .wb-mobile-flow .selected-stock{padding:8px 0!important;margin:0!important;border-bottom:1px solid #e2e8f0!important}
           .wb-mobile-flow .selected-stock b{font-size:14px!important}
           .wb-mobile-flow .selected-stock small,.wb-mobile-flow .selected-stock span{font-size:11px!important}
-          .wb-mobile-flow div[data-testid="stHorizontalBlock"]{display:block!important}
-          .wb-mobile-flow div[data-testid="stColumn"]{width:100%!important;min-width:0!important;flex:none!important}
-          .wb-mobile-flow div[data-testid="stDataFrame"]{height:auto!important;max-height:260px!important}
-          .wb-mobile-flow [data-testid="stPlotlyChart"]{min-height:240px!important}
+          .wb-mobile-section div[data-testid="stHorizontalBlock"]{display:block!important}
+          .wb-mobile-section div[data-testid="stColumn"]{display:block!important;width:100%!important;min-width:0!important;max-width:none!important;flex:none!important;margin:0 0 6px!important}
+          .wb-mobile-flow div[data-testid="stDataFrame"]{height:auto!important;max-height:260px!important;width:100%!important}
+          .wb-mobile-flow [data-testid="stPlotlyChart"]{min-height:240px!important;width:100%!important}
           .wb-mobile-flow .mini-card{padding:7px 0!important;border-bottom:1px solid #e2e8f0!important}
           .wb-mobile-flow .order-card,.wb-mobile-flow .order-count{padding:8px 0!important;border-bottom:1px solid #e2e8f0!important}
           .wb-desktop-flow .context-banner,.wb-desktop-flow .kpi-group{display:none!important}
@@ -162,14 +163,23 @@ def run() -> None:
         st.markdown('</div>', unsafe_allow_html=True)
 
         st.markdown('<div class="wb-mobile-flow">', unsafe_allow_html=True)
-        step_header(1, "추천·분석", "종목을 선택하고 차트와 검증 결과를 함께 확인합니다.")
+        st.markdown('<section class="wb-mobile-section">', unsafe_allow_html=True)
+        step_header(1, "추천 목록", "종목을 선택합니다.")
         _render_controller(st, recommendations, selected, profile.code)
+        st.markdown('</section>', unsafe_allow_html=True)
+
+        st.markdown('<section class="wb-mobile-section">', unsafe_allow_html=True)
+        step_header(2, "분석 및 검증", "차트와 검증 결과를 확인합니다.")
         base._comparison_panel(
             st, selected, current, historical, pattern, payload,
             profile.code, profile.db_path, context.run_id, validation,
         )
-        step_header(2, "주문", "선택 종목의 주문 화면으로 연결합니다.")
+        st.markdown('</section>', unsafe_allow_html=True)
+
+        st.markdown('<section class="wb-mobile-section">', unsafe_allow_html=True)
+        step_header(3, "주문", "주문 화면으로 연결합니다.")
         base._order_panel(st, selected, profile.code, validation, context)
+        st.markdown('</section>', unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     finally:
         conn.close()

@@ -401,8 +401,10 @@ def _kis_connection_status() -> tuple[str, bool | None]:
     try:
         env = load_kis_env()
     except Exception:
+        return "환경설정 확인 실패", False
+    if env is None:
         return "환경설정 일부 누락", False
-    if not env.app_key or not env.app_secret:
+    if not getattr(env, "app_key", None) or not getattr(env, "app_secret", None):
         return "환경설정 일부 누락", False
     return "환경설정 확인", True
 

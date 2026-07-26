@@ -91,10 +91,12 @@ def main() -> None:
           .mobile-event .status.pending{background:#fffbeb;color:#92400e}
           .mobile-event .status.filled{background:#ecfdf3;color:#166534}
           .mobile-event .status.expired,.mobile-event .status.failed,.mobile-event .status.rejected,.mobile-event .status.cancelled,.mobile-event .status.canceled{background:#fef2f2;color:#991b1b}
-          .mobile-bottom-nav{display:grid;grid-template-columns:repeat(5,1fr);position:fixed;left:0;right:0;bottom:0;z-index:1000;background:#fff;border-top:1px solid #d1d5db;padding:4px 6px calc(4px + env(safe-area-inset-bottom));box-shadow:none}
-          .mobile-bottom-nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;min-height:50px;color:#6b7280!important;text-decoration:none!important;font-size:10px;font-weight:750;border-radius:0}
-          .mobile-bottom-nav a span:first-child{font-size:17px;line-height:1}
-          .mobile-bottom-nav a.active{color:#2563eb!important}
+          .mobile-bottom-nav{display:none!important}
+          .desktop-home div[data-testid="stHorizontalBlock"]{display:block!important}
+          .desktop-home div[data-testid="stHorizontalBlock"]>div[data-testid="stColumn"]{width:100%!important;min-width:0!important;flex:none!important;margin-bottom:10px!important}
+          .desktop-home .ops-strip{grid-template-columns:1fr!important}
+          .desktop-home .action-card,.desktop-home .market-card,.desktop-home .system-card,.desktop-home .flow,.desktop-home .ops-card{min-height:auto!important}
+          .desktop-home [data-testid="stPageLink-NavLink"]{width:100%!important}
         }
         </style>
         """,
@@ -263,12 +265,12 @@ def _mobile_home(
       <section class="mobile-section">
         <div class="mobile-section-head"><h2>운영 상태</h2><span>{escape(kis_detail)}</span></div>
         <div class="mobile-account">
-          {_mobile_account_row("한국시장", f'추천 {_count_with_unit(_latest_recommendation_count(Path("datahub/market.db")), "개")} · 검증 {_count_with_unit(_latest_validation_count(Path("datahub/market.db")), "개")}', "정상" if kr.ready else "확인 필요")}
-          {_mobile_account_row("미국시장", f'추천 {_count_with_unit(_latest_recommendation_count(Path("datahub/us_market.db")), "개")} · 검증 {_count_with_unit(_latest_validation_count(Path("datahub/us_market.db")), "개")}', "정상" if us.ready else "확인 필요")}
-          {_mobile_account_row("KIS 운영모드", escape(kis_detail), "실전" if mode == "LIVE" else "모의투자")}
-          {_mobile_account_row("한국 계좌", f'현금 {_format_money(portfolio.krw_cash)} · 보유 {portfolio.kr_holdings}개', _format_money(portfolio.krw_value))}
-          {_mobile_account_row("미국 계좌", f'보유 {portfolio.us_holdings}개', _format_usd(portfolio.usd_value))}
-          {_mobile_account_row("예약주문", f'실패 {scheduled["failed"]} · 재시도 {scheduled["retry"]}', f'활성 {scheduled["active"]}')}
+          {_mobile_account_row("🇰🇷 한국시장", f'추천 {_count_text(_latest_recommendation_count(Path("datahub/market.db")))} · 검증 {_count_text(_latest_validation_count(Path("datahub/market.db")))}', "정상" if kr.ready else "확인 필요")}
+          {_mobile_account_row("🇺🇸 미국시장", f'추천 {_count_text(_latest_recommendation_count(Path("datahub/us_market.db")))} · 검증 {_count_text(_latest_validation_count(Path("datahub/us_market.db")))}', "정상" if us.ready else "확인 필요")}
+          {_mobile_account_row("KIS 운영모드", escape(mode), "모의투자" if mode != "LIVE" else "실전")}
+          {_mobile_account_row("한국 계좌", f'평가 {_format_money(portfolio.krw_value)} · 현금 {_format_money(portfolio.krw_cash)}', f'{portfolio.kr_holdings}종목')}
+          {_mobile_account_row("미국 계좌", f'평가 {_format_usd(portfolio.usd_value)}', f'{portfolio.us_holdings}종목')}
+          {_mobile_account_row("예약주문", f'오늘 {scheduled["due_today"]} · 재시도 {scheduled["retry"]}', f'활성 {scheduled["active"]}')}
         </div>
       </section>
 
@@ -289,7 +291,7 @@ def _mobile_action(icon: str, title: str, detail: str, href: str) -> str:
 
 
 def _mobile_account_row(label: str, detail: str, value: str) -> str:
-    return f'<div class="mobile-account-row"><div><div class="label">{escape(label)}</div><div class="detail">{escape(detail)}</div></div><div class="value">{escape(value)}</div></div>'
+    return f'<div class="mobile-account-row"><div><div class="label">{escape(label)}</div><div class="detail">{escape(detail)}</div></div><div><div class="value">{escape(value)}</div></div></div>'
 
 
 def _mobile_event_cards(frame: pd.DataFrame) -> str:
@@ -309,14 +311,153 @@ def _mobile_event_cards(frame: pd.DataFrame) -> str:
 
 
 def _status_class(status: str) -> str:
-    normalized = status.lower()
-    if normalized in {"pending", "ready", "submitted"}:
+    normalized = status.strip().lower()
+    if normalized in {"pending", "waiting", "queued"}:
         return "pending"
     if normalized in {"filled", "completed", "success"}:
         return "filled"
     if normalized in {"expired", "failed", "rejected", "cancelled", "canceled"}:
         return normalized
     return "neutral"
+
+
+def _action_card(column, title: str, metric: str, description: str, path: str, label: str, icon: str) -> None:
+    column.markdown(f'<div class="action-card"><h3>{escape(icon)} {escape(title)}</h3><p><b>{escape(metric)}</b></p><p>{escape(description)}</p></div>', unsafe_allow_html=True)
+    column.page_link(path, label=label, icon=icon, width="stretch")
+
+
+def _system_box(column, title: str, detail: str, healthy: bool | None) -> None:
+    tone = "success" if healthy is True else "warning" if healthy is False else "neutral"
+    label = "정상" if healthy is True else "확인 필요" if healthy is False else "알 수 없음"
+    column.markdown(
+        f'<div class="system-card"><h3>{escape(title)} {status_badge(label, tone)}</h3><p>{escape(detail)}</p></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _latest_recommendation_count(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        with sqlite3.connect(path) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()
+            return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return None
+
+
+def _latest_validation_count(path: Path) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        with sqlite3.connect(path) as conn:
+            row = conn.execute("SELECT COUNT(*) FROM meta_score_results").fetchone()
+            return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return None
+
+
+def _pending_count(path: Path, table: str) -> int | None:
+    if not path.exists():
+        return None
+    try:
+        with sqlite3.connect(path) as conn:
+            row = conn.execute(f'SELECT COUNT(*) FROM "{table}" WHERE status IN ("PENDING", "READY")').fetchone()
+            return int(row[0]) if row else 0
+    except sqlite3.Error:
+        return None
+
+
+def _scheduled_order_summary(path: Path) -> dict[str, int]:
+    result = {"active": 0, "failed": 0, "due_today": 0, "retry": 0}
+    if not path.exists():
+        return result
+    try:
+        with sqlite3.connect(path) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "scheduled_orders" not in tables:
+                return result
+            result["active"] = int(conn.execute("SELECT COUNT(*) FROM scheduled_orders WHERE status IN ('ACTIVE','READY','PENDING')").fetchone()[0])
+            result["failed"] = int(conn.execute("SELECT COUNT(*) FROM scheduled_orders WHERE status='FAILED'").fetchone()[0])
+            result["retry"] = int(conn.execute("SELECT COUNT(*) FROM scheduled_orders WHERE status IN ('RETRY','FAILED')").fetchone()[0])
+            try:
+                result["due_today"] = int(conn.execute("SELECT COUNT(*) FROM scheduled_orders WHERE date(next_run_at)=date('now','localtime') AND status IN ('ACTIVE','READY','PENDING')").fetchone()[0])
+            except sqlite3.Error:
+                result["due_today"] = 0
+    except sqlite3.Error:
+        pass
+    return result
+
+
+def _portfolio_summary(kr_db: Path, us_db: Path) -> PortfolioSummary:
+    kr_holdings = 0
+    us_holdings = 0
+    krw_value = None
+    krw_cash = None
+    usd_value = None
+    try:
+        if kr_db.exists():
+            with sqlite3.connect(kr_db) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if "portfolio_positions" in tables:
+                    kr_holdings = int(conn.execute("SELECT COUNT(*) FROM portfolio_positions WHERE COALESCE(quantity,0)>0").fetchone()[0])
+                if "account_snapshots" in tables:
+                    row = conn.execute("SELECT total_value,cash FROM account_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+                    if row:
+                        krw_value, krw_cash = row[0], row[1]
+        if us_db.exists():
+            with sqlite3.connect(us_db) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if "portfolio_positions" in tables:
+                    us_holdings = int(conn.execute("SELECT COUNT(*) FROM portfolio_positions WHERE COALESCE(quantity,0)>0").fetchone()[0])
+                if "account_snapshots" in tables:
+                    row = conn.execute("SELECT total_value FROM account_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+                    if row:
+                        usd_value = row[0]
+    except sqlite3.Error:
+        pass
+    return PortfolioSummary(kr_holdings, us_holdings, krw_value, krw_cash, usd_value)
+
+
+def _kis_connection_status() -> tuple[str, bool | None]:
+    try:
+        config = load_kis_env()
+        missing = [key for key in ("app_key", "app_secret", "account_no") if not getattr(config, key, None)]
+        if missing:
+            return "환경설정 일부 누락", False
+        return "환경설정 확인", True
+    except Exception:
+        return "환경설정 확인 실패", None
+
+
+def _recent_activity(kr_db: Path, us_db: Path) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for market, path, table in (("KR", kr_db, "trade_order_requests"), ("US", us_db, "us_trade_order_requests")):
+        if not path.exists():
+            continue
+        try:
+            with sqlite3.connect(path) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if table not in tables:
+                    continue
+                columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+                ticker_col = "ticker" if "ticker" in columns else "symbol" if "symbol" in columns else None
+                status_col = "status" if "status" in columns else None
+                time_col = "created_at" if "created_at" in columns else "requested_at" if "requested_at" in columns else None
+                if not ticker_col or not status_col:
+                    continue
+                select_time = f'"{time_col}"' if time_col else "''"
+                for ticker, status, created_at in conn.execute(f'SELECT "{ticker_col}","{status_col}",{select_time} FROM "{table}" ORDER BY rowid DESC LIMIT 5').fetchall():
+                    rows.append({"구분": f"{market} 주문", "종목": ticker, "상태": status, "시각": created_at or "-"})
+        except sqlite3.Error:
+            continue
+    return pd.DataFrame(rows[:8], columns=["구분", "종목", "상태", "시각"])
+
+
+def _count_sum(*values: int | None) -> int | None:
+    if any(value is None for value in values):
+        return None
+    return sum(int(value or 0) for value in values)
 
 
 def _count_text(value: int | None) -> str:
@@ -327,90 +468,12 @@ def _count_with_unit(value: int | None, unit: str) -> str:
     return "확인 불가" if value is None else f"{value}{unit}"
 
 
-def _count_sum(*values: int | None) -> int | None:
-    if any(value is None for value in values):
-        return None
-    return sum(int(value or 0) for value in values)
-
-
 def _format_money(value: float | None) -> str:
     return "-" if value is None else f"{value:,.0f}원"
 
 
 def _format_usd(value: float | None) -> str:
     return "-" if value is None else f"${value:,.2f}"
-
-
-def _latest_recommendation_count(db_path: Path) -> int | None:
-    return _safe_count(db_path, "SELECT COUNT(*) FROM recommendations")
-
-
-def _latest_validation_count(db_path: Path) -> int | None:
-    return _safe_count(db_path, "SELECT COUNT(*) FROM final_decisions")
-
-
-def _pending_count(db_path: Path, table: str) -> int | None:
-    return _safe_count(db_path, f"SELECT COUNT(*) FROM {table} WHERE UPPER(COALESCE(status,'')) IN ('PENDING','READY','SUBMITTED')")
-
-
-def _safe_count(db_path: Path, query: str) -> int | None:
-    if not db_path.exists():
-        return None
-    try:
-        with sqlite3.connect(str(db_path), timeout=10) as conn:
-            row = conn.execute(query).fetchone()
-            return int(row[0]) if row else 0
-    except sqlite3.Error:
-        return None
-
-
-def _scheduled_order_summary(db_path: Path) -> dict[str, int]:
-    result = {"active": 0, "failed": 0, "due_today": 0, "retry": 0}
-    if not db_path.exists():
-        return result
-    try:
-        with sqlite3.connect(str(db_path), timeout=10) as conn:
-            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if "scheduled_orders" not in tables:
-                return result
-            rows = conn.execute("SELECT UPPER(COALESCE(status,'')) FROM scheduled_orders").fetchall()
-            for (status,) in rows:
-                if status in {"ACTIVE", "PENDING", "READY"}:
-                    result["active"] += 1
-                if status in {"FAILED", "ERROR"}:
-                    result["failed"] += 1
-            return result
-    except sqlite3.Error:
-        return result
-
-
-def _portfolio_summary(kr_db: Path, us_db: Path) -> PortfolioSummary:
-    return PortfolioSummary()
-
-
-def _kis_connection_status() -> tuple[str, bool | None]:
-    try:
-        env = load_kis_env()
-        missing = [key for key in ("app_key", "app_secret", "account_no") if not getattr(env, key, None)]
-        if missing:
-            return "환경설정 일부 누락", False
-        return "연결 설정 확인", True
-    except Exception:
-        return "연결 상태 확인 필요", None
-
-
-def _recent_activity(kr_db: Path, us_db: Path) -> pd.DataFrame:
-    return pd.DataFrame(columns=["구분", "종목", "상태", "시각"])
-
-
-def _action_card(col, title: str, value: str, description: str, target: str, label: str, icon: str) -> None:
-    col.markdown(f'<div class="action-card"><h3>{icon} {title}</h3><p>{value}</p><p>{description}</p></div>', unsafe_allow_html=True)
-    col.page_link(target, label=label, icon=icon, width="stretch")
-
-
-def _system_box(col, title: str, detail: str, ok: bool | None) -> None:
-    tone = "success" if ok is True else "warning" if ok is False else "neutral"
-    col.markdown(f'<div class="system-card"><h3>{title} {status_badge("정상" if ok is True else "확인 필요" if ok is False else "알 수 없음", tone)}</h3><p>{detail}</p></div>', unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

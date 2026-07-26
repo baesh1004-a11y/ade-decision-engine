@@ -12,6 +12,7 @@ import pandas as pd
 from broker.kis import load_kis_env
 from dashboard.design_system import apply_global_style, page_hero, section_header, status_badge
 from dashboard.system_status import inspect_market_db
+from markets.symbol_display import build_name_map, normalize_ticker, resolve_name
 
 
 @dataclass(frozen=True)
@@ -81,12 +82,12 @@ def main() -> None:
           .mobile-account-row .label{color:#111827;font-size:12px;font-weight:750}
           .mobile-account-row .detail{margin-top:2px;color:#6b7280;font-size:10px;line-height:1.3}
           .mobile-account-row .value{color:#111827;font-size:12px;font-weight:800;text-align:right;white-space:nowrap}
-          .mobile-account-row .status{display:inline-flex;margin-top:4px;padding:2px 6px;border-radius:999px;background:#ecfdf3;color:#166534;font-size:9px;font-weight:800}
           .mobile-events{display:block}
           .mobile-event{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:9px 0;border-bottom:1px solid #eef2f7;background:#fff}
           .mobile-event strong{display:block;color:#111827;font-size:12px}
           .mobile-event small{display:block;margin-top:2px;color:#9ca3af;font-size:9px}
           .mobile-event .symbol{margin-top:3px;color:#374151;font-size:13px;font-weight:800}
+          .mobile-event .ticker{margin-left:5px;color:#9ca3af;font-size:10px;font-weight:650}
           .mobile-event .status{align-self:start;padding:3px 6px;border-radius:999px;font-size:9px;font-weight:800;background:#f3f4f6;color:#4b5563}
           .mobile-event .status.pending{background:#fffbeb;color:#92400e}
           .mobile-event .status.filled{background:#ecfdf3;color:#166534}
@@ -295,11 +296,13 @@ def _mobile_event_cards(frame: pd.DataFrame) -> str:
     cards: list[str] = []
     for row in frame.head(5).to_dict("records"):
         event_type = escape(str(row.get("구분", "-")))
-        symbol = escape(str(row.get("종목", "-")))
+        symbol = escape(str(row.get("종목", "종목명 미확인")))
+        ticker = escape(str(row.get("티커", "")))
         status = str(row.get("상태", "-")).upper()
         time_text = escape(str(row.get("시각", "-")))
+        ticker_html = f'<span class="ticker">{ticker}</span>' if ticker else ""
         cards.append(
-            f'<article class="mobile-event"><div><strong>{event_type}</strong><div class="symbol">{symbol}</div><small>{time_text}</small></div>'
+            f'<article class="mobile-event"><div><strong>{event_type}</strong><div class="symbol">{symbol}{ticker_html}</div><small>{time_text}</small></div>'
             f'<span class="status {_status_class(status)}">{escape(status)}</span></article>'
         )
     return "".join(cards)
@@ -427,28 +430,37 @@ def _kis_connection_status() -> tuple[str, bool | None]:
 def _recent_activity(kr_db: Path, us_db: Path) -> pd.DataFrame:
     rows: list[dict[str, str]] = []
     for path, market, table in [
-        (kr_db, "KR", "trade_order_requests"),
-        (us_db, "US", "us_trade_order_requests"),
+        (kr_db, "kr", "trade_order_requests"),
+        (us_db, "us", "us_trade_order_requests"),
     ]:
         if not path.exists():
             continue
         try:
             with sqlite3.connect(path) as conn:
+                conn.row_factory = sqlite3.Row
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
                 if table not in tables:
                     continue
+                name_map = build_name_map(conn, market)
                 query = f'SELECT * FROM "{table}" ORDER BY id DESC LIMIT 5'
                 for row in conn.execute(query).fetchall():
-                    mapping = dict(zip([desc[0] for desc in conn.execute(query).description], row))
+                    mapping = dict(row)
+                    ticker = normalize_ticker(mapping.get("ticker") or mapping.get("symbol") or "", market)
+                    raw_name = mapping.get("name") or mapping.get("stock_name") or mapping.get("symbol_name")
+                    company_name = resolve_name(ticker, raw_name, name_map, market)
                     rows.append({
-                        "구분": market,
-                        "종목": str(mapping.get("ticker") or mapping.get("symbol") or "-"),
+                        "구분": f'{market.upper()} 주문',
+                        "종목": company_name,
+                        "티커": ticker,
                         "상태": str(mapping.get("status") or "-"),
                         "시각": str(mapping.get("created_at") or mapping.get("updated_at") or "-"),
                     })
         except sqlite3.Error:
             continue
-    return pd.DataFrame(rows)
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    return frame.sort_values("시각", ascending=False, kind="stable").head(5).reset_index(drop=True)
 
 
 def _count_sum(*values: int | None) -> int | None:

@@ -52,51 +52,47 @@ def main() -> None:
           [data-testid="stSidebar"],[data-testid="stSidebarCollapsedControl"],[data-testid="stToolbar"],[data-testid="stDecoration"]{display:none!important}
           [data-testid="stHeader"]{background:#fff!important;border-bottom:1px solid #e5e7eb!important}
           [data-testid="stAppViewContainer"],.stApp{background:#fff!important}
-          [data-testid="stAppViewContainer"] .main .block-container{max-width:none!important;padding:0 16px 76px!important}
+          [data-testid="stAppViewContainer"] .main .block-container{max-width:none!important;padding:0 16px 24px!important}
           .desktop-home{display:none!important}
-          .mobile-app{display:block;color:#111827;padding-top:max(8px,env(safe-area-inset-top))}
-          .mobile-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0 10px;border-bottom:1px solid #e5e7eb}
-          .mobile-topbar small{display:block;color:#6b7280;font-size:11px;font-weight:650}
-          .mobile-topbar h1{margin:3px 0 0;color:#111827;font-size:20px;line-height:1.15;letter-spacing:-.03em}
-          .mobile-status-dot{display:inline-flex;align-items:center;gap:6px;padding:5px 8px;border-radius:999px;background:#ecfdf3;border:1px solid #bbf7d0;color:#166534;font-size:10px;font-weight:800;white-space:nowrap}
+          .mobile-app{display:block;color:#111827;padding-top:max(6px,env(safe-area-inset-top))}
+          .mobile-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #e5e7eb}
+          .mobile-topbar small{display:block;color:#6b7280;font-size:10px;font-weight:650}
+          .mobile-topbar h1{margin:2px 0 0;color:#111827;font-size:19px;line-height:1.15;letter-spacing:-.03em}
+          .mobile-status-dot{display:inline-flex;align-items:center;gap:6px;padding:4px 7px;border-radius:999px;background:#ecfdf3;border:1px solid #bbf7d0;color:#166534;font-size:9px;font-weight:800;white-space:nowrap}
           .mobile-status-dot:before{content:"";width:6px;height:6px;border-radius:50%;background:#22c55e}
-          .mobile-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;margin-top:2px;border-bottom:1px solid #e5e7eb}
-          .mobile-summary-card{padding:12px 10px;background:#fff;border:0;border-right:1px solid #eef2f7;border-bottom:1px solid #eef2f7;min-height:76px}
-          .mobile-summary-card:nth-child(2n){border-right:0}
-          .mobile-summary-card span{display:block;color:#6b7280;font-size:11px;font-weight:700}
-          .mobile-summary-card strong{display:block;margin-top:4px;color:#111827;font-size:20px;line-height:1;font-weight:850;letter-spacing:-.03em}
-          .mobile-summary-card em{display:block;margin-top:5px;color:#9ca3af;font-size:10px;font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-          .mobile-section{display:block;margin-top:18px}
-          .mobile-section-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px;padding-bottom:6px;border-bottom:1px solid #e5e7eb}
-          .mobile-section-head h2{margin:0;color:#111827;font-size:15px;letter-spacing:-.02em}
-          .mobile-section-head span{color:#9ca3af;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .mobile-summary-grid{display:block;margin-top:2px;border-bottom:1px solid #e5e7eb}
+          .mobile-summary-card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:9px 0;background:#fff;border:0;border-bottom:1px solid #eef2f7;min-height:auto}
+          .mobile-summary-card:last-child{border-bottom:0}
+          .mobile-summary-copy{min-width:0}
+          .mobile-summary-card span{display:block;color:#374151;font-size:12px;font-weight:750}
+          .mobile-summary-card em{display:block;margin-top:2px;color:#9ca3af;font-size:10px;font-style:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .mobile-summary-card strong{display:block;margin:0;color:#111827;font-size:17px;line-height:1;font-weight:850;letter-spacing:-.03em;text-align:right;white-space:nowrap}
+          .mobile-section{display:block;margin-top:15px}
+          .mobile-section-head{display:block;margin-bottom:3px;padding-bottom:5px;border-bottom:1px solid #e5e7eb}
+          .mobile-section-head h2{margin:0;color:#111827;font-size:14px;letter-spacing:-.02em}
+          .mobile-section-head span{display:none}
           .mobile-action-list{display:block}
-          .mobile-action{display:grid;grid-template-columns:32px minmax(0,1fr) auto;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid #eef2f7;background:#fff;text-decoration:none!important}
-          .mobile-action .icon{display:grid;place-items:center;width:32px;height:32px;border-radius:8px;background:#f3f4f6;font-size:16px}
-          .mobile-action strong{display:block;color:#111827;font-size:14px}
-          .mobile-action small{display:block;margin-top:2px;color:#6b7280;font-size:11px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-          .mobile-action .chev{color:#9ca3af;font-size:18px}
+          .mobile-action{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid #eef2f7;background:#fff;text-decoration:none!important}
+          .mobile-action .icon{display:grid;place-items:center;width:28px;height:28px;border-radius:7px;background:#f3f4f6;font-size:14px}
+          .mobile-action strong{display:block;color:#111827;font-size:13px}
+          .mobile-action small{display:block;margin-top:1px;color:#6b7280;font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .mobile-action .chev{color:#9ca3af;font-size:17px}
           .mobile-account{display:block;background:#fff}
-          .mobile-account-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:start;padding:11px 0;border-bottom:1px solid #eef2f7}
-          .mobile-account-row .label{color:#111827;font-size:13px;font-weight:750}
-          .mobile-account-row .detail{margin-top:3px;color:#6b7280;font-size:10px;line-height:1.35}
-          .mobile-account-row .value{color:#111827;font-size:13px;font-weight:800;text-align:right;white-space:nowrap}
+          .mobile-account-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #eef2f7}
+          .mobile-account-row .label{color:#111827;font-size:12px;font-weight:750}
+          .mobile-account-row .detail{margin-top:2px;color:#6b7280;font-size:10px;line-height:1.3}
+          .mobile-account-row .value{color:#111827;font-size:12px;font-weight:800;text-align:right;white-space:nowrap}
           .mobile-account-row .status{display:inline-flex;margin-top:4px;padding:2px 6px;border-radius:999px;background:#ecfdf3;color:#166534;font-size:9px;font-weight:800}
           .mobile-events{display:block}
-          .mobile-event{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:11px 0;border-bottom:1px solid #eef2f7;background:#fff}
-          .mobile-event strong{display:block;color:#111827;font-size:13px}
-          .mobile-event small{display:block;margin-top:3px;color:#9ca3af;font-size:10px}
-          .mobile-event .symbol{margin-top:4px;color:#374151;font-size:14px;font-weight:800}
+          .mobile-event{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;padding:9px 0;border-bottom:1px solid #eef2f7;background:#fff}
+          .mobile-event strong{display:block;color:#111827;font-size:12px}
+          .mobile-event small{display:block;margin-top:2px;color:#9ca3af;font-size:9px}
+          .mobile-event .symbol{margin-top:3px;color:#374151;font-size:13px;font-weight:800}
           .mobile-event .status{align-self:start;padding:3px 6px;border-radius:999px;font-size:9px;font-weight:800;background:#f3f4f6;color:#4b5563}
           .mobile-event .status.pending{background:#fffbeb;color:#92400e}
           .mobile-event .status.filled{background:#ecfdf3;color:#166534}
           .mobile-event .status.expired,.mobile-event .status.failed,.mobile-event .status.rejected,.mobile-event .status.cancelled,.mobile-event .status.canceled{background:#fef2f2;color:#991b1b}
           .mobile-bottom-nav{display:none!important}
-          .desktop-home div[data-testid="stHorizontalBlock"]{display:block!important}
-          .desktop-home div[data-testid="stHorizontalBlock"]>div[data-testid="stColumn"]{width:100%!important;min-width:0!important;flex:none!important;margin-bottom:10px!important}
-          .desktop-home .ops-strip{grid-template-columns:1fr!important}
-          .desktop-home .action-card,.desktop-home .market-card,.desktop-home .system-card,.desktop-home .flow,.desktop-home .ops-card{min-height:auto!important}
-          .desktop-home [data-testid="stPageLink-NavLink"]{width:100%!important}
         }
         </style>
         """,
@@ -253,7 +249,7 @@ def _mobile_home(
       </section>
 
       <section class="mobile-section">
-        <div class="mobile-section-head"><h2>바로 실행</h2><span>자주 쓰는 기능</span></div>
+        <div class="mobile-section-head"><h2>바로 실행</h2></div>
         <div class="mobile-action-list">
           {_mobile_action("📈", "AI 추천", "한국·미국 추천 결과 확인", "/Recommendation_Workbench")}
           {_mobile_action("💳", "승인 대기 주문", f'{_count_text(pending_orders)}건 검토 필요', "/Trading_Desk")}
@@ -263,7 +259,7 @@ def _mobile_home(
       </section>
 
       <section class="mobile-section">
-        <div class="mobile-section-head"><h2>운영 상태</h2><span>{escape(kis_detail)}</span></div>
+        <div class="mobile-section-head"><h2>운영 상태</h2></div>
         <div class="mobile-account">
           {_mobile_account_row("🇰🇷 한국시장", f'추천 {_count_text(_latest_recommendation_count(Path("datahub/market.db")))} · 검증 {_count_text(_latest_validation_count(Path("datahub/market.db")))}', "정상" if kr.ready else "확인 필요")}
           {_mobile_account_row("🇺🇸 미국시장", f'추천 {_count_text(_latest_recommendation_count(Path("datahub/us_market.db")))} · 검증 {_count_text(_latest_validation_count(Path("datahub/us_market.db")))}', "정상" if us.ready else "확인 필요")}
@@ -275,7 +271,7 @@ def _mobile_home(
       </section>
 
       <section class="mobile-section">
-        <div class="mobile-section-head"><h2>최근 이벤트</h2><span>최신 주문</span></div>
+        <div class="mobile-section-head"><h2>최근 이벤트</h2></div>
         <div class="mobile-events">{event_html}</div>
       </section>
     </div>
@@ -283,7 +279,7 @@ def _mobile_home(
 
 
 def _mobile_summary_card(label: str, value: str, detail: str) -> str:
-    return f'<div class="mobile-summary-card"><span>{escape(label)}</span><strong>{escape(value)}</strong><em>{escape(detail)}</em></div>'
+    return f'<div class="mobile-summary-card"><div class="mobile-summary-copy"><span>{escape(label)}</span><em>{escape(detail)}</em></div><strong>{escape(value)}</strong></div>'
 
 
 def _mobile_action(icon: str, title: str, detail: str, href: str) -> str:
@@ -421,37 +417,51 @@ def _portfolio_summary(kr_db: Path, us_db: Path) -> PortfolioSummary:
 
 def _kis_connection_status() -> tuple[str, bool | None]:
     try:
-        config = load_kis_env()
-        missing = [key for key in ("app_key", "app_secret", "account_no") if not getattr(config, key, None)]
-        if missing:
-            return "환경설정 일부 누락", False
-        return "환경설정 확인", True
+        env = load_kis_env()
     except Exception:
-        return "환경설정 확인 실패", None
+        return "환경설정 일부 누락", False
+    if not env.app_key or not env.app_secret or not env.account_no:
+        return "환경설정 일부 누락", False
+    return "연결 정보 확인됨", True
 
 
 def _recent_activity(kr_db: Path, us_db: Path) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
-    for market, path, table in (("KR", kr_db, "trade_order_requests"), ("US", us_db, "us_trade_order_requests")):
-        if not path.exists():
-            continue
-        try:
-            with sqlite3.connect(path) as conn:
-                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-                if table not in tables:
-                    continue
-                columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
-                ticker_col = "ticker" if "ticker" in columns else "symbol" if "symbol" in columns else None
-                status_col = "status" if "status" in columns else None
-                time_col = "created_at" if "created_at" in columns else "requested_at" if "requested_at" in columns else None
-                if not ticker_col or not status_col:
-                    continue
-                select_time = f'"{time_col}"' if time_col else "''"
-                for ticker, status, created_at in conn.execute(f'SELECT "{ticker_col}","{status_col}",{select_time} FROM "{table}" ORDER BY rowid DESC LIMIT 5').fetchall():
-                    rows.append({"구분": f"{market} 주문", "종목": ticker, "상태": status, "시각": created_at or "-"})
-        except sqlite3.Error:
-            continue
-    return pd.DataFrame(rows[:8], columns=["구분", "종목", "상태", "시각"])
+    rows.extend(_read_recent_orders(kr_db, "trade_order_requests", "한국"))
+    rows.extend(_read_recent_orders(us_db, "us_trade_order_requests", "미국"))
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    if "시각" in frame.columns:
+        frame = frame.sort_values("시각", ascending=False)
+    return frame.head(20)
+
+
+def _read_recent_orders(path: Path, table: str, market: str) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    try:
+        with sqlite3.connect(path) as conn:
+            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if table not in tables:
+                return []
+            columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+            ticker_col = "ticker" if "ticker" in columns else "symbol" if "symbol" in columns else None
+            status_col = "status" if "status" in columns else None
+            time_col = "created_at" if "created_at" in columns else "requested_at" if "requested_at" in columns else None
+            if ticker_col is None:
+                return []
+            select_cols = [f'"{ticker_col}"']
+            select_cols.append(f'"{status_col}"' if status_col else "''")
+            select_cols.append(f'"{time_col}"' if time_col else "''")
+            order_clause = f' ORDER BY "{time_col}" DESC' if time_col else ""
+            query = f'SELECT {", ".join(select_cols)} FROM "{table}"{order_clause} LIMIT 10'
+            result = []
+            for ticker, status, created_at in conn.execute(query).fetchall():
+                result.append({"구분": f"{market} 주문", "종목": ticker, "상태": status or "-", "시각": created_at or "-"})
+            return result
+    except sqlite3.Error:
+        return []
 
 
 def _count_sum(*values: int | None) -> int | None:

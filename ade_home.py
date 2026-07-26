@@ -57,7 +57,6 @@ def main() -> None:
           .mobile-app{display:block;color:#111827;padding-top:max(6px,env(safe-area-inset-top))}
           .mobile-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #e5e7eb}
           .mobile-topbar small{display:block;color:#6b7280;font-size:10px;font-weight:650}
-          .mobile-topbar h1{margin:2px 0 0;color:#111827;font-size:19px;line-height:1.15;letter-spacing:-.03em}
           .mobile-status-dot{display:inline-flex;align-items:center;gap:6px;padding:4px 7px;border-radius:999px;background:#ecfdf3;border:1px solid #bbf7d0;color:#166534;font-size:9px;font-weight:800;white-space:nowrap}
           .mobile-status-dot:before{content:"";width:6px;height:6px;border-radius:50%;background:#22c55e}
           .mobile-summary-grid{display:block;margin-top:2px;border-bottom:1px solid #e5e7eb}
@@ -237,7 +236,7 @@ def _mobile_home(
     return f'''
     <div class="mobile-app">
       <header class="mobile-topbar">
-        <div><small>{escape(now)} · KIS {escape(mode)}</small><h1>상황판</h1></div>
+        <small>{escape(now)} · KIS {escape(mode)}</small>
         <div class="mobile-status-dot">{"정상" if system_ready else "확인 필요"}</div>
       </header>
 
@@ -420,54 +419,42 @@ def _kis_connection_status() -> tuple[str, bool | None]:
         env = load_kis_env()
     except Exception:
         return "환경설정 일부 누락", False
-    if not env.app_key or not env.app_secret or not env.account_no:
+    if not env.app_key or not env.app_secret:
         return "환경설정 일부 누락", False
-    return "연결 정보 확인됨", True
+    return "환경설정 확인", True
 
 
 def _recent_activity(kr_db: Path, us_db: Path) -> pd.DataFrame:
-    rows: list[dict[str, object]] = []
-    rows.extend(_read_recent_orders(kr_db, "trade_order_requests", "한국"))
-    rows.extend(_read_recent_orders(us_db, "us_trade_order_requests", "미국"))
-    if not rows:
-        return pd.DataFrame()
-    frame = pd.DataFrame(rows)
-    if "시각" in frame.columns:
-        frame = frame.sort_values("시각", ascending=False)
-    return frame.head(20)
-
-
-def _read_recent_orders(path: Path, table: str, market: str) -> list[dict[str, object]]:
-    if not path.exists():
-        return []
-    try:
-        with sqlite3.connect(path) as conn:
-            tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-            if table not in tables:
-                return []
-            columns = {row[1] for row in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
-            ticker_col = "ticker" if "ticker" in columns else "symbol" if "symbol" in columns else None
-            status_col = "status" if "status" in columns else None
-            time_col = "created_at" if "created_at" in columns else "requested_at" if "requested_at" in columns else None
-            if ticker_col is None:
-                return []
-            select_cols = [f'"{ticker_col}"']
-            select_cols.append(f'"{status_col}"' if status_col else "''")
-            select_cols.append(f'"{time_col}"' if time_col else "''")
-            order_clause = f' ORDER BY "{time_col}" DESC' if time_col else ""
-            query = f'SELECT {", ".join(select_cols)} FROM "{table}"{order_clause} LIMIT 10'
-            result = []
-            for ticker, status, created_at in conn.execute(query).fetchall():
-                result.append({"구분": f"{market} 주문", "종목": ticker, "상태": status or "-", "시각": created_at or "-"})
-            return result
-    except sqlite3.Error:
-        return []
+    rows: list[dict[str, str]] = []
+    for path, market, table in [
+        (kr_db, "KR", "trade_order_requests"),
+        (us_db, "US", "us_trade_order_requests"),
+    ]:
+        if not path.exists():
+            continue
+        try:
+            with sqlite3.connect(path) as conn:
+                tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+                if table not in tables:
+                    continue
+                query = f'SELECT * FROM "{table}" ORDER BY id DESC LIMIT 5'
+                for row in conn.execute(query).fetchall():
+                    mapping = dict(zip([desc[0] for desc in conn.execute(query).description], row))
+                    rows.append({
+                        "구분": market,
+                        "종목": str(mapping.get("ticker") or mapping.get("symbol") or "-"),
+                        "상태": str(mapping.get("status") or "-"),
+                        "시각": str(mapping.get("created_at") or mapping.get("updated_at") or "-"),
+                    })
+        except sqlite3.Error:
+            continue
+    return pd.DataFrame(rows)
 
 
 def _count_sum(*values: int | None) -> int | None:
     if any(value is None for value in values):
         return None
-    return sum(int(value or 0) for value in values)
+    return sum(int(value) for value in values if value is not None)
 
 
 def _count_text(value: int | None) -> str:

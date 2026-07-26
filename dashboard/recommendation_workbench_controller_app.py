@@ -20,6 +20,7 @@ def run() -> None:
     st.markdown(
         """
         <style>
+        .wb-mobile-flow{display:none}
         @media(max-width:640px){
           .wb-header-row div[data-testid="stHorizontalBlock"]{
             display:block!important;
@@ -51,6 +52,8 @@ def run() -> None:
             font-size:12px!important;
             font-weight:800!important;
           }
+          .wb-desktop-flow{display:none!important}
+          .wb-mobile-flow{display:block!important}
         }
         </style>
         """,
@@ -104,6 +107,7 @@ def run() -> None:
         base._render_context_banner(st, context)
         base._render_kpis(st, context, recommendations)
 
+        st.markdown('<div class="wb-desktop-flow">', unsafe_allow_html=True)
         left, center, right = st.columns([1.2, 3.2, 1.2], gap="medium")
         with left:
             step_header(1, "추천 목록", "종목을 선택하면 분석과 주문 영역이 함께 변경됩니다.")
@@ -117,6 +121,18 @@ def run() -> None:
         with right:
             step_header(3, "주문", "선택 종목의 주문 화면으로 연결합니다.")
             base._order_panel(st, selected, profile.code, validation, context)
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        st.markdown('<div class="wb-mobile-flow">', unsafe_allow_html=True)
+        step_header(1, "추천·분석", "종목을 선택하고 차트와 검증 결과를 함께 확인합니다.")
+        _render_controller(st, recommendations, selected, profile.code)
+        base._comparison_panel(
+            st, selected, current, historical, pattern, payload,
+            profile.code, profile.db_path, context.run_id, validation,
+        )
+        step_header(2, "주문", "선택 종목의 주문 화면으로 연결합니다.")
+        base._order_panel(st, selected, profile.code, validation, context)
+        st.markdown('</div>', unsafe_allow_html=True)
     finally:
         conn.close()
 

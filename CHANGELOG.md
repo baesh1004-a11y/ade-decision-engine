@@ -108,6 +108,7 @@
 - Order Validation & Routing Engine v2 specification.
 - Execution Reconciliation & Recovery Engine v2 specification.
 - Portfolio Rebalancing & Exit Orchestration Engine v1 specification.
+- Strategy Validation & Promotion Engine v1 specification.
 
 ### Updated
 
@@ -132,6 +133,11 @@
 - Added broker execution ID deduplication, reservation recovery, cash/position reconciliation, append-only recovery actions, and manual-review escalation.
 - Added portfolio-level exit orchestration for stop-loss, trailing stop, profit protection, signal weakening, concentration recovery, cash recovery, exposure reduction, and drawdown control.
 - Defined deterministic Exit Proposal ranking, overlapping-rule merge, sellable-quantity limits, unresolved-order blocking, proposal expiry, and projected-portfolio verification.
+- Added immutable strategy/version/validation-plan models and evidence-manifest requirements for strategy promotion.
+- Added mandatory safety checks that cannot be overridden by aggregate performance scores.
+- Added Champion–Challenger comparison under identical data, universe, cost, and policy assumptions.
+- Defined RESEARCH, BACKTEST_APPROVED, PAPER, SHADOW, LIVE_BLOCKED, LIVE, SUSPENDED, and RETIRED strategy stages.
+- Added approval-gated promotion, performance/risk degradation demotion, and operational suspension criteria.
 
 ### Notes
 
@@ -158,6 +164,11 @@
 - FORCE_EXIT, stop-loss, and forced reduction rules take precedence over HOLD and new-entry decisions.
 - Exit Proposal quantity may not exceed holdings, sellable quantity, or quantities reserved by open sell orders.
 - Positions with unresolved execution reconciliation are excluded from automatic rebalancing and escalated to manual review.
+- A strong backtest alone is insufficient for PAPER or LIVE promotion.
+- Mandatory safety, reproducibility, lineage, and broker-isolation checks cannot be offset by higher returns.
+- Strategy promotion evidence must bind code, policy, data, features, universe, costs, validation results, and approvals in an immutable manifest.
+- LIVE promotion always requires explicit approval.
+- Suspended strategies cannot create new scheduled or orchestrated runs.
 
 ### Next
 
@@ -168,6 +179,8 @@
 - Implement atomic idempotency reservation and unresolved order reservations.
 - Implement broker execution ID deduplication and single-order `VERIFY_REQUIRED` reconciliation.
 - Implement partial-fill reconciliation and reservation recalculation.
+- Implement Strategy Validation models, mandatory checks, and Evidence Manifest generation.
+- Add a fixed-result BACKTEST_APPROVED/REJECTED strategy-validation fixture.
 - Implement `db/migrations/001_create_run_state.sql`.
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.

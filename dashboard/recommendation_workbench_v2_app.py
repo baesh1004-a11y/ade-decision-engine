@@ -252,82 +252,41 @@ def _run_selected_validation(db_path, run_id, selected, payload) -> None:
     )
     _save_final_decisions(db_path, run_id, results)
     feedback = FeedbackEngine(db_path)
-    try:
-        feedback.register_meta_results(results)
-    finally:
-        feedback.close()
+    feedback.record_validation_results(run_id, results)
 
 
 def _render_validation_summary(st, validation) -> None:
-    decision = str(validation.get("decision"))
-    label = {"FINAL BUY": "매수 검토", "BUY WATCH": "관찰", "HOLD": "보류", "PASS": "제외"}.get(decision, decision)
-    checks = [
-        ("전체 시장", _status_text(float(validation.get("market_score", 0)))),
-        ("해당 업종", _status_text(float(validation.get("sector_score", 0)))),
-        ("종목 위험", _risk_text(float(validation.get("risk_score", 0)))),
-    ]
-    overall = _overall_environment_status(checks)
-    tone = {"양호": "good", "보통": "warn", "주의": "bad"}.get(overall, "warn")
+    if validation is None:
+        return
+    row = dict(validation)
+    final_score = float(row.get("final_score") or row.get("score") or 0.0)
+    risk_score = float(row.get("risk_score") or 0.0)
     st.markdown(
-        f'<div class="validation-result validation-result-{tone}">'
-        f'<div><span>환경 조언</span><strong>{label}</strong></div>'
-        f'<b class="validation-status">{overall}</b></div>',
+        f'<div class="validation-summary"><b>환경 점수 {final_score:.1f}</b>'
+        f'<span>위험도 {_risk_text(risk_score)} · 상태 {_status_text(final_score)}</span></div>',
         unsafe_allow_html=True,
     )
-    with st.expander("세부 상태 보기", expanded=False):
-        for name, value in checks:
-            st.markdown(
-                f'<div class="validation-row"><span>{name}</span><b>{value}</b></div>',
-                unsafe_allow_html=True,
-            )
-
-
-def _overall_environment_status(checks) -> str:
-    values = [value for _, value in checks]
-    if any(value in {"주의", "높음"} for value in values):
-        return "주의"
-    if any(value == "보통" for value in values):
-        return "보통"
-    return "양호"
 
 
 def _order_panel(st, selected, market, validation, context) -> None:
-    if validation is not None:
-        decision = str(validation.get("decision"))
-        environment_label = {"FINAL BUY": "매수 검토", "BUY WATCH": "관찰", "HOLD": "보류", "PASS": "제외"}.get(decision, decision)
-        environment_tone = {
-            "FINAL BUY": "good",
-            "BUY WATCH": "warn",
-            "HOLD": "warn",
-            "PASS": "bad",
-        }.get(decision, "neutral")
-    else:
-        environment_label = "미확인"
-        environment_tone = "neutral"
-
     st.markdown(
-        f'<div class="order-summary">'
-        f'<div><span>주문 대상</span><strong>{selected["symbol"]}</strong></div>'
-        f'<b class="order-status order-status-{environment_tone}">{environment_label}</b>'
-        f'</div>',
+        f'<div class="order-card"><b>{selected["symbol"]}</b><span>{selected["ticker"]}</span></div>',
         unsafe_allow_html=True,
     )
-
-    primary, secondary = st.columns([1.45, 1], gap="small")
-    with primary:
-        st.page_link(
-            "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py",
-            label="주문 화면",
-            icon="💳",
-            use_container_width=True,
-        )
-    with secondary:
-        st.page_link(
-            "pages/15_Scheduled_Orders.py",
-            label="예약 주문",
-            icon="🗓️",
-            use_container_width=True,
-        )
+    if validation is not None:
+        st.caption("환경 조언이 저장된 종목입니다. 주문 전에 참고하세요.")
+    st.page_link(
+        "pages/8_Order_Manager.py" if market == "kr" else "pages/11_US_Order_Manager.py",
+        label="주문 화면",
+        icon="💳",
+        use_container_width=True,
+    )
+    st.page_link(
+        "pages/15_Scheduled_Orders.py",
+        label="예약 주문",
+        icon="🗓️",
+        use_container_width=True,
+    )
     st.markdown(
         f'<div class="order-count">현재 실행 주문 <b>{len(context.current_orders)}건</b></div>',
         unsafe_allow_html=True,
@@ -341,19 +300,40 @@ def _selected_pattern(conn, payload):
     return conn.execute("SELECT * FROM surge_patterns WHERE pattern_id=?", (pattern_id,)).fetchone()
 
 
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    if not table_name:
+        return False
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _resolve_price_source(conn: sqlite3.Connection, configured_source: str) -> str | None:
+    candidates = [configured_source, "ohlcv", "daily_prices", "price_daily", "prices"]
+    for candidate in candidates:
+        if candidate and _table_exists(conn, candidate):
+            return candidate
+    return None
+
+
 def _current_bars(conn, market, ticker, source):
+    resolved_source = _resolve_price_source(conn, str(source or ""))
+    if resolved_source is None:
+        return pd.DataFrame()
     rows = conn.execute(
-        f"SELECT * FROM {source} WHERE ticker=? ORDER BY date DESC LIMIT 140",
+        f'SELECT * FROM "{resolved_source}" WHERE ticker=? ORDER BY date DESC LIMIT 140',
         (ticker,),
     ).fetchall()
     frame = pd.DataFrame([dict(row) for row in rows])
-    if not frame.empty:
+    if not frame.empty and "date" in frame.columns:
         frame = frame.sort_values("date")
     return frame
 
 
 def _pattern_bars(conn, pattern):
-    if pattern is None:
+    if pattern is None or not _table_exists(conn, "surge_pattern_bars"):
         return pd.DataFrame()
     rows = conn.execute(
         "SELECT * FROM surge_pattern_bars WHERE pattern_id=? ORDER BY day_index",
@@ -379,58 +359,29 @@ def _risk_text(score):
 
 def _step_title(st, number, title, description):
     st.markdown(
-        f'<div class="step-header"><span>{number}</span><div><b>{title}</b><small>{description}</small></div></div>',
+        f'<div class="step-title"><span>{number}</span><div><b>{title}</b><small>{description}</small></div></div>',
         unsafe_allow_html=True,
     )
 
 
-def _style(st) -> None:
-    st.markdown(
-        """
-        <style>
-        :root{--navy:#09243d;--blue:#2778da;--ink:#152b42;--muted:#718397;--line:#dbe6ef;--panel:#fff}
-        .stApp{background:linear-gradient(135deg,#f8fbfe,#eef4fa 55%,#fbfdff);color:var(--ink)}
-        .block-container{max-width:2100px;padding:.55rem .8rem 2rem}
-        [data-testid="stSidebar"]{background:linear-gradient(180deg,#08223a,#0c2c49)}
-        [data-testid="stSidebar"] *{color:#edf7ff!important}
-        .page-title h1{margin:0;font-size:28px}.page-title p{margin:2px 0 10px;color:var(--muted)}
-        .context-banner{display:flex;gap:18px;align-items:center;padding:10px 14px;border:1px solid #cfe1f1;border-radius:12px;background:#eef7ff;margin:8px 0}.context-banner span{color:#557086;font-size:12px}.context-banner b{color:#1768bd}
-        .kpi-card{min-height:100px;padding:15px;border-radius:15px;background:var(--panel);border:1px solid var(--line)}
-        .kpi-card span,.kpi-card small{display:block;color:var(--muted)}.kpi-card strong{display:block;font-size:24px;margin:7px 0 4px}
-        .kpi-group-primary{margin-bottom:8px}.kpi-card-primary{border-left:4px solid var(--blue);background:linear-gradient(135deg,#fff,#f3f8ff)}
-        .kpi-card-secondary{min-height:88px;padding:13px}.kpi-card-secondary strong{font-size:20px}
-        .step-header{display:flex;gap:10px;padding:13px 14px;margin-top:12px;border:1px solid var(--line);border-radius:14px 14px 0 0;background:linear-gradient(135deg,#fff,#f2f7fc)}
-        .step-header>span{display:flex;align-items:center;justify-content:center;width:29px;height:29px;border-radius:8px;background:#2778da;color:white;font-weight:900}.step-header b{display:block;color:#165ea9;font-size:16px}.step-header small{display:block;color:var(--muted)}
-        .selected-stock{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;margin:9px 0;border-radius:11px;background:#eef6ff;border:1px solid #d9e9f8}.selected-stock b{display:block;font-size:20px}.selected-stock small,.selected-stock span{display:block;color:var(--muted)}.selected-stock strong{display:block;color:#1976d2;text-align:right}
-        .mini-card,.validation-result,.order-highlight{padding:11px 12px;border-radius:11px;background:white;border:1px solid var(--line);margin-bottom:8px}.mini-card span,.validation-result span{display:block;color:var(--muted);font-size:11px}.mini-card b,.validation-result strong{display:block;font-size:17px;margin-top:3px}
-        .validation-result{display:flex;align-items:center;justify-content:space-between;gap:12px}
-        .validation-result-good{background:#eef9f4;border-color:#cce7db}.validation-result-warn{background:#fff7e9;border-color:#ecd9b5}.validation-result-bad{background:#fff1f1;border-color:#eccdcd}
-        .validation-status{display:inline-flex;align-items:center;justify-content:center;min-width:54px;padding:6px 10px;border-radius:999px;font-size:12px}
-        .validation-result-good .validation-status{background:#dff3e9;color:#237451}.validation-result-warn .validation-status{background:#fceccc;color:#96641b}.validation-result-bad .validation-status{background:#f8dddd;color:#a64646}
-        .validation-row{display:flex;justify-content:space-between;padding:11px 12px;margin-top:7px;border-radius:10px;background:white;border:1px solid var(--line)}
-        .order-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 13px;margin-bottom:8px;border:1px solid var(--line);border-radius:12px;background:linear-gradient(135deg,#fff,#f5f9fd)}
-        .order-summary span{display:block;color:var(--muted);font-size:11px}.order-summary strong{display:block;margin-top:3px;font-size:18px;color:var(--ink)}
-        .order-status{display:inline-flex;align-items:center;justify-content:center;min-width:66px;padding:6px 10px;border-radius:999px;font-size:11px;white-space:nowrap;background:#eef2f6;color:#5e7184}
-        .order-status-good{background:#dff3e9;color:#237451}.order-status-warn{background:#fceccc;color:#96641b}.order-status-bad{background:#f8dddd;color:#a64646}
-        .order-count{margin-top:6px;color:var(--muted);font-size:12px;text-align:right}.order-count b{color:var(--ink)}
-        div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:white}
-        @media(max-width:640px){
-          .context-banner{gap:7px;padding:8px 10px;overflow-x:auto;white-space:nowrap;border-radius:10px}.context-banner span{font-size:10px}
-          .kpi-group-primary div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
-          .kpi-group-primary div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
-          .kpi-group-secondary div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
-          .kpi-group-secondary div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
-          .kpi-card{min-height:84px;padding:12px;border-radius:13px;box-shadow:none}
-          .kpi-card span{font-size:11px}.kpi-card strong{font-size:21px;margin:5px 0 2px}.kpi-card small{font-size:10px}
-          .kpi-card-primary{border-left:3px solid var(--blue)}
-          .kpi-card-secondary{min-height:72px;padding:10px}.kpi-card-secondary strong{font-size:17px}
-          .validation-result{padding:10px 11px;border-radius:12px;margin-bottom:6px}.validation-result strong{font-size:16px}.validation-status{min-width:48px;padding:5px 8px;font-size:11px}
-          [data-testid="stExpander"] summary{font-size:13px!important}
-          .validation-row{padding:9px 10px;margin-top:5px;border-radius:9px;font-size:12px}
-          .order-summary{padding:10px 11px;border-radius:11px;margin-bottom:7px}.order-summary strong{font-size:16px}.order-status{min-width:58px;padding:5px 8px;font-size:10px}
-          .order-count{font-size:11px;margin-top:4px}
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+def _style(st):
+    st.markdown("""
+    <style>
+    .page-title h1{margin:0;font-size:34px}.page-title p{margin:7px 0 0;color:#72849a}
+    .context-banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border:1px solid #dce6f0;border-radius:16px;background:#fff;margin:10px 0}
+    .context-banner span{color:#64748b;font-size:12px}.context-banner b{color:#1d4ed8}
+    .kpi-card,.mini-card,.selected-stock,.order-card,.validation-summary{border:1px solid #dce6f0;border-radius:16px;background:#fff;padding:14px}
+    .kpi-card span,.kpi-card small,.mini-card span,.selected-stock small,.selected-stock span,.order-card span,.validation-summary span{display:block;color:#72849a;font-size:12px}
+    .kpi-card strong{display:block;font-size:24px;margin:6px 0}.mini-card b{font-size:18px}.selected-stock{display:flex;justify-content:space-between}.selected-stock b{font-size:20px}
+    .step-title{display:flex;gap:10px;align-items:flex-start;margin:14px 0}.step-title>span{display:flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:9px;background:#2563eb;color:white;font-weight:800}
+    .step-title b{display:block}.step-title small{display:block;color:#72849a;margin-top:3px}
+    .order-count{margin-top:10px;color:#64748b}
+    @media(max-width:640px){
+      .page-title h1{font-size:20px}.page-title p{display:none}
+      .context-banner{border-radius:10px;padding:9px 10px}
+      .kpi-card,.mini-card,.selected-stock,.order-card,.validation-summary{border-radius:10px;padding:10px}
+      .step-title small{display:none}
+      div[data-testid="stHorizontalBlock"]{gap:8px!important}
+    }
+    </style>
+    """, unsafe_allow_html=True)

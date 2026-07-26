@@ -20,45 +20,49 @@ def run() -> None:
     st.markdown(
         """
         <style>
-        .wb-mobile-flow,.wb-mobile-summary,.wb-mobile-context{display:none}
+        .wb-mobile-flow,.wb-mobile-summary,.wb-mobile-context,.wb-mobile-header{display:none}
         @media(max-width:640px){
-          .wb-header-row div[data-testid="stHorizontalBlock"]{display:block!important}
-          .wb-header-row div[data-testid="stColumn"]{min-width:0!important;width:100%!important;flex:none!important}
-          .wb-header-row .ade-shell{margin-bottom:6px!important}
-          .wb-market-selector{margin:0 0 6px}
+          .wb-header-row{display:none!important}
+          .wb-mobile-header{display:block!important;padding:8px 0 6px;border-bottom:1px solid #e2e8f0}
+          .wb-mobile-header h1{margin:0;color:#0f172a;font-size:18px;line-height:1.2;letter-spacing:-.03em}
+          .wb-mobile-header p{margin:3px 0 0;color:#64748b;font-size:10px;line-height:1.35}
+          .wb-market-selector{margin:6px 0 4px}
           .wb-market-selector [data-testid="stSegmentedControl"]{width:100%!important}
           .wb-market-selector [data-testid="stSegmentedControl"]>div{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;width:100%!important;gap:2px!important;padding:2px!important;border:1px solid #d9e2ec!important;border-radius:8px!important;background:#f1f5f9!important}
           .wb-market-selector button{width:100%!important;min-height:34px!important;padding:0 8px!important;border-radius:6px!important;font-size:12px!important;font-weight:800!important}
           .wb-desktop-flow{display:none!important}
           .wb-mobile-flow{display:block!important}
-          .wb-mobile-summary{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;margin:4px 0 0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0}
-          .wb-mobile-summary-item{min-width:0;padding:9px 8px;background:#fff;border:0;border-right:1px solid #e2e8f0}
-          .wb-mobile-summary-item:nth-child(2n){border-right:0}
-          .wb-mobile-summary-item.wide{grid-column:1/-1;border-top:1px solid #e2e8f0;border-right:0}
+          .wb-mobile-summary{display:block!important;margin:4px 0 0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0}
+          .wb-mobile-summary-item{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;min-width:0;padding:8px 0;background:#fff;border:0;border-bottom:1px solid #e2e8f0}
+          .wb-mobile-summary-item:last-child{border-bottom:0}
+          .wb-mobile-summary-item.wide{display:grid}
           .wb-mobile-summary-item span{display:block;font-size:10px;color:#64748b;line-height:1.2}
-          .wb-mobile-summary-item strong{display:block;margin-top:3px;font-size:14px;line-height:1.25;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-          .wb-mobile-context{display:block!important;margin:8px 0 10px;padding:8px 0;border-bottom:1px solid #e2e8f0}
-          .wb-mobile-context-line{font-size:12px;color:#334155;font-weight:750}
-          .wb-mobile-context-meta{display:none;margin-top:6px;font-size:10px;color:#64748b;word-break:break-all}
-          .wb-mobile-context details{margin-top:4px}
-          .wb-mobile-context summary{font-size:11px;color:#64748b;cursor:pointer}
+          .wb-mobile-summary-item strong{display:block;margin:0;font-size:13px;line-height:1.25;color:#0f172a;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .wb-mobile-context{display:block!important;margin:6px 0 8px;padding:6px 0;border-bottom:1px solid #e2e8f0}
+          .wb-mobile-context-line{font-size:11px;color:#334155;font-weight:750}
+          .wb-mobile-context-meta{margin-top:5px;font-size:9px;color:#64748b;word-break:break-all;line-height:1.35}
+          .wb-mobile-context details{margin-top:3px}
+          .wb-mobile-context summary{font-size:10px;color:#64748b;cursor:pointer}
           .wb-mobile-settings [data-testid="stExpander"]{margin:0 0 6px!important}
-          .wb-mobile-settings [data-testid="stExpander"] summary{padding:0!important}
+          .wb-mobile-settings [data-testid="stExpander"] summary{padding:0!important;min-height:40px!important}
           .wb-mobile-settings [data-testid="stExpander"] summary [class*="material-symbols"]{display:none!important}
+          .wb-mobile-settings [data-testid="stExpander"] summary p{font-size:12px!important;line-height:1.2!important}
           .wb-mobile-settings [data-testid="stExpanderDetails"]{padding:6px 0 8px!important}
           .wb-mobile-settings [data-testid="stCaptionContainer"]{display:none!important}
-          .wb-settings-grid div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important}
-          .wb-settings-grid div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
-          .wb-settings-grid div[data-testid="stColumn"]:last-child{grid-column:1 / -1!important}
+          .wb-settings-grid div[data-testid="stHorizontalBlock"]{display:block!important}
+          .wb-settings-grid div[data-testid="stColumn"]{min-width:0!important;width:100%!important;flex:none!important;margin-bottom:5px!important}
           .wb-settings-grid label{font-size:10px!important;line-height:1.2!important}
           .wb-settings-grid input{min-height:36px!important;font-size:12px!important}
-          .wb-settings-actions div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:1.4fr 1fr!important;gap:6px!important}
-          .wb-settings-actions div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
+          .wb-settings-actions div[data-testid="stHorizontalBlock"]{display:block!important}
+          .wb-settings-actions div[data-testid="stColumn"]{min-width:0!important;width:100%!important;flex:none!important;margin-bottom:5px!important}
           .wb-settings-actions div[data-testid="stColumn"]:nth-child(3){display:none!important}
           .wb-settings-actions .stButton>button{min-height:38px!important;font-size:12px!important;border-radius:8px!important}
-          .wb-mobile-runtime{margin-top:4px}
+          .wb-mobile-runtime{margin-top:3px}
           .wb-mobile-runtime [data-testid="stAlert"]{margin:3px 0!important}
-          .wb-mobile-flow>.ade-step{margin:10px 0 4px!important}
+          .wb-mobile-flow>.ade-step{margin:8px 0 4px!important;padding:0!important;border:0!important}
+          .wb-mobile-flow>.ade-step .ade-step-no{font-size:10px!important}
+          .wb-mobile-flow>.ade-step h3{font-size:14px!important;line-height:1.2!important;margin:0!important}
+          .wb-mobile-flow>.ade-step p{display:none!important}
           .wb-mobile-flow .selected-stock{padding:8px 0!important;margin:0!important;border-bottom:1px solid #e2e8f0!important}
           .wb-mobile-flow .selected-stock b{font-size:14px!important}
           .wb-mobile-flow .selected-stock small,.wb-mobile-flow .selected-stock span{font-size:11px!important}
@@ -68,9 +72,15 @@ def run() -> None:
           .wb-mobile-flow [data-testid="stPlotlyChart"]{min-height:240px!important}
           .wb-mobile-flow .mini-card{padding:7px 0!important;border-bottom:1px solid #e2e8f0!important}
           .wb-mobile-flow .order-card,.wb-mobile-flow .order-count{padding:8px 0!important;border-bottom:1px solid #e2e8f0!important}
+          .wb-desktop-flow .context-banner,.wb-desktop-flow .kpi-group{display:none!important}
         }
         </style>
         """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="wb-mobile-header"><h1>투자 워크벤치</h1><p>추천 종목을 선택하고 분석·검증·주문으로 연결합니다.</p></div>',
         unsafe_allow_html=True,
     )
 

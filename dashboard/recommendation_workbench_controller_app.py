@@ -20,51 +20,54 @@ def run() -> None:
     st.markdown(
         """
         <style>
-        .wb-mobile-flow{display:none}
+        .wb-mobile-flow,.wb-mobile-summary,.wb-mobile-context{display:none}
         @media(max-width:640px){
-          .wb-header-row div[data-testid="stHorizontalBlock"]{
-            display:block!important;
-          }
-          .wb-header-row div[data-testid="stColumn"]{
-            min-width:0!important;width:100%!important;flex:none!important;
-          }
-          .wb-market-selector{margin:-2px 0 5px}
+          .wb-header-row div[data-testid="stHorizontalBlock"]{display:block!important}
+          .wb-header-row div[data-testid="stColumn"]{min-width:0!important;width:100%!important;flex:none!important}
+          .wb-header-row .ade-shell{margin-bottom:6px!important}
+          .wb-market-selector{margin:0 0 6px}
           .wb-market-selector [data-testid="stSegmentedControl"]{width:100%!important}
-          .wb-market-selector [data-testid="stSegmentedControl"]>div{
-            display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;
-            width:100%!important;gap:3px!important;padding:2px!important;
-            border:1px solid #d9e5ef!important;border-radius:8px!important;background:#edf3f8!important;
-          }
-          .wb-market-selector button{
-            width:100%!important;min-height:28px!important;padding:0 5px!important;
-            border-radius:6px!important;font-size:9px!important;font-weight:800!important;
-          }
+          .wb-market-selector [data-testid="stSegmentedControl"]>div{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;width:100%!important;gap:2px!important;padding:2px!important;border:1px solid #d9e2ec!important;border-radius:8px!important;background:#f1f5f9!important}
+          .wb-market-selector button{width:100%!important;min-height:34px!important;padding:0 8px!important;border-radius:6px!important;font-size:12px!important;font-weight:800!important}
           .wb-desktop-flow{display:none!important}
           .wb-mobile-flow{display:block!important}
-          .wb-mobile-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:4px 0 6px}
-          .wb-mobile-summary-item{display:flex;align-items:center;gap:5px;min-width:0;padding:6px;border:1px solid #d8e2ec;border-radius:8px;background:#fff}
-          .wb-mobile-summary-icon{font-size:14px;line-height:1}
-          .wb-mobile-summary-item span{display:block;font-size:7.5px;color:#64788d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-          .wb-mobile-summary-item strong{display:block;font-size:11px;line-height:1.1;color:#102235}
-          .wb-mobile-settings [data-testid="stExpander"]{margin:0 0 5px!important}
-          .wb-mobile-settings [data-testid="stExpanderDetails"]{padding:5px 6px 6px!important}
+          .wb-mobile-summary{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:0;margin:4px 0 0;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0}
+          .wb-mobile-summary-item{min-width:0;padding:9px 8px;background:#fff;border:0;border-right:1px solid #e2e8f0}
+          .wb-mobile-summary-item:nth-child(2n){border-right:0}
+          .wb-mobile-summary-item.wide{grid-column:1/-1;border-top:1px solid #e2e8f0;border-right:0}
+          .wb-mobile-summary-item span{display:block;font-size:10px;color:#64748b;line-height:1.2}
+          .wb-mobile-summary-item strong{display:block;margin-top:3px;font-size:14px;line-height:1.25;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .wb-mobile-context{display:block!important;margin:8px 0 10px;padding:8px 0;border-bottom:1px solid #e2e8f0}
+          .wb-mobile-context-line{font-size:12px;color:#334155;font-weight:750}
+          .wb-mobile-context-meta{display:none;margin-top:6px;font-size:10px;color:#64748b;word-break:break-all}
+          .wb-mobile-context details{margin-top:4px}
+          .wb-mobile-context summary{font-size:11px;color:#64748b;cursor:pointer}
+          .wb-mobile-settings [data-testid="stExpander"]{margin:0 0 6px!important}
+          .wb-mobile-settings [data-testid="stExpander"] summary{padding:0!important}
+          .wb-mobile-settings [data-testid="stExpander"] summary [class*="material-symbols"]{display:none!important}
+          .wb-mobile-settings [data-testid="stExpanderDetails"]{padding:6px 0 8px!important}
           .wb-mobile-settings [data-testid="stCaptionContainer"]{display:none!important}
-          .wb-settings-grid div[data-testid="stHorizontalBlock"]{
-            display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:4px!important;
-          }
+          .wb-settings-grid div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:6px!important}
           .wb-settings-grid div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
           .wb-settings-grid div[data-testid="stColumn"]:last-child{grid-column:1 / -1!important}
-          .wb-settings-grid label{font-size:8.5px!important;line-height:1.1!important}
-          .wb-settings-grid input{min-height:28px!important;font-size:10px!important}
-          .wb-settings-actions div[data-testid="stHorizontalBlock"]{
-            display:grid!important;grid-template-columns:1.35fr 1fr!important;gap:4px!important;
-          }
+          .wb-settings-grid label{font-size:10px!important;line-height:1.2!important}
+          .wb-settings-grid input{min-height:36px!important;font-size:12px!important}
+          .wb-settings-actions div[data-testid="stHorizontalBlock"]{display:grid!important;grid-template-columns:1.4fr 1fr!important;gap:6px!important}
           .wb-settings-actions div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
           .wb-settings-actions div[data-testid="stColumn"]:nth-child(3){display:none!important}
-          .wb-settings-actions .stButton>button{min-height:30px!important;font-size:9.5px!important;border-radius:7px!important}
+          .wb-settings-actions .stButton>button{min-height:38px!important;font-size:12px!important;border-radius:8px!important}
           .wb-mobile-runtime{margin-top:4px}
           .wb-mobile-runtime [data-testid="stAlert"]{margin:3px 0!important}
-          .wb-mobile-flow>.ade-step{margin-top:5px!important}
+          .wb-mobile-flow>.ade-step{margin:10px 0 4px!important}
+          .wb-mobile-flow .selected-stock{padding:8px 0!important;margin:0!important;border-bottom:1px solid #e2e8f0!important}
+          .wb-mobile-flow .selected-stock b{font-size:14px!important}
+          .wb-mobile-flow .selected-stock small,.wb-mobile-flow .selected-stock span{font-size:11px!important}
+          .wb-mobile-flow div[data-testid="stHorizontalBlock"]{display:block!important}
+          .wb-mobile-flow div[data-testid="stColumn"]{width:100%!important;min-width:0!important;flex:none!important}
+          .wb-mobile-flow div[data-testid="stDataFrame"]{height:auto!important;max-height:260px!important}
+          .wb-mobile-flow [data-testid="stPlotlyChart"]{min-height:240px!important}
+          .wb-mobile-flow .mini-card{padding:7px 0!important;border-bottom:1px solid #e2e8f0!important}
+          .wb-mobile-flow .order-card,.wb-mobile-flow .order-count{padding:8px 0!important;border-bottom:1px solid #e2e8f0!important}
         }
         </style>
         """,
@@ -118,9 +121,13 @@ def run() -> None:
         st.markdown(
             f"""
             <div class="wb-mobile-summary">
-              <div class="wb-mobile-summary-item"><div class="wb-mobile-summary-icon">☆</div><div><span>추천 수</span><strong>{len(recommendations)}건</strong></div></div>
-              <div class="wb-mobile-summary-item"><div class="wb-mobile-summary-icon">♢</div><div><span>검증 수</span><strong>{len(context.validations)}건</strong></div></div>
-              <div class="wb-mobile-summary-item"><div class="wb-mobile-summary-icon">▣</div><div><span>선택 종목</span><strong>{selected['symbol']}</strong></div></div>
+              <div class="wb-mobile-summary-item"><span>추천</span><strong>{len(recommendations)}건</strong></div>
+              <div class="wb-mobile-summary-item"><span>환경 조언</span><strong>{len(context.validations)}건</strong></div>
+              <div class="wb-mobile-summary-item wide"><span>선택 종목</span><strong>{selected['symbol']}</strong></div>
+            </div>
+            <div class="wb-mobile-context">
+              <div class="wb-mobile-context-line">추천 {len(recommendations)} · 조언 {len(context.validations)} · 주문 {len(context.current_orders)}</div>
+              <details><summary>실행 정보 보기</summary><div class="wb-mobile-context-meta">run_id {context.run_id}<br>최근 실행 {context.finished_at or '-'} · {context.run_type or '-'}</div></details>
             </div>
             """,
             unsafe_allow_html=True,
@@ -244,16 +251,10 @@ def _render_controller(st, recommendations, selected, market: str) -> None:
         .wb-mobile-cards{display:none}
         @media(max-width:640px){
           .wb-desktop-table{display:none!important}
-          .wb-mobile-cards{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;max-height:154px;overflow:auto;padding-right:1px}
-          .wb-mobile-card-wrap{margin:0}
-          .wb-mobile-card-wrap .stButton>button{
-            min-height:44px!important;padding:5px 6px!important;border-radius:7px!important;
-            text-align:left!important;justify-content:flex-start!important;background:#fff!important;
-            border:1px solid #dbe6f0!important;color:#18324a!important;font-size:9px!important;line-height:1.15!important;
-          }
-          .wb-mobile-card-wrap.selected .stButton>button{
-            background:#edf5ff!important;border-color:#8fbbe7!important;box-shadow:inset 2px 0 0 #2f78d6!important;
-          }
+          .wb-mobile-cards{display:block!important;max-height:240px;overflow:auto;border-top:1px solid #e2e8f0}
+          .wb-mobile-card-wrap{margin:0;border-bottom:1px solid #e2e8f0}
+          .wb-mobile-card-wrap .stButton>button{min-height:48px!important;padding:8px 4px!important;border:0!important;border-radius:0!important;text-align:left!important;justify-content:flex-start!important;background:#fff!important;color:#18324a!important;font-size:12px!important;line-height:1.35!important;box-shadow:none!important}
+          .wb-mobile-card-wrap.selected .stButton>button{background:#eff6ff!important;color:#1d4ed8!important;box-shadow:inset 3px 0 0 #2563eb!important}
         }
         </style>
         """,
@@ -296,7 +297,7 @@ def _render_controller(st, recommendations, selected, market: str) -> None:
         rank_no = int(row["rank_no"])
         weekly = float(row["weekly_similarity"])
         sto = float(row["sto_similarity"])
-        label = f"#{rank_no} {row['symbol']}\n주봉 {weekly:.1f}% · STO {sto:.1f}%"
+        label = f"#{rank_no} {row['symbol']} · 주봉 {weekly:.1f}% · STO {sto:.1f}%"
         st.markdown(
             f'<div class="wb-mobile-card-wrap {"selected" if is_selected else ""}">',
             unsafe_allow_html=True,

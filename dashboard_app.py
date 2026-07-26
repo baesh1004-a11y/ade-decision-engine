@@ -63,43 +63,48 @@ def main() -> None:
           [data-testid="stSidebarCollapsedControl"]{display:none!important}
           .ade-mobile-bottom-nav{
             position:fixed;
-            left:8px;
-            right:8px;
-            bottom:8px;
+            left:0;
+            right:0;
+            top:0;
+            bottom:auto;
             z-index:9999;
             display:grid;
             grid-template-columns:repeat(5,minmax(0,1fr));
-            gap:2px;
-            padding:5px;
-            border:1px solid rgba(50,84,119,.14);
-            border-radius:16px;
-            background:rgba(255,255,255,.94);
-            box-shadow:0 10px 28px rgba(29,62,96,.16);
-            backdrop-filter:blur(14px);
+            gap:0;
+            padding:calc(4px + env(safe-area-inset-top)) 6px 4px;
+            border:0;
+            border-bottom:1px solid #d1d5db;
+            border-radius:0;
+            background:#ffffff;
+            box-shadow:none;
+            backdrop-filter:none;
           }
           .ade-mobile-bottom-nav a{
             min-width:0;
-            min-height:42px;
+            min-height:48px;
             padding:4px 2px;
-            border-radius:11px;
-            color:#6f8194;
+            border-radius:0;
+            color:#6b7280;
             text-decoration:none;
             display:flex;
             flex-direction:column;
             align-items:center;
             justify-content:center;
-            gap:1px;
+            gap:2px;
             font-size:10px;
-            font-weight:800;
+            font-weight:750;
             line-height:1;
             white-space:nowrap;
           }
-          .ade-mobile-bottom-nav a span:first-child{font-size:16px;line-height:1}
+          .ade-mobile-bottom-nav a span:first-child{font-size:17px;line-height:1}
           .ade-mobile-bottom-nav a:hover,.ade-mobile-bottom-nav a:focus{
-            background:#edf5ff;
-            color:#19559a;
+            background:#f8fafc;
+            color:#2563eb;
           }
-          [data-testid="stAppViewContainer"] .main .block-container{padding-bottom:76px!important}
+          [data-testid="stAppViewContainer"] .main .block-container{
+            padding-top:calc(60px + env(safe-area-inset-top))!important;
+            padding-bottom:18px!important;
+          }
         }
         </style>
         <nav class="ade-mobile-bottom-nav" aria-label="모바일 빠른 메뉴">

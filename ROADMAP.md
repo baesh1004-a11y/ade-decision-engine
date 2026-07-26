@@ -47,11 +47,12 @@
 | 24 | Order Validation & Routing Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | 주문 직전 재검증, 가격 보호, 멱등성, 브로커 라우팅, 불확실 응답 격리 |
 | 25 | Execution Reconciliation & Recovery Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | VERIFY_REQUIRED, 부분체결, 중복체결, 응답 유실, 원장 불일치 대사·복구 |
 | 26 | Portfolio Rebalancing & Exit Orchestration Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 손절·추적손절·이익보호·집중도·현금·낙폭 기반 축소 및 청산 우선순위 |
+| 27 | Strategy Validation & Promotion Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 전략 검증, Champion–Challenger 비교, 단계별 승격·강등, 증거 Manifest 관리 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 현재 계획된 핵심 판단·주문·체결복구·리밸런싱·운영·감사 계층 설계 완료
+[██████████] 판단·주문·체결복구·리밸런싱·전략검증·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -66,6 +67,7 @@
 8. OrderIntent와 순수 검증 함수 최소 구현
 9. idempotency reservation과 DRY_RUN 경로 구현
 10. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
+11. Strategy Validation 필수검사와 Evidence Manifest 최소 구현
 
 ## 다음 작업
 
@@ -81,8 +83,10 @@
 10. SQLite idempotency reservation과 `DryRunBrokerAdapter` 구현
 11. `execution/reconciliation/` 모델·중복 제거·resolver 최소 구현
 12. VERIFY_REQUIRED → broker evidence → 상태 확정 fixture 테스트
-13. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-14. Report Engine용 최소 JSON fixture 생성
+13. `strategy_validation/models.py`, `mandatory.py`, `manifest.py` 최소 구현
+14. 고정 Backtest 결과로 BACKTEST_APPROVED/REJECTED 판정 테스트
+15. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+16. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -113,3 +117,9 @@
 - Exit Proposal 수량은 보유수량·매도가능수량·미체결 예약수량 한도를 초과할 수 없다.
 - 체결 대사가 완료되지 않은 포지션은 자동 리밸런싱하지 않고 수동 검토한다.
 - 동일 입력 스냅샷과 정책은 결정론적인 Exit Proposal과 hash를 생성해야 한다.
+- 백테스트 성과만으로 PAPER 또는 LIVE 승격을 확정하지 않는다.
+- 필수 안전 검증 실패는 높은 수익률이나 종합 점수로 상쇄할 수 없다.
+- 전략 승격 검증은 데이터·정책·코드·Universe·비용 가정을 불변 Manifest로 기록한다.
+- Champion 대비 명확한 개선 증거가 없으면 기존 전략을 유지한다.
+- LIVE 승격은 명시적 승인 없이는 확정할 수 없다.
+- SUSPENDED 전략은 Scheduler와 Orchestrator에서 신규 실행을 차단해야 한다.

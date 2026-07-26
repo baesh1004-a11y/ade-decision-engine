@@ -28,32 +28,43 @@ def run() -> None:
           .wb-header-row div[data-testid="stColumn"]{
             min-width:0!important;width:100%!important;flex:none!important;
           }
-          .wb-market-selector{
-            margin:-3px 0 10px;
-          }
-          .wb-market-selector [data-testid="stSegmentedControl"]{
-            width:100%!important;
-          }
+          .wb-market-selector{margin:-2px 0 5px}
+          .wb-market-selector [data-testid="stSegmentedControl"]{width:100%!important}
           .wb-market-selector [data-testid="stSegmentedControl"]>div{
-            display:grid!important;
-            grid-template-columns:repeat(2,minmax(0,1fr))!important;
-            width:100%!important;
-            gap:6px!important;
-            padding:4px!important;
-            border:1px solid #d9e5ef!important;
-            border-radius:12px!important;
-            background:#edf3f8!important;
+            display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;
+            width:100%!important;gap:3px!important;padding:2px!important;
+            border:1px solid #d9e5ef!important;border-radius:8px!important;background:#edf3f8!important;
           }
           .wb-market-selector button{
-            width:100%!important;
-            min-height:36px!important;
-            padding:0 8px!important;
-            border-radius:9px!important;
-            font-size:12px!important;
-            font-weight:800!important;
+            width:100%!important;min-height:28px!important;padding:0 5px!important;
+            border-radius:6px!important;font-size:9px!important;font-weight:800!important;
           }
           .wb-desktop-flow{display:none!important}
           .wb-mobile-flow{display:block!important}
+          .wb-mobile-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px;margin:4px 0 6px}
+          .wb-mobile-summary-item{display:flex;align-items:center;gap:5px;min-width:0;padding:6px;border:1px solid #d8e2ec;border-radius:8px;background:#fff}
+          .wb-mobile-summary-icon{font-size:14px;line-height:1}
+          .wb-mobile-summary-item span{display:block;font-size:7.5px;color:#64788d;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+          .wb-mobile-summary-item strong{display:block;font-size:11px;line-height:1.1;color:#102235}
+          .wb-mobile-settings [data-testid="stExpander"]{margin:0 0 5px!important}
+          .wb-mobile-settings [data-testid="stExpanderDetails"]{padding:5px 6px 6px!important}
+          .wb-mobile-settings [data-testid="stCaptionContainer"]{display:none!important}
+          .wb-settings-grid div[data-testid="stHorizontalBlock"]{
+            display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:4px!important;
+          }
+          .wb-settings-grid div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
+          .wb-settings-grid div[data-testid="stColumn"]:last-child{grid-column:1 / -1!important}
+          .wb-settings-grid label{font-size:8.5px!important;line-height:1.1!important}
+          .wb-settings-grid input{min-height:28px!important;font-size:10px!important}
+          .wb-settings-actions div[data-testid="stHorizontalBlock"]{
+            display:grid!important;grid-template-columns:1.35fr 1fr!important;gap:4px!important;
+          }
+          .wb-settings-actions div[data-testid="stColumn"]{min-width:0!important;width:auto!important;flex:none!important}
+          .wb-settings-actions div[data-testid="stColumn"]:nth-child(3){display:none!important}
+          .wb-settings-actions .stButton>button{min-height:30px!important;font-size:9.5px!important;border-radius:7px!important}
+          .wb-mobile-runtime{margin-top:4px}
+          .wb-mobile-runtime [data-testid="stAlert"]{margin:3px 0!important}
+          .wb-mobile-flow>.ade-step{margin-top:5px!important}
         }
         </style>
         """,
@@ -104,10 +115,20 @@ def run() -> None:
         current = base._current_bars(conn, profile.code, ticker, profile.price_source)
         historical = base._pattern_bars(conn, pattern)
 
-        base._render_context_banner(st, context)
-        base._render_kpis(st, context, recommendations)
+        st.markdown(
+            f"""
+            <div class="wb-mobile-summary">
+              <div class="wb-mobile-summary-item"><div class="wb-mobile-summary-icon">☆</div><div><span>추천 수</span><strong>{len(recommendations)}건</strong></div></div>
+              <div class="wb-mobile-summary-item"><div class="wb-mobile-summary-icon">♢</div><div><span>검증 수</span><strong>{len(context.validations)}건</strong></div></div>
+              <div class="wb-mobile-summary-item"><div class="wb-mobile-summary-icon">▣</div><div><span>선택 종목</span><strong>{selected['symbol']}</strong></div></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         st.markdown('<div class="wb-desktop-flow">', unsafe_allow_html=True)
+        base._render_context_banner(st, context)
+        base._render_kpis(st, context, recommendations)
         left, center, right = st.columns([1.2, 3.2, 1.2], gap="medium")
         with left:
             step_header(1, "추천 목록", "종목을 선택하면 분석과 주문 영역이 함께 변경됩니다.")
@@ -148,42 +169,8 @@ def _render_shared_generation_controls(profile, runtime, context) -> None:
     sto_key = f"{profile.code}_sto"
     top_key = f"{profile.code}_top_n"
 
-    st.markdown(
-        """
-        <style>
-        @media(max-width:640px){
-          .wb-settings-grid div[data-testid="stHorizontalBlock"]{
-            display:grid!important;
-            grid-template-columns:repeat(2,minmax(0,1fr))!important;
-            gap:8px!important;
-          }
-          .wb-settings-grid div[data-testid="stColumn"]{
-            min-width:0!important;width:auto!important;flex:none!important;
-          }
-          .wb-settings-grid label{font-size:11px!important}
-          .wb-settings-grid input{min-height:42px!important;font-size:14px!important}
-          .wb-settings-actions div[data-testid="stHorizontalBlock"]{
-            display:grid!important;
-            grid-template-columns:1fr 1fr!important;
-            gap:8px!important;
-          }
-          .wb-settings-actions div[data-testid="stColumn"]{
-            min-width:0!important;width:auto!important;flex:none!important;
-          }
-          .wb-settings-actions div[data-testid="stColumn"]:first-child{
-            grid-column:1 / -1!important;
-          }
-          .wb-settings-actions .stButton>button,
-          .wb-settings-actions [data-testid="stPageLink-NavLink"]{
-            min-height:44px!important;font-size:13px!important;border-radius:12px!important;
-          }
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    with st.expander("추천 생성 설정 · 한국/미국 추천 메뉴와 공용", expanded=False):
+    st.markdown('<div class="wb-mobile-settings">', unsafe_allow_html=True)
+    with st.expander("추천 설정", expanded=False):
         st.caption(
             "이 영역과 시장별 추천 메뉴는 동일한 설정 파일, 동일한 실행 작업, 동일한 DB 결과를 사용합니다. "
             "한 화면에서 시작한 작업은 다른 화면에서도 같은 상태로 표시됩니다."
@@ -219,32 +206,27 @@ def _render_shared_generation_controls(profile, runtime, context) -> None:
             else:
                 st.warning("같은 시장의 추천 작업이 이미 다른 화면에서 실행 중입니다.")
 
-        if b2.button("상태·결과 새로고침", use_container_width=True, key=f"workbench_refresh_{profile.code}"):
+        if b2.button("새로고침", use_container_width=True, key=f"workbench_refresh_{profile.code}"):
             st.rerun()
         target = "pages/7_Daily_Center.py" if profile.code == "kr" else "pages/10_US_Daily_Center.py"
         b3.page_link(target, label=f"{profile.name} 추천 화면", use_container_width=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
+        st.markdown('<div class="wb-mobile-runtime">', unsafe_allow_html=True)
         current_runtime = get_status(profile.code)
         state = str(current_runtime.get("state") or "IDLE")
         if bool(current_runtime.get("running")):
             progress = float(current_runtime.get("overall_progress", current_runtime.get("progress", 0.0)) or 0.0)
             current = int(current_runtime.get("current") or current_runtime.get("processed_symbols") or 0)
             total = int(current_runtime.get("total") or current_runtime.get("total_symbols") or 0)
-            st.success("시장별 추천 메뉴와 공유된 추천 작업이 실행 중입니다.")
-            st.progress(progress, text=str(current_runtime.get("message") or "추천 계산 중"))
-            st.caption(
-                f"상태 {state} · 처리 {current:,}/{total:,} · "
-                f"최근 처리 종목 {current_runtime.get('current_ticker') or '-'} · "
-                f"run 결과는 완료 후 두 화면에 동시에 반영됩니다."
-            )
+            st.success("추천 작업 실행 중")
+            st.progress(progress, text=str(current_runtime.get("message") or f"처리 {current:,}/{total:,}"))
         elif state == "COMPLETED":
-            st.success(
-                f"공유 추천 작업 완료 · 추천 {int(current_runtime.get('recommendation_count') or 0)}개 · "
-                "새로고침하면 최신 완료 실행이 워크벤치에 반영됩니다."
-            )
+            st.success(f"추천 완료 · {int(current_runtime.get('recommendation_count') or 0)}건")
         elif state in {"FAILED", "STALE", "CANCELLED"}:
             st.warning(str(current_runtime.get("error_message") or current_runtime.get("message") or state))
+        st.markdown('</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _controller_selection(recommendations, market: str):
@@ -262,16 +244,15 @@ def _render_controller(st, recommendations, selected, market: str) -> None:
         .wb-mobile-cards{display:none}
         @media(max-width:640px){
           .wb-desktop-table{display:none!important}
-          .wb-mobile-cards{display:block}
-          .wb-mobile-card-wrap{margin:0 0 8px}
+          .wb-mobile-cards{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;max-height:154px;overflow:auto;padding-right:1px}
+          .wb-mobile-card-wrap{margin:0}
           .wb-mobile-card-wrap .stButton>button{
-            min-height:66px!important;padding:9px 11px!important;border-radius:13px!important;
+            min-height:44px!important;padding:5px 6px!important;border-radius:7px!important;
             text-align:left!important;justify-content:flex-start!important;background:#fff!important;
-            border:1px solid #dbe6f0!important;color:#18324a!important;font-size:13px!important;
+            border:1px solid #dbe6f0!important;color:#18324a!important;font-size:9px!important;line-height:1.15!important;
           }
           .wb-mobile-card-wrap.selected .stButton>button{
-            background:#edf5ff!important;border-color:#8fbbe7!important;
-            box-shadow:inset 3px 0 0 #2f78d6!important;
+            background:#edf5ff!important;border-color:#8fbbe7!important;box-shadow:inset 2px 0 0 #2f78d6!important;
           }
         }
         </style>
@@ -315,7 +296,7 @@ def _render_controller(st, recommendations, selected, market: str) -> None:
         rank_no = int(row["rank_no"])
         weekly = float(row["weekly_similarity"])
         sto = float(row["sto_similarity"])
-        label = f"#{rank_no}  {row['symbol']}\n주봉 {weekly:.1f}%  ·  STO {sto:.1f}%"
+        label = f"#{rank_no} {row['symbol']}\n주봉 {weekly:.1f}% · STO {sto:.1f}%"
         st.markdown(
             f'<div class="wb-mobile-card-wrap {"selected" if is_selected else ""}">',
             unsafe_allow_html=True,

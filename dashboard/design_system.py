@@ -139,13 +139,36 @@ div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid
   .stApp{background:#fff!important}
   [data-testid="stHeader"]{background:#fff!important;border-bottom:1px solid var(--ade-line)!important;backdrop-filter:none!important}
   [data-testid="stToolbar"],#MainMenu,footer{display:none!important}
-  [data-testid="stAppViewContainer"] .main .block-container{max-width:none!important;padding:8px 12px 68px!important}
+  [data-testid="stAppViewContainer"] .main .block-container{max-width:none!important;padding:8px 12px 72px!important}
   [data-testid="stSidebar"]{background:#fff!important;border-right:1px solid var(--ade-line)!important}
   [data-testid="stSidebar"] *{color:var(--ade-ink)!important}
   [data-testid="stSidebar"] a{margin:1px 4px!important;border-radius:0!important}
   [data-testid="stSidebar"] a[aria-current="page"]{background:#eff6ff!important;box-shadow:none!important}
-  h1,h2,h3,h4,h5,h6,p,label,span,small,div{letter-spacing:-.01em}
-  [data-testid="stMarkdownContainer"],[data-testid="stMarkdownContainer"] p,[data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{color:var(--ade-muted)!important;font-size:12px!important;line-height:1.45!important}
+
+  h1,h2,h3,h4,h5,h6,p,label,small{letter-spacing:-.01em}
+  [data-testid="stMarkdownContainer"],
+  [data-testid="stMarkdownContainer"] p,
+  [data-testid="stCaptionContainer"],
+  [data-testid="stCaptionContainer"] p{color:var(--ade-muted)!important;font-size:12px!important;line-height:1.45!important}
+
+  .material-symbols-rounded,
+  .material-symbols-outlined,
+  .material-icons,
+  [class*="material-symbols"]{
+    font-family:"Material Symbols Rounded","Material Symbols Outlined","Material Icons"!important;
+    font-style:normal!important;
+    font-weight:normal!important;
+    font-size:18px!important;
+    line-height:1!important;
+    letter-spacing:normal!important;
+    text-transform:none!important;
+    white-space:nowrap!important;
+    word-wrap:normal!important;
+    direction:ltr!important;
+    -webkit-font-feature-settings:"liga"!important;
+    -webkit-font-smoothing:antialiased!important;
+  }
+
   .ade-shell{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 0 8px;padding:8px 0 9px;border-radius:0;background:transparent;border:0;border-bottom:1px solid var(--ade-line);box-shadow:none;overflow:visible}
   .ade-shell:after{display:none}
   .ade-shell>div:first-child{min-width:0}
@@ -164,6 +187,7 @@ div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid
   .ade-step>span{width:20px;height:20px;border-radius:50%;font-size:10px;box-shadow:none;background:var(--ade-blue)}
   .ade-step b{font-size:14px;line-height:1.2;color:var(--ade-ink)}
   .ade-step small{display:none}
+
   .ade-card,.ade-kpi,.ade-panel,.action-card,.market-card,.system-card,.flow,.ops-card{
     background:transparent!important;border:0!important;border-radius:0!important;box-shadow:none!important;
     padding:10px 0!important;min-height:auto!important;margin:0!important;border-bottom:1px solid var(--ade-line)!important;
@@ -172,22 +196,29 @@ div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid
   .ade-card h3,.ade-panel h3,.action-card h3,.market-card h3,.system-card h3,.ops-card h3{font-size:14px!important;line-height:1.2!important;margin:0 0 3px!important;color:var(--ade-ink)!important}
   .ade-kpi strong{font-size:20px;color:var(--ade-ink);margin:4px 0 2px!important}
   .ade-action,.ade-empty,.ade-status-row{background:transparent!important;border:0!important;border-bottom:1px solid var(--ade-line)!important;border-radius:0!important;box-shadow:none!important;padding:10px 0!important;margin:0!important;min-height:auto!important}
-  .ade-action strong{font-size:13px!important;margin-bottom:3px!important}.ade-action span,.ade-status-row span{font-size:11px!important}
+  .ade-action strong{font-size:13px!important;margin-bottom:3px!important}
+  .ade-action span,.ade-status-row span{font-size:11px!important}
   .ade-empty{font-size:11px!important;text-align:left!important}
   .ade-divider{margin:8px 0!important}
-  div[data-testid="stHorizontalBlock"]{gap:8px!important}
+
+  div[data-testid="stHorizontalBlock"]{gap:8px!important;align-items:stretch!important}
+  div[data-testid="stHorizontalBlock"]>div[data-testid="stColumn"]{min-width:0!important}
   div[data-testid="stMetric"]{background:transparent!important;border:0!important;border-bottom:1px solid var(--ade-line)!important;border-radius:0!important;padding:10px 0!important;box-shadow:none!important}
   div[data-testid="stMetricLabel"]{color:var(--ade-muted)!important;font-size:11px!important}
   div[data-testid="stMetricValue"]{color:var(--ade-ink)!important;font-size:1.2rem!important}
   div[data-testid="stMetricDelta"]{font-size:10px!important}
   div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{background:#fff!important;border:1px solid var(--ade-line)!important;border-radius:0!important;box-shadow:none!important;overflow:auto!important}
   [data-testid="stDataFrame"]{max-width:100%!important}
-  .stButton>button,.stLinkButton>a,[data-testid="stPageLink-NavLink"]{width:100%!important;min-height:40px!important;border-radius:8px!important;background:#fff!important;border:1px solid var(--ade-line)!important;color:var(--ade-ink)!important;font-size:13px!important;font-weight:750!important;box-shadow:none!important;padding:0 10px!important}
+
+  .stButton>button,.stLinkButton>a,[data-testid="stPageLink-NavLink"]{width:100%!important;min-height:40px!important;border-radius:8px!important;background:#fff!important;border:1px solid var(--ade-line)!important;color:var(--ade-ink)!important;font-size:13px!important;font-weight:750!important;box-shadow:none!important;padding:0 10px!important;white-space:normal!important;overflow-wrap:anywhere!important}
   .stButton>button[kind="primary"],.stLinkButton>a[kind="primary"]{background:#2563eb!important;border-color:#2563eb!important;color:#fff!important}
+  [data-testid="stPageLink-NavLink"] span{min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important}
+
   [data-testid="stExpander"],[data-testid="stExpander"] details,[data-testid="stExpanderDetails"]{background:#fff!important;color:var(--ade-ink)!important}
   [data-testid="stExpander"]{border:0!important;border-bottom:1px solid var(--ade-line)!important;border-radius:0!important;box-shadow:none!important;overflow:hidden!important}
   [data-testid="stExpander"] summary{min-height:40px!important;background:#fff!important;color:var(--ade-ink)!important;padding:0!important;font-size:13px!important}
   [data-testid="stExpander"] summary *{color:var(--ade-ink)!important;font-size:13px!important}
+
   [data-baseweb="select"]>div,[data-baseweb="input"]>div,input,textarea{background:#fff!important;border-color:var(--ade-line)!important;color:var(--ade-ink)!important;border-radius:8px!important}
   [data-testid="stNumberInput"] label,[data-testid="stNumberInput"] p,[data-testid="stNumberInput"] span{color:#475569!important;font-size:11px!important;line-height:1.25!important}
   [data-testid="stNumberInput"] [data-baseweb="input"]>div{background:#fff!important;border-color:var(--ade-line)!important;min-height:38px!important}
@@ -199,9 +230,11 @@ div[data-testid="stDataFrame"],div[data-testid="stPlotlyChart"]{border:1px solid
   [data-testid="stSegmentedControl"] button{min-height:36px!important;font-size:12px!important;padding:0 8px!important;border-radius:8px!important}
   [data-testid="stToggle"] label,[data-testid="stCheckbox"] label,[data-testid="stRadio"] label{font-size:12px!important;line-height:1.2!important}
   [data-testid="stSlider"]{padding:5px 1px!important}
+
   [data-testid="stTabs"] [role="tablist"]{gap:0!important;overflow-x:auto!important;white-space:nowrap!important;border-bottom:1px solid var(--ade-line)!important}
   [data-testid="stTabs"] button[role="tab"]{min-height:36px!important;border-radius:0!important;background:#fff!important;color:#64748b!important;border:0!important;border-bottom:2px solid transparent!important;padding:0 10px!important;font-size:12px!important}
   [data-testid="stTabs"] button[role="tab"][aria-selected="true"]{background:#fff!important;color:#1d4ed8!important;border-bottom-color:#2563eb!important}
+
   [data-testid="stAlert"]{border-radius:0!important;background:#fff!important;border:0!important;border-left:3px solid var(--ade-blue)!important;color:var(--ade-ink)!important;padding:9px 10px!important}
   [data-testid="stAlert"] *{color:var(--ade-ink)!important;font-size:12px!important;line-height:1.35!important}
   [data-testid="stProgress"]{margin:6px 0!important}

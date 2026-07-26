@@ -276,7 +276,7 @@ def _order_panel(st, selected, market, validation, context) -> None:
     if validation is not None:
         st.caption("환경 조언이 저장된 종목입니다. 주문 전에 참고하세요.")
     st.page_link(
-        "pages/8_Order_Manager.py" if market == "kr" else "pages/11_US_Order_Manager.py",
+        "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py",
         label="주문 화면",
         icon="💳",
         use_container_width=True,
@@ -365,23 +365,4 @@ def _step_title(st, number, title, description):
 
 
 def _style(st):
-    st.markdown("""
-    <style>
-    .page-title h1{margin:0;font-size:34px}.page-title p{margin:7px 0 0;color:#72849a}
-    .context-banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border:1px solid #dce6f0;border-radius:16px;background:#fff;margin:10px 0}
-    .context-banner span{color:#64748b;font-size:12px}.context-banner b{color:#1d4ed8}
-    .kpi-card,.mini-card,.selected-stock,.order-card,.validation-summary{border:1px solid #dce6f0;border-radius:16px;background:#fff;padding:14px}
-    .kpi-card span,.kpi-card small,.mini-card span,.selected-stock small,.selected-stock span,.order-card span,.validation-summary span{display:block;color:#72849a;font-size:12px}
-    .kpi-card strong{display:block;font-size:24px;margin:6px 0}.mini-card b{font-size:18px}.selected-stock{display:flex;justify-content:space-between}.selected-stock b{font-size:20px}
-    .step-title{display:flex;gap:10px;align-items:flex-start;margin:14px 0}.step-title>span{display:flex;width:28px;height:28px;align-items:center;justify-content:center;border-radius:9px;background:#2563eb;color:white;font-weight:800}
-    .step-title b{display:block}.step-title small{display:block;color:#72849a;margin-top:3px}
-    .order-count{margin-top:10px;color:#64748b}
-    @media(max-width:640px){
-      .page-title h1{font-size:20px}.page-title p{display:none}
-      .context-banner{border-radius:10px;padding:9px 10px}
-      .kpi-card,.mini-card,.selected-stock,.order-card,.validation-summary{border-radius:10px;padding:10px}
-      .step-title small{display:none}
-      div[data-testid="stHorizontalBlock"]{gap:8px!important}
-    }
-    </style>
-    """, unsafe_allow_html=True)
+    st.markdown("<style></style>", unsafe_allow_html=True)

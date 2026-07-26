@@ -71,12 +71,6 @@ def main() -> None:
           .mobile-section-head{display:block;margin-bottom:3px;padding-bottom:5px;border-bottom:1px solid #e5e7eb}
           .mobile-section-head h2{margin:0;color:#111827;font-size:14px;letter-spacing:-.02em}
           .mobile-section-head span{display:none}
-          .mobile-action-list{display:block}
-          .mobile-action{display:grid;grid-template-columns:28px minmax(0,1fr) auto;align-items:center;gap:9px;padding:9px 0;border-bottom:1px solid #eef2f7;background:#fff;text-decoration:none!important}
-          .mobile-action .icon{display:grid;place-items:center;width:28px;height:28px;border-radius:7px;background:#f3f4f6;font-size:14px}
-          .mobile-action strong{display:block;color:#111827;font-size:13px}
-          .mobile-action small{display:block;margin-top:1px;color:#6b7280;font-size:10px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-          .mobile-action .chev{color:#9ca3af;font-size:17px}
           .mobile-account{display:block;background:#fff}
           .mobile-account-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #eef2f7}
           .mobile-account-row .label{color:#111827;font-size:12px;font-weight:750}
@@ -249,16 +243,6 @@ def _mobile_home(
       </section>
 
       <section class="mobile-section">
-        <div class="mobile-section-head"><h2>바로 실행</h2></div>
-        <div class="mobile-action-list">
-          {_mobile_action("📈", "AI 추천", "한국·미국 추천 결과 확인", "/Recommendation_Workbench")}
-          {_mobile_action("💳", "승인 대기 주문", f'{_count_text(pending_orders)}건 검토 필요', "/Trading_Desk")}
-          {_mobile_action("🗓️", "예약주문", f'활성 {scheduled["active"]}건 · 실패 {scheduled["failed"]}건', "/Scheduled_Orders")}
-          {_mobile_action("💼", "포트폴리오", f'보유 종목 {portfolio.total_holdings}개', "/ADE_Cockpit")}
-        </div>
-      </section>
-
-      <section class="mobile-section">
         <div class="mobile-section-head"><h2>운영 상태</h2></div>
         <div class="mobile-account">
           {_mobile_account_row("🇰🇷 한국시장", f'추천 {_count_text(_latest_recommendation_count(Path("datahub/market.db")))} · 검증 {_count_text(_latest_validation_count(Path("datahub/market.db")))}', "정상" if kr.ready else "확인 필요")}
@@ -280,10 +264,6 @@ def _mobile_home(
 
 def _mobile_summary_card(label: str, value: str, detail: str) -> str:
     return f'<div class="mobile-summary-card"><div class="mobile-summary-copy"><span>{escape(label)}</span><em>{escape(detail)}</em></div><strong>{escape(value)}</strong></div>'
-
-
-def _mobile_action(icon: str, title: str, detail: str, href: str) -> str:
-    return f'<a class="mobile-action" href="{href}"><span class="icon">{icon}</span><span><strong>{escape(title)}</strong><small>{escape(detail)}</small></span><span class="chev">›</span></a>'
 
 
 def _mobile_account_row(label: str, detail: str, value: str) -> str:
@@ -430,37 +410,37 @@ def _kis_connection_status() -> tuple[str, bool | None]:
 def _recent_activity(kr_db: Path, us_db: Path) -> pd.DataFrame:
     rows: list[dict[str, str]] = []
     for path, market, table in [
-        (kr_db, "kr", "trade_order_requests"),
-        (us_db, "us", "us_trade_order_requests"),
+        (kr_db, "KR", "trade_order_requests"),
+        (us_db, "US", "us_trade_order_requests"),
     ]:
         if not path.exists():
             continue
         try:
             with sqlite3.connect(path) as conn:
-                conn.row_factory = sqlite3.Row
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
                 if table not in tables:
                     continue
-                name_map = build_name_map(conn, market)
+                name_map = build_name_map(conn, market.lower())
                 query = f'SELECT * FROM "{table}" ORDER BY id DESC LIMIT 5'
-                for row in conn.execute(query).fetchall():
-                    mapping = dict(row)
-                    ticker = normalize_ticker(mapping.get("ticker") or mapping.get("symbol") or "", market)
-                    raw_name = mapping.get("name") or mapping.get("stock_name") or mapping.get("symbol_name")
-                    company_name = resolve_name(ticker, raw_name, name_map, market)
+                cursor = conn.execute(query)
+                columns = [desc[0] for desc in cursor.description]
+                for row in cursor.fetchall():
+                    mapping = dict(zip(columns, row))
+                    ticker = normalize_ticker(mapping.get("ticker") or mapping.get("symbol") or "-", market.lower())
+                    name = resolve_name(ticker, mapping.get("name"), name_map, market.lower())
                     rows.append({
-                        "구분": f'{market.upper()} 주문',
-                        "종목": company_name,
+                        "구분": market,
+                        "종목": name,
                         "티커": ticker,
                         "상태": str(mapping.get("status") or "-"),
                         "시각": str(mapping.get("created_at") or mapping.get("updated_at") or "-"),
                     })
         except sqlite3.Error:
             continue
-    if not rows:
-        return pd.DataFrame()
     frame = pd.DataFrame(rows)
-    return frame.sort_values("시각", ascending=False, kind="stable").head(5).reset_index(drop=True)
+    if not frame.empty and "시각" in frame.columns:
+        frame = frame.sort_values("시각", ascending=False).head(5).reset_index(drop=True)
+    return frame
 
 
 def _count_sum(*values: int | None) -> int | None:

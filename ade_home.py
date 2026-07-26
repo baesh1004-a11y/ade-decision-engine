@@ -55,7 +55,8 @@ def main() -> None:
           [data-testid="stAppViewContainer"],.stApp{background:#fff!important}
           [data-testid="stAppViewContainer"] .main .block-container{max-width:none!important;padding:0 16px 24px!important}
           .desktop-home{display:none!important}
-          .mobile-app{display:block;color:#111827;padding-top:max(6px,env(safe-area-inset-top))}
+          .desktop-home,.desktop-home *{visibility:hidden!important;height:0!important;min-height:0!important;max-height:0!important;margin:0!important;padding:0!important;border:0!important;overflow:hidden!important}
+          .mobile-app{display:block!important;color:#111827;padding-top:max(6px,env(safe-area-inset-top))}
           .mobile-topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid #e5e7eb}
           .mobile-topbar small{display:block;color:#6b7280;font-size:10px;font-weight:650}
           .mobile-status-dot{display:inline-flex;align-items:center;gap:6px;padding:4px 7px;border-radius:999px;background:#ecfdf3;border:1px solid #bbf7d0;color:#166534;font-size:9px;font-weight:800;white-space:nowrap}

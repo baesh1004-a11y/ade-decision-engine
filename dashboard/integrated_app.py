@@ -38,6 +38,46 @@ def _run(db_path: str = "datahub/market.db") -> None:
 
     st.set_page_config(page_title="ADE AI Trading Cockpit", page_icon="◈", layout="wide")
     _inject_style(st)
+    st.markdown(
+        """
+        <style>
+        @media(max-width:640px){
+          [data-testid="stAppViewContainer"] .main .block-container{padding:8px 12px 76px!important;max-width:none!important}
+          .top-hero{display:block!important;margin:0 0 10px!important;padding:12px 0 10px!important;border:0!important;border-bottom:1px solid #e5e7eb!important;border-radius:0!important;box-shadow:none!important;background:#fff!important;backdrop-filter:none!important}
+          .top-hero .eyebrow{font-size:10px!important;line-height:1.25!important;letter-spacing:.04em!important}
+          .top-hero h1{margin:3px 0 0!important;font-size:22px!important;line-height:1.1!important;letter-spacing:-.03em!important}
+          .top-hero p{margin:5px 0 0!important;font-size:11px!important;line-height:1.35!important}
+          .hero-status{display:inline-flex!important;margin-top:8px!important;padding:5px 8px!important;border-radius:999px!important;font-size:10px!important;box-shadow:none!important}
+          .pulse{width:6px!important;height:6px!important;margin-right:6px!important;box-shadow:none!important}
+          div[data-testid="stHorizontalBlock"]{display:block!important}
+          div[data-testid="stHorizontalBlock"]>div[data-testid="stColumn"]{width:100%!important;min-width:0!important;flex:none!important;margin:0 0 6px!important}
+          .metric-card{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:center!important;gap:8px!important;min-height:auto!important;padding:9px 0!important;border:0!important;border-bottom:1px solid #eef2f7!important;border-radius:0!important;background:#fff!important;box-shadow:none!important;backdrop-filter:none!important}
+          .metric-card label{font-size:11px!important;line-height:1.2!important}
+          .metric-card strong{margin:0!important;font-size:17px!important;line-height:1.1!important;text-align:right!important}
+          .metric-card small{display:none!important}
+          .section-gap{height:4px!important}
+          [data-testid="stTabs"] [role="tablist"]{overflow-x:auto!important;white-space:nowrap!important;gap:0!important;border-bottom:1px solid #e5e7eb!important}
+          [data-testid="stTabs"] button[role="tab"]{min-height:34px!important;padding:0 9px!important;font-size:11px!important;border-radius:0!important}
+          .panel-title{font-size:15px!important;line-height:1.2!important;margin:12px 0 6px!important}
+          .empty-box,.chart-empty{padding:12px!important;font-size:11px!important;line-height:1.4!important;border-radius:8px!important}
+          .status-card,.ticker-card,.order-card,.replay-card,.step-card{padding:10px!important;min-height:auto!important;border-radius:10px!important;box-shadow:none!important}
+          .status-card{display:grid!important;grid-template-columns:minmax(0,1fr) auto!important;align-items:center!important;gap:8px!important;margin-bottom:6px!important}
+          .status-card label{font-size:10px!important}
+          .status-card strong{font-size:14px!important;line-height:1.2!important;text-align:right!important}
+          .status-card span{grid-column:1 / -1!important;margin-top:2px!important;font-size:10px!important;line-height:1.3!important}
+          .mini-row,.ticker-card,.order-card{font-size:12px!important}
+          .mini-row span,.ticker-card span,.order-card span,.order-card small{font-size:10px!important}
+          .heat-grid,.replay-grid{grid-template-columns:1fr!important;gap:6px!important}
+          .replay-card{display:block!important}
+          .replay-card h2{font-size:16px!important;line-height:1.2!important}
+          .replay-score{font-size:20px!important;margin-top:6px!important}
+          [data-testid="stDataFrame"],[data-testid="stPlotlyChart"]{overflow:auto!important;max-width:100%!important}
+          [data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{font-size:10px!important;line-height:1.35!important}
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     data = PaperDashboardData(db_path)
     try:
@@ -73,7 +113,7 @@ def _run(db_path: str = "datahub/market.db") -> None:
     st.markdown("<div class='section-gap'></div>", unsafe_allow_html=True)
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
-        ["◈ Cockpit", "▣ Positions", "⌁ Replay Basis", "◎ Orders", "📑 추천 검증 리포트", "🔻 매도 판단"]
+        ["Cockpit", "Positions", "Replay", "Orders", "추천 검증", "매도 판단"]
     )
 
     with tab1:
@@ -278,76 +318,43 @@ def _recommendation_report(st: object, db_path: str) -> None:
         st.info("저장된 추천 사유가 없습니다.")
 
     st.markdown("<div class='panel-title'>3. Top5 Replay 비교</div>", unsafe_allow_html=True)
-    match_table = pd.DataFrame(
-        [
-            {
-                "rank": f"Top {idx}",
-                "event_id": match.event_id,
-                "market": match.market.upper(),
-                "ticker": match.ticker,
-                "name": match.name,
-                "final": match.final_similarity,
-                "weekly": match.weekly_similarity,
-                "sto": match.sto_similarity,
-                "max_return": match.max_return,
-                "mdd": match.max_drawdown,
-                "same_as_now_week": match.equivalent_week_index,
-                "future_weeks": match.future_weeks_available,
-            }
-            for idx, match in enumerate(item.replay_matches[:5], start=1)
-        ]
-    )
-    st.dataframe(match_table, use_container_width=True, hide_index=True)
+    match_rows = []
+    for idx, match in enumerate(item.replay_matches, start=1):
+        match_rows.append({
+            "rank": idx,
+            "event_id": match.event_id,
+            "name": match.name,
+            "ticker": match.ticker,
+            "final": match.final_similarity,
+            "weekly": match.weekly_similarity,
+            "sto": match.sto_similarity,
+            "max_return": match.max_return,
+            "mdd": match.max_drawdown,
+        })
+    st.dataframe(pd.DataFrame(match_rows), use_container_width=True, hide_index=True)
 
-    if not item.replay_matches:
-        st.warning("표시할 Replay 매치가 없습니다.")
-        return
-
-    st.markdown("<div class='panel-title'>4. 현재 차트 vs Replay 차트</div>", unsafe_allow_html=True)
-    match_idx = st.selectbox(
-        "차트로 확인할 Replay",
-        list(range(min(5, len(item.replay_matches)))),
-        format_func=lambda i: f"Top {i + 1} · {item.replay_matches[i].name or item.replay_matches[i].ticker} · {item.replay_matches[i].event_id}",
-    )
-
-    col_a, col_b = st.columns(2)
-    generate_selected = col_a.button("선택 Replay 차트 생성")
-    generate_all = col_b.button("Top5 차트 모두 생성")
-
-    chart_key = f"{item.market}:{item.ticker}:{selected}"
-    charts = st.session_state.setdefault("dashboard_report_charts", {})
-
-    if generate_selected or generate_all:
-        viewer = RecommendationChartViewer(db_path=db_path, output_dir="output/dashboard_report_charts")
-        try:
-            targets = range(min(5, len(item.replay_matches))) if generate_all else [match_idx]
-            for idx in targets:
-                chart_path = viewer.render_replay_match(item, item.replay_matches[idx], selected + 1, idx + 1)
-                if chart_path:
-                    charts[f"{chart_key}:{idx}"] = str(chart_path)
-        finally:
-            viewer.close()
-
-    selected_path = charts.get(f"{chart_key}:{match_idx}")
-    if selected_path and Path(selected_path).exists():
-        st.image(selected_path, use_container_width=True)
-    else:
-        st.info("차트 생성 버튼을 누르면 현재 6개월 주봉과 Replay 이후 실제 흐름이 표시됩니다.")
-
-    with st.expander("Top5 Replay 차트 전체 보기"):
-        shown = False
-        for idx, match in enumerate(item.replay_matches[:5]):
-            path = charts.get(f"{chart_key}:{idx}")
-            if path and Path(path).exists():
-                st.markdown(f"**Top {idx + 1} · {match.name or match.ticker} · {match.event_id}**")
-                st.image(path, use_container_width=True)
-                shown = True
-        if not shown:
-            st.caption("Top5 차트 모두 생성 버튼을 누르면 이 영역에 전체 비교차트가 표시됩니다.")
+    if item.replay_matches:
+        match_idx = st.selectbox(
+            "차트로 볼 Replay",
+            list(range(len(item.replay_matches))),
+            format_func=lambda i: f"Top {i + 1} · {item.replay_matches[i].name or item.replay_matches[i].ticker}",
+        )
+        if st.button("비교차트 생성/새로고침"):
+            chart_viewer = RecommendationChartViewer(db_path=db_path, output_dir="output/dashboard_charts")
+            try:
+                chart_path = chart_viewer.render_replay_match(item, item.replay_matches[match_idx], selected + 1, match_idx + 1)
+            finally:
+                chart_viewer.close()
+            st.session_state["dashboard_report_chart"] = chart_path
+        chart_path = st.session_state.get("dashboard_report_chart")
+        if chart_path and Path(chart_path).exists():
+            st.image(chart_path, use_container_width=True)
+        else:
+            st.info("비교차트 생성/새로고침 버튼을 누르면 차트가 표시됩니다.")
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ADE Integrated Dashboard")
+    parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="datahub/market.db")
     args = parser.parse_args()
     _run(args.db)

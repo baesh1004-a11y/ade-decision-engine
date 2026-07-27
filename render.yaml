@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
+    startCommand: python -c "from datahub.bootstrap import ensure_market_databases; ensure_market_databases()" && python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION

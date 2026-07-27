@@ -5,7 +5,6 @@ import http.cookiejar
 import os
 import re
 import sqlite3
-import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
@@ -147,28 +146,31 @@ def _download(url: str, destination: Path) -> None:
         )
 
 
+def _select_database_member(archive: zipfile.ZipFile, expected_name: str) -> str:
+    candidates = [
+        name
+        for name in archive.namelist()
+        if not name.endswith("/") and Path(name).name.lower() == expected_name.lower()
+    ]
+    if not candidates:
+        db_files = [
+            name
+            for name in archive.namelist()
+            if not name.endswith("/") and Path(name).suffix.lower() in {".db", ".sqlite", ".sqlite3"}
+        ]
+        if len(db_files) == 1:
+            candidates = db_files
+    if len(candidates) != 1:
+        raise RuntimeError(
+            f"ZIP must contain exactly one usable database for {expected_name}; found {len(candidates)}"
+        )
+    return candidates[0]
+
+
 def _extract_database(downloaded: Path, expected_name: str, destination: Path) -> None:
     if zipfile.is_zipfile(downloaded):
         with zipfile.ZipFile(downloaded) as archive:
-            candidates = [
-                name
-                for name in archive.namelist()
-                if not name.endswith("/") and Path(name).name.lower() == expected_name.lower()
-            ]
-            if not candidates:
-                db_files = [
-                    name
-                    for name in archive.namelist()
-                    if not name.endswith("/") and Path(name).suffix.lower() in {".db", ".sqlite", ".sqlite3"}
-                ]
-                if len(db_files) == 1:
-                    candidates = db_files
-            if len(candidates) != 1:
-                raise RuntimeError(
-                    f"ZIP must contain exactly one usable database for {expected_name}; "
-                    f"found {len(candidates)}"
-                )
-            selected = candidates[0]
+            selected = _select_database_member(archive, expected_name)
             _log(f"Extracting {selected} as {expected_name}")
             with archive.open(selected) as source, destination.open("wb") as output:
                 while True:
@@ -177,7 +179,7 @@ def _extract_database(downloaded: Path, expected_name: str, destination: Path) -
                         break
                     output.write(chunk)
     else:
-        destination.write_bytes(downloaded.read_bytes())
+        os.replace(downloaded, destination)
 
 
 def _validate_sqlite(path: Path) -> None:
@@ -205,20 +207,25 @@ def sync_database(url_env: str, destination: Path) -> bool:
         return False
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="ade-db-sync-") as temp_dir:
-        temp_root = Path(temp_dir)
-        downloaded = temp_root / "download"
-        candidate = temp_root / destination.name
+    downloaded = destination.with_name(destination.name + ".download")
+    candidate = destination.with_name(destination.name + ".candidate")
+    downloaded.unlink(missing_ok=True)
+    candidate.unlink(missing_ok=True)
 
+    try:
         _log(f"Downloading {destination.name} from {url_env}")
         _download(url, downloaded)
         _extract_database(downloaded, destination.name, candidate)
+        downloaded.unlink(missing_ok=True)
         _validate_sqlite(candidate)
 
         size_mb = candidate.stat().st_size / (1024 * 1024)
         os.replace(candidate, destination)
         _log(f"Installed {destination} ({size_mb:,.1f} MiB, quick_check=ok)")
         return True
+    finally:
+        downloaded.unlink(missing_ok=True)
+        candidate.unlink(missing_ok=True)
 
 
 def sync_market_databases() -> None:

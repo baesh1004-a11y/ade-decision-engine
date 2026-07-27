@@ -48,11 +48,12 @@
 | 25 | Execution Reconciliation & Recovery Engine v2 | 완료 | 미구현 | 계획 완료 | 미확인 | VERIFY_REQUIRED, 부분체결, 중복체결, 응답 유실, 원장 불일치 대사·복구 |
 | 26 | Portfolio Rebalancing & Exit Orchestration Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 손절·추적손절·이익보호·집중도·현금·낙폭 기반 축소 및 청산 우선순위 |
 | 27 | Strategy Validation & Promotion Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 전략 검증, Champion–Challenger 비교, 단계별 승격·강등, 증거 Manifest 관리 |
+| 28 | Strategy Monitoring & Drift Detection Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 운영 전략의 성능·위험·데이터·신호·체결 드리프트 탐지와 보호조치 요청 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 판단·주문·체결복구·리밸런싱·전략검증·운영·감사 계층 설계 완료
+[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -68,6 +69,7 @@
 9. idempotency reservation과 DRY_RUN 경로 구현
 10. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
 11. Strategy Validation 필수검사와 Evidence Manifest 최소 구현
+12. Strategy Monitoring 기준선·PSI·건강 상태 resolver 최소 구현
 
 ## 다음 작업
 
@@ -85,8 +87,10 @@
 12. VERIFY_REQUIRED → broker evidence → 상태 확정 fixture 테스트
 13. `strategy_validation/models.py`, `mandatory.py`, `manifest.py` 최소 구현
 14. 고정 Backtest 결과로 BACKTEST_APPROVED/REJECTED 판정 테스트
-15. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-16. Report Engine용 최소 JSON fixture 생성
+15. `strategy_monitoring/models.py`, `baselines.py`, `distribution.py`, `health.py` 최소 구현
+16. 고정 PAPER fixture로 HEALTHY/DEGRADED/CRITICAL 판정 테스트
+17. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+18. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -123,3 +127,8 @@
 - Champion 대비 명확한 개선 증거가 없으면 기존 전략을 유지한다.
 - LIVE 승격은 명시적 승인 없이는 확정할 수 없다.
 - SUSPENDED 전략은 Scheduler와 Orchestrator에서 신규 실행을 차단해야 한다.
+- Strategy Monitoring은 투자 판단이나 주문을 직접 수정하지 않고 건강 상태와 보호조치 요청만 생성한다.
+- 하드 안전 위반은 종합 건강 점수와 무관하게 `CRITICAL`로 처리한다.
+- `CRITICAL` 또는 `UNKNOWN` 전략은 정책에 따라 신규 진입과 신규 run을 차단해야 한다.
+- 자동 보호조치는 신규 진입 차단과 실행 격리에 한정하며 강제청산은 Rebalancing Engine을 거쳐야 한다.
+- 감시 기준선과 탐지 결과는 불변 버전과 result hash로 재현 가능해야 한다.

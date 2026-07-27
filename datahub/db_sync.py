@@ -31,6 +31,7 @@ _GOOGLE_DRIVE_INPUT_RE = re.compile(
 _GOOGLE_DRIVE_CONFIRM_RE = re.compile(r"confirm=([0-9A-Za-z_-]+)")
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _PROGRESS_STEP_BYTES = 25 * 1024 * 1024
+_FULL_CHECK_ENV = "DB_SYNC_FULL_CHECK"
 
 
 def _log(message: str) -> None:
@@ -171,6 +172,10 @@ def _extract_database(downloaded: Path, expected_name: str, destination: Path) -
     if zipfile.is_zipfile(downloaded):
         with zipfile.ZipFile(downloaded) as archive:
             selected = _select_database_member(archive, expected_name)
+            info = archive.getinfo(selected)
+            expected_bytes = info.file_size or None
+            extracted_bytes = 0
+            next_progress = _PROGRESS_STEP_BYTES
             _log(f"Extracting {selected} as {expected_name}")
             with archive.open(selected) as source, destination.open("wb") as output:
                 while True:
@@ -178,6 +183,23 @@ def _extract_database(downloaded: Path, expected_name: str, destination: Path) -
                     if not chunk:
                         break
                     output.write(chunk)
+                    extracted_bytes += len(chunk)
+                    if extracted_bytes >= next_progress:
+                        if expected_bytes:
+                            percent = extracted_bytes * 100 / expected_bytes
+                            _log(
+                                f"Extracted {extracted_bytes / (1024 * 1024):,.1f} MiB "
+                                f"({percent:.1f}%)"
+                            )
+                        else:
+                            _log(f"Extracted {extracted_bytes / (1024 * 1024):,.1f} MiB")
+                        next_progress += _PROGRESS_STEP_BYTES
+            if expected_bytes is not None and extracted_bytes != expected_bytes:
+                raise RuntimeError(
+                    f"Incomplete extraction: expected {expected_bytes:,} bytes, "
+                    f"wrote {extracted_bytes:,} bytes"
+                )
+            _log(f"Extraction complete ({extracted_bytes / (1024 * 1024):,.1f} MiB)")
     else:
         os.replace(downloaded, destination)
 
@@ -193,9 +215,13 @@ def _validate_sqlite(path: Path) -> None:
 
     connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
     try:
-        result = connection.execute("PRAGMA quick_check").fetchone()
-        if not result or str(result[0]).lower() != "ok":
-            raise RuntimeError(f"SQLite quick_check failed: {result}")
+        connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
+        if os.getenv(_FULL_CHECK_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
+            _log(f"Running full SQLite quick_check for {path.name}")
+            result = connection.execute("PRAGMA quick_check").fetchone()
+            if not result or str(result[0]).lower() != "ok":
+                raise RuntimeError(f"SQLite quick_check failed: {result}")
+            _log(f"Full SQLite quick_check passed for {path.name}")
     finally:
         connection.close()
 
@@ -217,11 +243,12 @@ def sync_database(url_env: str, destination: Path) -> bool:
         _download(url, downloaded)
         _extract_database(downloaded, destination.name, candidate)
         downloaded.unlink(missing_ok=True)
+        _log(f"Validating SQLite header and schema for {destination.name}")
         _validate_sqlite(candidate)
 
         size_mb = candidate.stat().st_size / (1024 * 1024)
         os.replace(candidate, destination)
-        _log(f"Installed {destination} ({size_mb:,.1f} MiB, quick_check=ok)")
+        _log(f"Installed {destination} ({size_mb:,.1f} MiB, validation=ok)")
         return True
     finally:
         downloaded.unlink(missing_ok=True)

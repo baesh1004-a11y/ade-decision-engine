@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import html
+import http.cookiejar
 import os
+import re
 import shutil
 import sqlite3
 import tempfile
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -17,17 +21,84 @@ DATABASES = (
 )
 
 
+_GOOGLE_DRIVE_HOSTS = {"drive.google.com", "docs.google.com"}
+_GOOGLE_DRIVE_FORM_ACTION_RE = re.compile(
+    r'<form[^>]+action="([^"]*drive\.usercontent\.google\.com/download[^"]*)"',
+    re.IGNORECASE,
+)
+_GOOGLE_DRIVE_INPUT_RE = re.compile(
+    r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"',
+    re.IGNORECASE,
+)
+
+
 def _log(message: str) -> None:
     print(f"[db-sync] {message}", flush=True)
 
 
+def _is_google_drive_url(url: str) -> bool:
+    return urllib.parse.urlparse(url).hostname in _GOOGLE_DRIVE_HOSTS
+
+
+def _looks_like_html(path: Path) -> bool:
+    with path.open("rb") as handle:
+        prefix = handle.read(512).lstrip().lower()
+    return prefix.startswith(b"<!doctype html") or prefix.startswith(b"<html")
+
+
+def _extract_google_drive_confirmation_url(page: bytes, base_url: str) -> str | None:
+    text = page.decode("utf-8", errors="replace")
+    action_match = _GOOGLE_DRIVE_FORM_ACTION_RE.search(text)
+    if not action_match:
+        return None
+
+    action = html.unescape(action_match.group(1))
+    params = {
+        html.unescape(name): html.unescape(value)
+        for name, value in _GOOGLE_DRIVE_INPUT_RE.findall(text)
+    }
+    if not params:
+        return urllib.parse.urljoin(base_url, action)
+
+    separator = "&" if "?" in action else "?"
+    return urllib.parse.urljoin(base_url, action) + separator + urllib.parse.urlencode(params)
+
+
 def _download(url: str, destination: Path) -> None:
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "ADE-Decision-Engine/1.0"},
-    )
-    with urllib.request.urlopen(request, timeout=600) as response, destination.open("wb") as output:
-        shutil.copyfileobj(response, output, length=1024 * 1024)
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+    headers = {"User-Agent": "Mozilla/5.0 ADE-Decision-Engine/1.0"}
+
+    def fetch(target_url: str) -> tuple[str, str]:
+        request = urllib.request.Request(target_url, headers=headers)
+        with opener.open(request, timeout=600) as response, destination.open("wb") as output:
+            content_type = response.headers.get_content_type()
+            final_url = response.geturl()
+            shutil.copyfileobj(response, output, length=1024 * 1024)
+        return content_type, final_url
+
+    content_type, final_url = fetch(url)
+    if not _is_google_drive_url(url):
+        return
+
+    if content_type != "text/html" and not _looks_like_html(destination):
+        return
+
+    confirmation_url = _extract_google_drive_confirmation_url(destination.read_bytes(), final_url)
+    if not confirmation_url:
+        raise RuntimeError(
+            "Google Drive returned an HTML page instead of the file. "
+            "Verify that link sharing is set to anyone with the link."
+        )
+
+    _log("Google Drive confirmation page detected; continuing download")
+    destination.unlink(missing_ok=True)
+    content_type, _ = fetch(confirmation_url)
+    if content_type == "text/html" or _looks_like_html(destination):
+        raise RuntimeError(
+            "Google Drive confirmation download still returned HTML. "
+            "Verify public sharing or use another direct-download host."
+        )
 
 
 def _extract_database(downloaded: Path, expected_name: str, destination: Path) -> None:

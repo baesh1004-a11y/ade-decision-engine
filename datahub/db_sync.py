@@ -4,7 +4,6 @@ import html
 import http.cookiejar
 import os
 import re
-import shutil
 import sqlite3
 import tempfile
 import urllib.parse
@@ -21,7 +20,7 @@ DATABASES = (
 )
 
 
-_GOOGLE_DRIVE_HOSTS = {"drive.google.com", "docs.google.com"}
+_GOOGLE_DRIVE_HOSTS = {"drive.google.com", "docs.google.com", "drive.usercontent.google.com"}
 _GOOGLE_DRIVE_FORM_ACTION_RE = re.compile(
     r'<form[^>]+action="([^"]*drive\.usercontent\.google\.com/download[^"]*)"',
     re.IGNORECASE,
@@ -30,6 +29,9 @@ _GOOGLE_DRIVE_INPUT_RE = re.compile(
     r'<input[^>]+name="([^"]+)"[^>]+value="([^"]*)"',
     re.IGNORECASE,
 )
+_GOOGLE_DRIVE_CONFIRM_RE = re.compile(r"confirm=([0-9A-Za-z_-]+)")
+_DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+_PROGRESS_STEP_BYTES = 25 * 1024 * 1024
 
 
 def _log(message: str) -> None:
@@ -41,6 +43,8 @@ def _is_google_drive_url(url: str) -> bool:
 
 
 def _looks_like_html(path: Path) -> bool:
+    if not path.exists() or path.stat().st_size == 0:
+        return False
     with path.open("rb") as handle:
         prefix = handle.read(512).lstrip().lower()
     return prefix.startswith(b"<!doctype html") or prefix.startswith(b"<html")
@@ -49,36 +53,77 @@ def _looks_like_html(path: Path) -> bool:
 def _extract_google_drive_confirmation_url(page: bytes, base_url: str) -> str | None:
     text = page.decode("utf-8", errors="replace")
     action_match = _GOOGLE_DRIVE_FORM_ACTION_RE.search(text)
-    if not action_match:
-        return None
-
-    action = html.unescape(action_match.group(1))
-    params = {
-        html.unescape(name): html.unescape(value)
-        for name, value in _GOOGLE_DRIVE_INPUT_RE.findall(text)
-    }
-    if not params:
+    if action_match:
+        action = html.unescape(action_match.group(1))
+        params = {
+            html.unescape(name): html.unescape(value)
+            for name, value in _GOOGLE_DRIVE_INPUT_RE.findall(text)
+        }
+        separator = "&" if "?" in action else "?"
+        if params:
+            return urllib.parse.urljoin(base_url, action) + separator + urllib.parse.urlencode(params)
         return urllib.parse.urljoin(base_url, action)
 
-    separator = "&" if "?" in action else "?"
-    return urllib.parse.urljoin(base_url, action) + separator + urllib.parse.urlencode(params)
+    parsed = urllib.parse.urlparse(base_url)
+    query = urllib.parse.parse_qs(parsed.query)
+    file_id = query.get("id", [None])[0]
+    confirm_match = _GOOGLE_DRIVE_CONFIRM_RE.search(text)
+    if file_id and confirm_match:
+        return "https://drive.usercontent.google.com/download?" + urllib.parse.urlencode(
+            {"id": file_id, "export": "download", "confirm": confirm_match.group(1)}
+        )
+    return None
+
+
+def _stream_response(response, destination: Path) -> int:
+    content_length = response.headers.get("Content-Length")
+    expected_bytes = int(content_length) if content_length and content_length.isdigit() else None
+    downloaded_bytes = 0
+    next_progress = _PROGRESS_STEP_BYTES
+
+    with destination.open("wb") as output:
+        while True:
+            chunk = response.read(_DOWNLOAD_CHUNK_SIZE)
+            if not chunk:
+                break
+            output.write(chunk)
+            downloaded_bytes += len(chunk)
+            if downloaded_bytes >= next_progress:
+                if expected_bytes:
+                    percent = downloaded_bytes * 100 / expected_bytes
+                    _log(f"Downloaded {downloaded_bytes / (1024 * 1024):,.1f} MiB ({percent:.1f}%)")
+                else:
+                    _log(f"Downloaded {downloaded_bytes / (1024 * 1024):,.1f} MiB")
+                next_progress += _PROGRESS_STEP_BYTES
+
+    if expected_bytes is not None and downloaded_bytes != expected_bytes:
+        raise RuntimeError(
+            f"Incomplete download: expected {expected_bytes:,} bytes, received {downloaded_bytes:,} bytes"
+        )
+    _log(f"Download complete ({downloaded_bytes / (1024 * 1024):,.1f} MiB)")
+    return downloaded_bytes
 
 
 def _download(url: str, destination: Path) -> None:
     cookie_jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
-    headers = {"User-Agent": "Mozilla/5.0 ADE-Decision-Engine/1.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 ADE-Decision-Engine/1.0",
+        "Accept": "*/*",
+    }
 
     def fetch(target_url: str) -> tuple[str, str]:
         request = urllib.request.Request(target_url, headers=headers)
-        with opener.open(request, timeout=600) as response, destination.open("wb") as output:
+        with opener.open(request, timeout=1800) as response:
             content_type = response.headers.get_content_type()
             final_url = response.geturl()
-            shutil.copyfileobj(response, output, length=1024 * 1024)
+            _stream_response(response, destination)
         return content_type, final_url
 
     content_type, final_url = fetch(url)
     if not _is_google_drive_url(url):
+        if content_type == "text/html" or _looks_like_html(destination):
+            raise RuntimeError("Download returned HTML instead of a database or ZIP file")
         return
 
     if content_type != "text/html" and not _looks_like_html(destination):
@@ -93,11 +138,12 @@ def _download(url: str, destination: Path) -> None:
 
     _log("Google Drive confirmation page detected; continuing download")
     destination.unlink(missing_ok=True)
-    content_type, _ = fetch(confirmation_url)
+    content_type, final_url = fetch(confirmation_url)
     if content_type == "text/html" or _looks_like_html(destination):
+        preview = destination.read_text("utf-8", errors="replace")[:300].replace("\n", " ")
         raise RuntimeError(
             "Google Drive confirmation download still returned HTML. "
-            "Verify public sharing or use another direct-download host."
+            f"Final URL: {final_url}. Response preview: {preview!r}"
         )
 
 
@@ -122,15 +168,26 @@ def _extract_database(downloaded: Path, expected_name: str, destination: Path) -
                     f"ZIP must contain exactly one usable database for {expected_name}; "
                     f"found {len(candidates)}"
                 )
-            with archive.open(candidates[0]) as source, destination.open("wb") as output:
-                shutil.copyfileobj(source, output, length=1024 * 1024)
+            selected = candidates[0]
+            _log(f"Extracting {selected} as {expected_name}")
+            with archive.open(selected) as source, destination.open("wb") as output:
+                while True:
+                    chunk = source.read(_DOWNLOAD_CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    output.write(chunk)
     else:
-        shutil.copyfile(downloaded, destination)
+        destination.write_bytes(downloaded.read_bytes())
 
 
 def _validate_sqlite(path: Path) -> None:
     if not path.exists() or path.stat().st_size == 0:
         raise RuntimeError(f"Downloaded database is empty: {path}")
+
+    with path.open("rb") as handle:
+        header = handle.read(16)
+    if header != b"SQLite format 3\x00":
+        raise RuntimeError(f"Downloaded file does not have a valid SQLite header: {path}")
 
     connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
     try:
@@ -169,11 +226,10 @@ def sync_market_databases() -> None:
     for url_env, destination in DATABASES:
         try:
             sync_database(url_env, destination)
-        except Exception as exc:  # startup log must identify the failed database
+        except Exception as exc:
             failures.append(f"{destination}: {exc}")
             _log(f"ERROR {destination}: {exc}")
 
-    # URL이 없는 DB는 기존 파일을 유지하고, 파일도 없으면 최소 스키마를 생성한다.
     ensure_market_databases()
 
     if failures:

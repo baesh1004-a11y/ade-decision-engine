@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: ade-decision-engine
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.3
+      - key: KIS_ENV
+        value: paper
+      - key: KIS_APP_KEY
+        sync: false
+      - key: KIS_APP_SECRET
+        sync: false
+      - key: KIS_ACCOUNT
+        sync: false
+      - key: KIS_ACCOUNT_NO
+        sync: false
+      - key: KIS_PRODUCT_CODE
+        value: "01"
+      - key: KIS_BASE_URL
+        value: https://openapivts.koreainvestment.com:29443
+      - key: KIS_TIMEOUT_SECONDS
+        value: "10"

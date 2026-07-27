@@ -32,61 +32,88 @@ def inspect_market_db(db_path: str | Path, market: str) -> MarketReadiness:
             (f"{path} 파일이 없습니다.",),
         )
 
-    conn = sqlite3.connect(str(path), timeout=10)
+    conn = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True, timeout=5)
     conn.row_factory = sqlite3.Row
     try:
+        conn.execute("PRAGMA query_only=ON")
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA cache_size=-16000")
+
         tables = {
             str(row["name"])
             for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
 
-        price_rows = _count(conn, "price_bars", "market=?", (market,)) if "price_bars" in tables else 0
+        # Large COUNT(*) and COUNT(DISTINCT ...) scans were blocking first paint on Render.
+        # Readiness only needs to know whether usable data exists, so all probes use indexed
+        # existence/latest lookups and stop after the first matching row.
+        price_rows = 1 if _exists(
+            conn,
+            "SELECT 1 FROM price_bars WHERE market=? LIMIT 1",
+            (market,),
+        ) else 0 if "price_bars" in tables else 0
+
         latest_price = _scalar(
             conn,
-            "SELECT MAX(trade_date) FROM price_bars WHERE market=?",
+            "SELECT trade_date FROM price_bars WHERE market=? ORDER BY trade_date DESC LIMIT 1",
             (market,),
         ) if "price_bars" in tables else None
 
         if market == "us" and "us_universe" in tables:
-            active_symbols = _count(conn, "us_universe", "enabled=1")
-        elif "price_bars" in tables:
-            active_symbols = int(_scalar(
+            active_symbols = 1 if _exists(
                 conn,
-                "SELECT COUNT(DISTINCT ticker) FROM price_bars WHERE market=?",
+                "SELECT 1 FROM us_universe WHERE enabled=1 LIMIT 1",
+            ) else 0
+        elif "price_bars" in tables:
+            active_symbols = 1 if _exists(
+                conn,
+                "SELECT 1 FROM price_bars WHERE market=? AND ticker IS NOT NULL LIMIT 1",
                 (market,),
-            ) or 0)
+            ) else 0
         else:
             active_symbols = 0
 
-        replay_events = _count(conn, "replay_events", "market=?", (market,)) if "replay_events" in tables else 0
-        replay_flows = int(_scalar(
+        replay_events = 1 if _exists(
+            conn,
+            "SELECT 1 FROM replay_events WHERE market=? LIMIT 1",
+            (market,),
+        ) else 0 if "replay_events" in tables else 0
+
+        replay_flows = 1 if _exists(
             conn,
             """
-            SELECT COUNT(*) FROM replay_event_flow f
+            SELECT 1 FROM replay_event_flow f
             JOIN replay_events e ON e.event_id=f.event_id
-            WHERE e.market=?
+            WHERE e.market=? LIMIT 1
             """,
             (market,),
-        ) or 0) if {"replay_event_flow", "replay_events"}.issubset(tables) else 0
-        replay_vectors = int(_scalar(
+        ) else 0 if {"replay_event_flow", "replay_events"}.issubset(tables) else 0
+
+        replay_vectors = 1 if _exists(
             conn,
             """
-            SELECT COUNT(*) FROM replay_event_vectors v
+            SELECT 1 FROM replay_event_vectors v
             JOIN replay_events e ON e.event_id=v.event_id
-            WHERE e.market=?
+            WHERE e.market=? LIMIT 1
             """,
             (market,),
-        ) or 0) if {"replay_event_vectors", "replay_events"}.issubset(tables) else 0
+        ) else 0 if {"replay_event_vectors", "replay_events"}.issubset(tables) else 0
+
         latest_replay = _scalar(
             conn,
-            "SELECT MAX(event_date) FROM replay_events WHERE market=?",
+            "SELECT event_date FROM replay_events WHERE market=? ORDER BY event_date DESC LIMIT 1",
             (market,),
         ) if "replay_events" in tables else None
 
-        surge_patterns = _count(conn, "surge_patterns", "market=?", (market,)) if "surge_patterns" in tables else 0
+        surge_patterns = 1 if _exists(
+            conn,
+            "SELECT 1 FROM surge_patterns WHERE market=? LIMIT 1",
+            (market,),
+        ) else 0 if "surge_patterns" in tables else 0
+
         latest_surge = _scalar(
             conn,
-            "SELECT MAX(surge_start_date) FROM surge_patterns WHERE market=?",
+            "SELECT surge_start_date FROM surge_patterns WHERE market=? ORDER BY surge_start_date DESC LIMIT 1",
             (market,),
         ) if "surge_patterns" in tables else None
 
@@ -122,9 +149,8 @@ def inspect_market_db(db_path: str | Path, market: str) -> MarketReadiness:
         conn.close()
 
 
-def _count(conn: sqlite3.Connection, table: str, where: str = "", params: tuple[object, ...] = ()) -> int:
-    suffix = f" WHERE {where}" if where else ""
-    return int(conn.execute(f"SELECT COUNT(*) FROM {table}{suffix}", params).fetchone()[0])
+def _exists(conn: sqlite3.Connection, sql: str, params: tuple[object, ...] = ()) -> bool:
+    return conn.execute(sql, params).fetchone() is not None
 
 
 def _scalar(conn: sqlite3.Connection, sql: str, params: tuple[object, ...] = ()) -> object | None:

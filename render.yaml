@@ -4,11 +4,15 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: python -c "from datahub.bootstrap import ensure_market_databases; ensure_market_databases()" && python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
+    startCommand: python -m datahub.db_sync && python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
+      - key: MARKET_DB_URL
+        sync: false
+      - key: US_MARKET_DB_URL
+        sync: false
       - key: KIS_ENV
         value: paper
       - key: KIS_APP_KEY

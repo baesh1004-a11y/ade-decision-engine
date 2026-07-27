@@ -1,4 +1,4 @@
-name: ADE Cloud KIS Secret Check
+name: ADE Cloud Runtime Check
 
 on:
   workflow_dispatch:
@@ -7,9 +7,9 @@ permissions:
   contents: read
 
 jobs:
-  kis-secret-check:
+  ade-runtime-check:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     env:
       KIS_ENV: paper
@@ -17,6 +17,9 @@ jobs:
       KIS_APP_SECRET: ${{ secrets.KIS_APP_SECRET }}
       KIS_ACCOUNT: ${{ secrets.KIS_ACCOUNT }}
       KIS_ACCOUNT_NO: ${{ secrets.KIS_ACCOUNT_NO }}
+      KIS_PRODUCT_CODE: '01'
+      KIS_BASE_URL: https://openapivts.koreainvestment.com:29443
+      KIS_TIMEOUT_SECONDS: '10'
 
     steps:
       - name: Checkout repository
@@ -54,7 +57,7 @@ jobs:
           print("No secret values were printed.")
           PY
 
-      - name: Import-check ADE broker modules
+      - name: Import-check ADE modules
         run: |
           python - <<'PY'
           import importlib
@@ -63,9 +66,79 @@ jobs:
               "broker.kis",
               "broker.kis_market_data",
               "broker.kis_trading",
+              "dashboard_app",
           ]
 
           for module_name in modules:
               importlib.import_module(module_name)
               print(f"Imported: {module_name}")
+          PY
+
+      - name: Start Streamlit smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m streamlit run dashboard_app.py \
+            --server.headless true \
+            --server.address 127.0.0.1 \
+            --server.port 8501 \
+            > streamlit.log 2>&1 &
+          STREAMLIT_PID=$!
+          trap 'kill $STREAMLIT_PID 2>/dev/null || true' EXIT
+
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8501/_stcore/health >/dev/null; then
+              echo "Streamlit health check passed."
+              exit 0
+            fi
+            sleep 2
+          done
+
+          echo "Streamlit failed to become healthy."
+          cat streamlit.log
+          exit 1
+
+      - name: KIS paper API authentication check
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+          import urllib.error
+          import urllib.request
+
+          base_url = os.environ["KIS_BASE_URL"].rstrip("/")
+          payload = json.dumps({
+              "grant_type": "client_credentials",
+              "appkey": os.environ["KIS_APP_KEY"],
+              "appsecret": os.environ["KIS_APP_SECRET"],
+          }).encode("utf-8")
+
+          request = urllib.request.Request(
+              f"{base_url}/oauth2/tokenP",
+              data=payload,
+              headers={"Content-Type": "application/json; charset=UTF-8"},
+              method="POST",
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=10) as response:
+                  body = json.loads(response.read().decode("utf-8"))
+          except urllib.error.HTTPError as exc:
+              safe_body = exc.read().decode("utf-8", errors="replace")[:500]
+              print(f"KIS authentication HTTP error: {exc.code}")
+              print(safe_body)
+              sys.exit(1)
+          except Exception as exc:
+              print(f"KIS authentication request failed: {type(exc).__name__}: {exc}")
+              sys.exit(1)
+
+          if not body.get("access_token"):
+              print("KIS response did not include an access token.")
+              print({key: value for key, value in body.items() if key != "access_token"})
+              sys.exit(1)
+
+          print("KIS paper API authentication succeeded.")
+          print("The access token was not printed or stored.")
           PY

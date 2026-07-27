@@ -109,6 +109,7 @@
 - Execution Reconciliation & Recovery Engine v2 specification.
 - Portfolio Rebalancing & Exit Orchestration Engine v1 specification.
 - Strategy Validation & Promotion Engine v1 specification.
+- Strategy Monitoring & Drift Detection Engine v1 specification.
 
 ### Updated
 
@@ -138,6 +139,10 @@
 - Added Champion–Challenger comparison under identical data, universe, cost, and policy assumptions.
 - Defined RESEARCH, BACKTEST_APPROVED, PAPER, SHADOW, LIVE_BLOCKED, LIVE, SUSPENDED, and RETIRED strategy stages.
 - Added approval-gated promotion, performance/risk degradation demotion, and operational suspension criteria.
+- Added strategy-version baselines for performance, risk, data, feature, signal, decision, execution, and operational monitoring.
+- Added PSI, z-score, regime-aware comparison, health scoring, alert deduplication, and protective-action recommendation rules.
+- Defined HEALTHY, WATCH, DEGRADED, CRITICAL, and UNKNOWN strategy-health states.
+- Added automatic new-entry blocking and revalidation triggers while keeping forced liquidation behind the Rebalancing Engine boundary.
 
 ### Notes
 
@@ -169,6 +174,10 @@
 - Strategy promotion evidence must bind code, policy, data, features, universe, costs, validation results, and approvals in an immutable manifest.
 - LIVE promotion always requires explicit approval.
 - Suspended strategies cannot create new scheduled or orchestrated runs.
+- Strategy Monitoring does not create investment decisions or directly alter orders; it emits health results, alerts, and protective-action requests.
+- Hard safety violations resolve to CRITICAL regardless of aggregate health score.
+- CRITICAL and UNKNOWN strategies may be blocked from new entries or new runs according to policy.
+- Automatic protective actions are limited to entry blocking and execution isolation; forced liquidation must pass through Portfolio Rebalancing & Exit Orchestration.
 
 ### Next
 
@@ -181,9 +190,11 @@
 - Implement partial-fill reconciliation and reservation recalculation.
 - Implement Strategy Validation models, mandatory checks, and Evidence Manifest generation.
 - Add a fixed-result BACKTEST_APPROVED/REJECTED strategy-validation fixture.
+- Implement Strategy Monitoring baseline, observation, PSI detector, and health resolver models.
+- Add fixed PAPER fixtures for HEALTHY, DEGRADED, and CRITICAL monitoring outcomes.
 - Implement `db/migrations/001_create_run_state.sql`.
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.
 - Wrap the existing analysis pipeline with an Orchestrator adapter.
-- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision → Rebalancing → Order → Reconciliation smoke test.
+- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision → Rebalancing → Order → Reconciliation → Monitoring smoke test.
 - Generate minimal Report Engine JSON fixture output.

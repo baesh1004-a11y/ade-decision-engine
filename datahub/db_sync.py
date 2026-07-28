@@ -31,7 +31,7 @@ _GOOGLE_DRIVE_CONFIRM_RE = re.compile(r"confirm=([0-9A-Za-z_-]+)")
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _PROGRESS_STEP_BYTES = 25 * 1024 * 1024
 _FULL_CHECK_ENV = "DB_SYNC_FULL_CHECK"
-_DIAGNOSTIC_PREFIX_BYTES = 64
+_SQLITE_HEADER = b"SQLite format 3\x00"
 
 
 def _log(message: str) -> None:
@@ -42,11 +42,15 @@ def _is_google_drive_url(url: str) -> bool:
     return urllib.parse.urlparse(url).hostname in _GOOGLE_DRIVE_HOSTS
 
 
-def _looks_like_html(path: Path) -> bool:
+def _read_prefix(path: Path, size: int = 512) -> bytes:
     if not path.exists() or path.stat().st_size == 0:
-        return False
+        return b""
     with path.open("rb") as handle:
-        prefix = handle.read(512).lstrip().lower()
+        return handle.read(size)
+
+
+def _looks_like_html(path: Path) -> bool:
+    prefix = _read_prefix(path).lstrip().lower()
     return prefix.startswith(b"<!doctype html") or prefix.startswith(b"<html")
 
 
@@ -100,23 +104,9 @@ def _stream_response(response, destination: Path) -> int:
         raise RuntimeError(
             f"Incomplete download: expected {expected_bytes:,} bytes, received {downloaded_bytes:,} bytes"
         )
+
     _log(f"Download complete ({downloaded_bytes / (1024 * 1024):,.1f} MiB)")
     return downloaded_bytes
-
-
-def _log_download_diagnostics(path: Path, content_type: str, final_url: str) -> None:
-    if not path.exists():
-        _log("Diagnostic: downloaded file is missing")
-        return
-
-    with path.open("rb") as handle:
-        prefix = handle.read(_DIAGNOSTIC_PREFIX_BYTES)
-
-    printable = prefix.decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n")
-    _log(f"Diagnostic content-type: {content_type}")
-    _log(f"Diagnostic final URL: {final_url}")
-    _log(f"Diagnostic first {_DIAGNOSTIC_PREFIX_BYTES} bytes (hex): {prefix.hex()}")
-    _log(f"Diagnostic first {_DIAGNOSTIC_PREFIX_BYTES} bytes (text): {printable!r}")
 
 
 def _download(url: str, destination: Path) -> None:
@@ -136,19 +126,17 @@ def _download(url: str, destination: Path) -> None:
         return content_type, final_url
 
     content_type, final_url = fetch(url)
+
     if not _is_google_drive_url(url):
-        _log_download_diagnostics(destination, content_type, final_url)
         if content_type == "text/html" or _looks_like_html(destination):
             raise RuntimeError("Download returned HTML instead of a SQLite database")
         return
 
     if content_type != "text/html" and not _looks_like_html(destination):
-        _log_download_diagnostics(destination, content_type, final_url)
         return
 
     confirmation_url = _extract_google_drive_confirmation_url(destination.read_bytes(), final_url)
     if not confirmation_url:
-        _log_download_diagnostics(destination, content_type, final_url)
         raise RuntimeError(
             "Google Drive returned an HTML page instead of the file. "
             "Verify that link sharing is set to anyone with the link."
@@ -157,7 +145,6 @@ def _download(url: str, destination: Path) -> None:
     _log("Google Drive confirmation page detected; continuing download")
     destination.unlink(missing_ok=True)
     content_type, final_url = fetch(confirmation_url)
-    _log_download_diagnostics(destination, content_type, final_url)
     if content_type == "text/html" or _looks_like_html(destination):
         preview = destination.read_text("utf-8", errors="replace")[:300].replace("\n", " ")
         raise RuntimeError(
@@ -170,16 +157,16 @@ def _validate_sqlite(path: Path) -> None:
     if not path.exists() or path.stat().st_size == 0:
         raise RuntimeError(f"Downloaded database is empty: {path}")
 
-    with path.open("rb") as handle:
-        header = handle.read(16)
-    if header != b"SQLite format 3\x00":
+    header = _read_prefix(path, len(_SQLITE_HEADER))
+    if header != _SQLITE_HEADER:
         raise RuntimeError(
-            "Downloaded file does not have a valid SQLite header: "
+            "Downloaded file is not a raw SQLite database: "
             f"{path}; actual header hex={header.hex()}"
         )
 
     connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
     try:
+        connection.execute("PRAGMA query_only = ON")
         connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
         if os.getenv(_FULL_CHECK_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
             _log(f"Running full SQLite quick_check for {path.name}")

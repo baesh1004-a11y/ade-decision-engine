@@ -31,6 +31,7 @@ _GOOGLE_DRIVE_CONFIRM_RE = re.compile(r"confirm=([0-9A-Za-z_-]+)")
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _PROGRESS_STEP_BYTES = 25 * 1024 * 1024
 _FULL_CHECK_ENV = "DB_SYNC_FULL_CHECK"
+_DIAGNOSTIC_PREFIX_BYTES = 64
 
 
 def _log(message: str) -> None:
@@ -103,6 +104,21 @@ def _stream_response(response, destination: Path) -> int:
     return downloaded_bytes
 
 
+def _log_download_diagnostics(path: Path, content_type: str, final_url: str) -> None:
+    if not path.exists():
+        _log("Diagnostic: downloaded file is missing")
+        return
+
+    with path.open("rb") as handle:
+        prefix = handle.read(_DIAGNOSTIC_PREFIX_BYTES)
+
+    printable = prefix.decode("utf-8", errors="replace").replace("\r", "\\r").replace("\n", "\\n")
+    _log(f"Diagnostic content-type: {content_type}")
+    _log(f"Diagnostic final URL: {final_url}")
+    _log(f"Diagnostic first {_DIAGNOSTIC_PREFIX_BYTES} bytes (hex): {prefix.hex()}")
+    _log(f"Diagnostic first {_DIAGNOSTIC_PREFIX_BYTES} bytes (text): {printable!r}")
+
+
 def _download(url: str, destination: Path) -> None:
     cookie_jar = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
@@ -121,15 +137,18 @@ def _download(url: str, destination: Path) -> None:
 
     content_type, final_url = fetch(url)
     if not _is_google_drive_url(url):
+        _log_download_diagnostics(destination, content_type, final_url)
         if content_type == "text/html" or _looks_like_html(destination):
             raise RuntimeError("Download returned HTML instead of a SQLite database")
         return
 
     if content_type != "text/html" and not _looks_like_html(destination):
+        _log_download_diagnostics(destination, content_type, final_url)
         return
 
     confirmation_url = _extract_google_drive_confirmation_url(destination.read_bytes(), final_url)
     if not confirmation_url:
+        _log_download_diagnostics(destination, content_type, final_url)
         raise RuntimeError(
             "Google Drive returned an HTML page instead of the file. "
             "Verify that link sharing is set to anyone with the link."
@@ -138,6 +157,7 @@ def _download(url: str, destination: Path) -> None:
     _log("Google Drive confirmation page detected; continuing download")
     destination.unlink(missing_ok=True)
     content_type, final_url = fetch(confirmation_url)
+    _log_download_diagnostics(destination, content_type, final_url)
     if content_type == "text/html" or _looks_like_html(destination):
         preview = destination.read_text("utf-8", errors="replace")[:300].replace("\n", " ")
         raise RuntimeError(
@@ -153,7 +173,10 @@ def _validate_sqlite(path: Path) -> None:
     with path.open("rb") as handle:
         header = handle.read(16)
     if header != b"SQLite format 3\x00":
-        raise RuntimeError(f"Downloaded file does not have a valid SQLite header: {path}")
+        raise RuntimeError(
+            "Downloaded file does not have a valid SQLite header: "
+            f"{path}; actual header hex={header.hex()}"
+        )
 
     connection = sqlite3.connect(f"file:{path.resolve()}?mode=ro", uri=True)
     try:

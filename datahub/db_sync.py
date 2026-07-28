@@ -7,7 +7,6 @@ import re
 import sqlite3
 import urllib.parse
 import urllib.request
-import zipfile
 from pathlib import Path
 
 from datahub.bootstrap import ensure_market_databases
@@ -123,7 +122,7 @@ def _download(url: str, destination: Path) -> None:
     content_type, final_url = fetch(url)
     if not _is_google_drive_url(url):
         if content_type == "text/html" or _looks_like_html(destination):
-            raise RuntimeError("Download returned HTML instead of a database or ZIP file")
+            raise RuntimeError("Download returned HTML instead of a SQLite database")
         return
 
     if content_type != "text/html" and not _looks_like_html(destination):
@@ -145,63 +144,6 @@ def _download(url: str, destination: Path) -> None:
             "Google Drive confirmation download still returned HTML. "
             f"Final URL: {final_url}. Response preview: {preview!r}"
         )
-
-
-def _select_database_member(archive: zipfile.ZipFile, expected_name: str) -> str:
-    candidates = [
-        name
-        for name in archive.namelist()
-        if not name.endswith("/") and Path(name).name.lower() == expected_name.lower()
-    ]
-    if not candidates:
-        db_files = [
-            name
-            for name in archive.namelist()
-            if not name.endswith("/") and Path(name).suffix.lower() in {".db", ".sqlite", ".sqlite3"}
-        ]
-        if len(db_files) == 1:
-            candidates = db_files
-    if len(candidates) != 1:
-        raise RuntimeError(
-            f"ZIP must contain exactly one usable database for {expected_name}; found {len(candidates)}"
-        )
-    return candidates[0]
-
-
-def _extract_database(downloaded: Path, expected_name: str, destination: Path) -> None:
-    if zipfile.is_zipfile(downloaded):
-        with zipfile.ZipFile(downloaded) as archive:
-            selected = _select_database_member(archive, expected_name)
-            info = archive.getinfo(selected)
-            expected_bytes = info.file_size or None
-            extracted_bytes = 0
-            next_progress = _PROGRESS_STEP_BYTES
-            _log(f"Extracting {selected} as {expected_name}")
-            with archive.open(selected) as source, destination.open("wb") as output:
-                while True:
-                    chunk = source.read(_DOWNLOAD_CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    output.write(chunk)
-                    extracted_bytes += len(chunk)
-                    if extracted_bytes >= next_progress:
-                        if expected_bytes:
-                            percent = extracted_bytes * 100 / expected_bytes
-                            _log(
-                                f"Extracted {extracted_bytes / (1024 * 1024):,.1f} MiB "
-                                f"({percent:.1f}%)"
-                            )
-                        else:
-                            _log(f"Extracted {extracted_bytes / (1024 * 1024):,.1f} MiB")
-                        next_progress += _PROGRESS_STEP_BYTES
-            if expected_bytes is not None and extracted_bytes != expected_bytes:
-                raise RuntimeError(
-                    f"Incomplete extraction: expected {expected_bytes:,} bytes, "
-                    f"wrote {extracted_bytes:,} bytes"
-                )
-            _log(f"Extraction complete ({extracted_bytes / (1024 * 1024):,.1f} MiB)")
-    else:
-        os.replace(downloaded, destination)
 
 
 def _validate_sqlite(path: Path) -> None:
@@ -233,16 +175,12 @@ def sync_database(url_env: str, destination: Path) -> bool:
         return False
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    downloaded = destination.with_name(destination.name + ".download")
     candidate = destination.with_name(destination.name + ".candidate")
-    downloaded.unlink(missing_ok=True)
     candidate.unlink(missing_ok=True)
 
     try:
-        _log(f"Downloading {destination.name} from {url_env}")
-        _download(url, downloaded)
-        _extract_database(downloaded, destination.name, candidate)
-        downloaded.unlink(missing_ok=True)
+        _log(f"Downloading original SQLite file for {destination.name} from {url_env}")
+        _download(url, candidate)
         _log(f"Validating SQLite header and schema for {destination.name}")
         _validate_sqlite(candidate)
 
@@ -251,7 +189,6 @@ def sync_database(url_env: str, destination: Path) -> bool:
         _log(f"Installed {destination} ({size_mb:,.1f} MiB, validation=ok)")
         return True
     finally:
-        downloaded.unlink(missing_ok=True)
         candidate.unlink(missing_ok=True)
 
 

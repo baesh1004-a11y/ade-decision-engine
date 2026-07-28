@@ -110,6 +110,7 @@
 - Portfolio Rebalancing & Exit Orchestration Engine v1 specification.
 - Strategy Validation & Promotion Engine v1 specification.
 - Strategy Monitoring & Drift Detection Engine v1 specification.
+- Model Registry & Inference Governance Engine v1 specification.
 
 ### Updated
 
@@ -143,6 +144,11 @@
 - Added PSI, z-score, regime-aware comparison, health scoring, alert deduplication, and protective-action recommendation rules.
 - Defined HEALTHY, WATCH, DEGRADED, CRITICAL, and UNKNOWN strategy-health states.
 - Added automatic new-entry blocking and revalidation triggers while keeping forced liquidation behind the Rebalancing Engine boundary.
+- Added immutable model/version/deployment records with artifact and preprocessor checksums.
+- Added approval-gated BACKTEST, PAPER, SHADOW, LIVE_BLOCKED, and LIVE model usage.
+- Added atomic model bundle loading, feature-schema and snapshot contract validation, deterministic inference hashing, and output guards.
+- Added Champion–Challenger shadow inference, deployment aliases, approved fallback pointers, and rollback requests.
+- Connected inference evidence to Strategy Validation, Strategy Monitoring, Audit, and Report layers.
 
 ### Notes
 
@@ -178,6 +184,11 @@
 - Hard safety violations resolve to CRITICAL regardless of aggregate health score.
 - CRITICAL and UNKNOWN strategies may be blocked from new entries or new runs according to policy.
 - Automatic protective actions are limited to entry blocking and execution isolation; forced liquidation must pass through Portfolio Rebalancing & Exit Orchestration.
+- Model artifacts cannot be deployed without a manifest that binds checksums, preprocessing, feature schema, training data, code, policy, and validation evidence.
+- Unapproved or expired model versions cannot serve PAPER, SHADOW, LIVE_BLOCKED, or LIVE inference.
+- Invalid inference output must not be replaced with a default buy signal.
+- Model output cannot override Portfolio Risk hard blocks or Decision and Order contracts.
+- Rollback is restricted to a previously approved deployment and must produce an audit event.
 
 ### Next
 
@@ -192,9 +203,12 @@
 - Add a fixed-result BACKTEST_APPROVED/REJECTED strategy-validation fixture.
 - Implement Strategy Monitoring baseline, observation, PSI detector, and health resolver models.
 - Add fixed PAPER fixtures for HEALTHY, DEGRADED, and CRITICAL monitoring outcomes.
+- Implement Model Registry models, artifact checksum verification, approval guard, and alias resolver.
+- Add a fixed sklearn model fixture for deterministic inference and output-guard tests.
+- Add Champion–Challenger shadow comparison and approved rollback-request fixtures.
 - Implement `db/migrations/001_create_run_state.sql`.
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.
 - Wrap the existing analysis pipeline with an Orchestrator adapter.
-- Run a fixed-fixture DataHub → Feature → Signal → Risk → Decision → Rebalancing → Order → Reconciliation → Monitoring smoke test.
+- Run a fixed-fixture DataHub → Feature → Model Inference → Signal → Risk → Decision → Rebalancing → Order → Reconciliation → Monitoring smoke test.
 - Generate minimal Report Engine JSON fixture output.

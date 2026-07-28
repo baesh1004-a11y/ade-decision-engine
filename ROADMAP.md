@@ -49,11 +49,12 @@
 | 26 | Portfolio Rebalancing & Exit Orchestration Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 손절·추적손절·이익보호·집중도·현금·낙폭 기반 축소 및 청산 우선순위 |
 | 27 | Strategy Validation & Promotion Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 전략 검증, Champion–Challenger 비교, 단계별 승격·강등, 증거 Manifest 관리 |
 | 28 | Strategy Monitoring & Drift Detection Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 운영 전략의 성능·위험·데이터·신호·체결 드리프트 탐지와 보호조치 요청 |
+| 29 | Model Registry & Inference Governance Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 모델 버전·artifact·승인·배포·추론·Shadow·롤백과 재현성 통제 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·운영·감사 계층 설계 완료
+[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·모델거버넌스·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -70,6 +71,8 @@
 10. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
 11. Strategy Validation 필수검사와 Evidence Manifest 최소 구현
 12. Strategy Monitoring 기준선·PSI·건강 상태 resolver 최소 구현
+13. Model Registry 모델·artifact checksum·승인 guard 최소 구현
+14. 고정 모델 fixture 기반 결정론적 추론과 output guard 테스트
 
 ## 다음 작업
 
@@ -89,8 +92,11 @@
 14. 고정 Backtest 결과로 BACKTEST_APPROVED/REJECTED 판정 테스트
 15. `strategy_monitoring/models.py`, `baselines.py`, `distribution.py`, `health.py` 최소 구현
 16. 고정 PAPER fixture로 HEALTHY/DEGRADED/CRITICAL 판정 테스트
-17. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-18. Report Engine용 최소 JSON fixture 생성
+17. `model_governance/models.py`, `registry.py`, `manifest.py`, `contract.py` 최소 구현
+18. 승인된 고정 sklearn fixture의 등록·추론·hash 재현성 테스트
+19. Champion–Challenger Shadow 결과 비교와 rollback request fixture 테스트
+20. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+21. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -132,3 +138,8 @@
 - `CRITICAL` 또는 `UNKNOWN` 전략은 정책에 따라 신규 진입과 신규 run을 차단해야 한다.
 - 자동 보호조치는 신규 진입 차단과 실행 격리에 한정하며 강제청산은 Rebalancing Engine을 거쳐야 한다.
 - 감시 기준선과 탐지 결과는 불변 버전과 result hash로 재현 가능해야 한다.
+- 모델 artifact는 checksum, 전처리기, feature schema, 학습 데이터, 코드, 정책, 검증 증거가 결합된 Manifest 없이 배포할 수 없다.
+- 승인되지 않거나 승인이 만료된 모델은 PAPER·SHADOW·LIVE 추론에 사용할 수 없다.
+- 모델 출력은 Portfolio Risk hard block과 Decision·Order 계약을 우회할 수 없다.
+- 추론 실패나 INVALID 출력은 기본 매수 신호로 대체하지 않고 해당 입력을 차단하거나 DEGRADED 처리한다.
+- 모델 롤백은 사전에 승인된 이전 배포 버전으로만 수행하며 모든 변경을 감사 기록으로 남긴다.

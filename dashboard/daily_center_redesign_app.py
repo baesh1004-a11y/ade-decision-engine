@@ -168,14 +168,10 @@ def _style() -> None:
         """
         <style>
         :root{--ink:#14263a;--muted:#6d8194;--line:rgba(77,125,168,.18)}
-        .stApp{background:linear-gradient(135deg,#f7fbff,#eef5fb 52%,#f9fcff);color:var(--ink)}
-        .block-container{max-width:1700px;padding-top:.8rem;padding-bottom:3rem}
         .hero{display:flex;justify-content:space-between;align-items:flex-end;padding:25px 30px;border-radius:24px;background:rgba(255,255,255,.92);border:1px solid var(--line);box-shadow:0 18px 48px rgba(42,88,130,.10);margin-bottom:16px}
         .hero h1{margin:4px 0 6px;font-size:34px;letter-spacing:-.04em}.hero p{margin:0;color:var(--muted)}
         .eyebrow{font-size:12px;letter-spacing:.15em;font-weight:850;color:#2f78ba}.hero-side{text-align:right;color:var(--muted)}.hero-side b{color:var(--ink)}
         .section-title{display:flex;justify-content:space-between;align-items:end;margin:16px 0 8px}.section-title h2{margin:0;font-size:20px}.section-title span{font-size:13px;color:var(--muted)}
-        div[data-testid="stMetric"]{background:rgba(255,255,255,.86);border:1px solid var(--line);padding:14px 16px;border-radius:16px}
-        div[data-testid="stDataFrame"]{border-radius:16px;overflow:hidden;border:1px solid var(--line)}
         </style>
         """,
         unsafe_allow_html=True,

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 import threading
 import uuid
 from collections.abc import Callable
@@ -10,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
+from datahub.sqlite_connection import connect_sqlite
 from report.recommendation_html_report import render_recommendation_html
 from surge.interactive_recommender import (
     InteractiveSurgePatternRecommender,
@@ -41,8 +41,7 @@ class DailyRecommendationService:
 
     def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
         self.db_path = Path(db_path)
-        self.conn = sqlite3.connect(str(self.db_path), timeout=30)
-        self.conn.row_factory = sqlite3.Row
+        self.conn = connect_sqlite(self.db_path)
         self.initialize()
 
     def initialize(self) -> None:

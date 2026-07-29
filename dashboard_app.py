@@ -49,11 +49,11 @@ def main() -> None:
     st.markdown(
         """
         <style>
-        .ade-mobile-bottom-nav{display:none}
+        .ade-mobile-top-nav{display:none}
         @media(max-width:640px){
           [data-testid="stSidebar"]{display:none!important}
           [data-testid="stSidebarCollapsedControl"]{display:none!important}
-          .ade-mobile-bottom-nav{
+          .ade-mobile-top-nav{
             position:fixed;
             left:0;
             right:0;
@@ -71,7 +71,7 @@ def main() -> None:
             box-shadow:none;
             backdrop-filter:none;
           }
-          .ade-mobile-bottom-nav a{
+          .ade-mobile-top-nav a{
             min-width:0;
             min-height:48px;
             padding:4px 2px;
@@ -88,8 +88,8 @@ def main() -> None:
             line-height:1;
             white-space:nowrap;
           }
-          .ade-mobile-bottom-nav a span:first-child{font-size:17px;line-height:1}
-          .ade-mobile-bottom-nav a:hover,.ade-mobile-bottom-nav a:focus{
+          .ade-mobile-top-nav a span:first-child{font-size:17px;line-height:1}
+          .ade-mobile-top-nav a:hover,.ade-mobile-top-nav a:focus{
             background:#f8fafc;
             color:#2563eb;
           }
@@ -99,7 +99,7 @@ def main() -> None:
           }
         }
         </style>
-        <nav class="ade-mobile-bottom-nav" aria-label="모바일 빠른 메뉴">
+        <nav class="ade-mobile-top-nav" aria-label="모바일 빠른 메뉴">
           <a href="/" target="_self"><span>🏠</span><span>홈</span></a>
           <a href="/Recommendation_Workbench" target="_self"><span>📊</span><span>추천</span></a>
           <a href="/Trading_Desk" target="_self"><span>💳</span><span>주문</span></a>

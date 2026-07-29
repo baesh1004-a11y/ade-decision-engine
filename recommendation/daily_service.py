@@ -127,201 +127,202 @@ class DailyRecommendationService:
         if not self._process_lock.acquire(blocking=False):
             raise RuntimeError("Another recommendation job is already running")
 
-        run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{normalized_type}-{uuid.uuid4().hex[:8]}"
-        started = datetime.now()
-        parameters = {
-            "algorithm": MULTI_PATTERN_VERSION,
-            "pattern_days": 120,
-            "surge_definition": {
-                "FAST": "1-5 sessions to +30%",
-                "QUICK": "6-10 sessions to +30%",
-                "SWING": "11-15 sessions to +30%",
-                "POSITION": "16-20 sessions to +30%",
-            },
-            "speed_weights": {"FAST": 1.0, "QUICK": 0.9, "SWING": 0.8, "POSITION": 0.7},
-            "top_n": top_n,
-            "weekly_pool_n": weekly_pool_n,
-            "candidate_years": candidate_years,
-            "use_recent_replay": use_recent_replay,
-            "use_weekly_filter": use_weekly_filter,
-            "min_weekly_similarity": min_weekly_similarity,
-            "use_sto_filter": use_sto_filter,
-            "min_sto_similarity": min_sto_similarity,
-            "replay_top_n": replay_top_n,
-        }
-        self.conn.execute(
-            """
-            INSERT INTO recommendation_runs(
-                run_id, run_type, trading_date, started_at, status, parameters_json
-            ) VALUES (?, ?, ?, ?, 'RUNNING', ?)
-            """,
-            (
-                run_id,
-                normalized_type,
-                started.date().isoformat(),
-                started.isoformat(timespec="seconds"),
-                json.dumps(parameters, ensure_ascii=False),
-            ),
-        )
-        self.conn.commit()
-
-        timer = perf_counter()
-        diagnostics: dict[str, object] = {}
-        report_path: Path | None = None
         try:
-            engine = InteractiveSurgePatternRecommender(self.db_path)
-            try:
-                recommendations, diagnostics = engine.recommend_interactive(
-                    candidate_years=candidate_years,
-                    lookback_months=lookback_months,
-                    top_n=top_n,
-                    weekly_pool_n=weekly_pool_n,
-                    min_weekly_similarity=min_weekly_similarity,
-                    min_sto_similarity=min_sto_similarity,
-                    replay_top_n=replay_top_n,
-                    use_recent_replay=use_recent_replay,
-                    use_weekly_filter=use_weekly_filter,
-                    use_sto_filter=use_sto_filter,
-                    progress_callback=progress_callback,
-                    cancel_check=cancel_check,
-                )
-            finally:
-                engine.close()
-
-            report_path = runtime_path("daily_recommendations", f"{run_id}.html")
-            report_path = render_recommendation_html(
-                recommendations,
-                report_path,
-                lookback_months=lookback_months,
-            )
-            recommendation_rows = []
-            for rank_no, item in enumerate(recommendations, start=1):
-                prediction = item.prediction
-                recommendation_rows.append(
-                    (
-                        run_id,
-                        rank_no,
-                        item.market,
-                        item.ticker,
-                        item.name,
-                        item.decision,
-                        item.final_similarity,
-                        item.weekly_similarity,
-                        item.sto_similarity,
-                        prediction.grade if prediction else None,
-                        prediction.seven_day_up_probability if prediction else None,
-                        prediction.seven_day_expected_return if prediction else None,
-                        prediction.target_return if prediction else None,
-                        prediction.stop_return if prediction else None,
-                        json.dumps(item.to_dict(), ensure_ascii=False),
-                    )
-                )
-            self.conn.executemany(
-                """
-                INSERT INTO daily_recommendations(
-                    run_id, rank_no, market, ticker, name, decision,
-                    final_similarity, weekly_similarity, sto_similarity,
-                    prediction_grade, seven_day_up_probability,
-                    seven_day_expected_return, target_return, stop_return,
-                    payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                recommendation_rows,
-            )
-
-            finished = datetime.now()
-            elapsed = perf_counter() - timer
+            run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{normalized_type}-{uuid.uuid4().hex[:8]}"
+            started = datetime.now()
+            parameters = {
+                "algorithm": MULTI_PATTERN_VERSION,
+                "pattern_days": 120,
+                "surge_definition": {
+                    "FAST": "1-5 sessions to +30%",
+                    "QUICK": "6-10 sessions to +30%",
+                    "SWING": "11-15 sessions to +30%",
+                    "POSITION": "16-20 sessions to +30%",
+                },
+                "speed_weights": {"FAST": 1.0, "QUICK": 0.9, "SWING": 0.8, "POSITION": 0.7},
+                "top_n": top_n,
+                "weekly_pool_n": weekly_pool_n,
+                "candidate_years": candidate_years,
+                "use_recent_replay": use_recent_replay,
+                "use_weekly_filter": use_weekly_filter,
+                "min_weekly_similarity": min_weekly_similarity,
+                "use_sto_filter": use_sto_filter,
+                "min_sto_similarity": min_sto_similarity,
+                "replay_top_n": replay_top_n,
+            }
             self.conn.execute(
                 """
-                UPDATE recommendation_runs
-                SET finished_at=?, status='COMPLETED', recommendation_count=?,
-                    elapsed_seconds=?, report_path=?, diagnostics_json=?
-                WHERE run_id=?
+                INSERT INTO recommendation_runs(
+                    run_id, run_type, trading_date, started_at, status, parameters_json
+                ) VALUES (?, ?, ?, ?, 'RUNNING', ?)
                 """,
                 (
-                    finished.isoformat(timespec="seconds"),
-                    len(recommendations),
-                    elapsed,
-                    str(report_path),
-                    json.dumps(diagnostics, ensure_ascii=False),
                     run_id,
+                    normalized_type,
+                    started.date().isoformat(),
+                    started.isoformat(timespec="seconds"),
+                    json.dumps(parameters, ensure_ascii=False),
                 ),
             )
             self.conn.commit()
-            return RecommendationRunResult(
-                run_id=run_id,
-                run_type=normalized_type,
-                started_at=started.isoformat(timespec="seconds"),
-                finished_at=finished.isoformat(timespec="seconds"),
-                recommendation_count=len(recommendations),
-                elapsed_seconds=elapsed,
-                report_path=str(report_path),
-                status="COMPLETED",
-                diagnostics=diagnostics,
-            )
-        except RecommendationCancelled as exc:
-            finished = datetime.now()
-            elapsed = perf_counter() - timer
-            diagnostics["cancelled"] = True
-            self.conn.rollback()
-            if report_path is not None:
-                report_path.unlink(missing_ok=True)
+
+            timer = perf_counter()
+            diagnostics: dict[str, object] = {}
+            report_path: Path | None = None
             try:
+                engine = InteractiveSurgePatternRecommender(self.db_path)
+                try:
+                    recommendations, diagnostics = engine.recommend_interactive(
+                        candidate_years=candidate_years,
+                        lookback_months=lookback_months,
+                        top_n=top_n,
+                        weekly_pool_n=weekly_pool_n,
+                        min_weekly_similarity=min_weekly_similarity,
+                        min_sto_similarity=min_sto_similarity,
+                        replay_top_n=replay_top_n,
+                        use_recent_replay=use_recent_replay,
+                        use_weekly_filter=use_weekly_filter,
+                        use_sto_filter=use_sto_filter,
+                        progress_callback=progress_callback,
+                        cancel_check=cancel_check,
+                    )
+                finally:
+                    engine.close()
+
+                report_path = runtime_path("daily_recommendations", f"{run_id}.html")
+                report_path = render_recommendation_html(
+                    recommendations,
+                    report_path,
+                    lookback_months=lookback_months,
+                )
+                recommendation_rows = []
+                for rank_no, item in enumerate(recommendations, start=1):
+                    prediction = item.prediction
+                    recommendation_rows.append(
+                        (
+                            run_id,
+                            rank_no,
+                            item.market,
+                            item.ticker,
+                            item.name,
+                            item.decision,
+                            item.final_similarity,
+                            item.weekly_similarity,
+                            item.sto_similarity,
+                            prediction.grade if prediction else None,
+                            prediction.seven_day_up_probability if prediction else None,
+                            prediction.seven_day_expected_return if prediction else None,
+                            prediction.target_return if prediction else None,
+                            prediction.stop_return if prediction else None,
+                            json.dumps(item.to_dict(), ensure_ascii=False),
+                        )
+                    )
+                self.conn.executemany(
+                    """
+                    INSERT INTO daily_recommendations(
+                        run_id, rank_no, market, ticker, name, decision,
+                        final_similarity, weekly_similarity, sto_similarity,
+                        prediction_grade, seven_day_up_probability,
+                        seven_day_expected_return, target_return, stop_return,
+                        payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    recommendation_rows,
+                )
+
+                finished = datetime.now()
+                elapsed = perf_counter() - timer
                 self.conn.execute(
                     """
                     UPDATE recommendation_runs
-                    SET finished_at=?, status='CANCELLED', elapsed_seconds=?,
-                        diagnostics_json=?, error_message=?
+                    SET finished_at=?, status='COMPLETED', recommendation_count=?,
+                        elapsed_seconds=?, report_path=?, diagnostics_json=?
                     WHERE run_id=?
                     """,
                     (
                         finished.isoformat(timespec="seconds"),
+                        len(recommendations),
                         elapsed,
+                        str(report_path),
                         json.dumps(diagnostics, ensure_ascii=False),
-                        str(exc),
                         run_id,
                     ),
                 )
                 self.conn.commit()
-            except Exception:
-                self.conn.rollback()
-            return RecommendationRunResult(
-                run_id=run_id,
-                run_type=normalized_type,
-                started_at=started.isoformat(timespec="seconds"),
-                finished_at=finished.isoformat(timespec="seconds"),
-                recommendation_count=0,
-                elapsed_seconds=elapsed,
-                report_path="",
-                status="CANCELLED",
-                error_message=str(exc),
-                diagnostics=diagnostics,
-            )
-        except Exception as exc:
-            finished = datetime.now()
-            elapsed = perf_counter() - timer
-            self.conn.rollback()
-            if report_path is not None:
-                report_path.unlink(missing_ok=True)
-            try:
-                self.conn.execute(
-                    """
-                    UPDATE recommendation_runs
-                    SET finished_at=?, status='FAILED', elapsed_seconds=?, diagnostics_json=?, error_message=?
-                    WHERE run_id=?
-                    """,
-                    (
-                        finished.isoformat(timespec="seconds"),
-                        elapsed,
-                        json.dumps(diagnostics, ensure_ascii=False),
-                        str(exc),
-                        run_id,
-                    ),
+                return RecommendationRunResult(
+                    run_id=run_id,
+                    run_type=normalized_type,
+                    started_at=started.isoformat(timespec="seconds"),
+                    finished_at=finished.isoformat(timespec="seconds"),
+                    recommendation_count=len(recommendations),
+                    elapsed_seconds=elapsed,
+                    report_path=str(report_path),
+                    status="COMPLETED",
+                    diagnostics=diagnostics,
                 )
-                self.conn.commit()
-            except Exception:
+            except RecommendationCancelled as exc:
+                finished = datetime.now()
+                elapsed = perf_counter() - timer
+                diagnostics["cancelled"] = True
                 self.conn.rollback()
-            raise
+                if report_path is not None:
+                    report_path.unlink(missing_ok=True)
+                try:
+                    self.conn.execute(
+                        """
+                        UPDATE recommendation_runs
+                        SET finished_at=?, status='CANCELLED', elapsed_seconds=?,
+                            diagnostics_json=?, error_message=?
+                        WHERE run_id=?
+                        """,
+                        (
+                            finished.isoformat(timespec="seconds"),
+                            elapsed,
+                            json.dumps(diagnostics, ensure_ascii=False),
+                            str(exc),
+                            run_id,
+                        ),
+                    )
+                    self.conn.commit()
+                except Exception:
+                    self.conn.rollback()
+                return RecommendationRunResult(
+                    run_id=run_id,
+                    run_type=normalized_type,
+                    started_at=started.isoformat(timespec="seconds"),
+                    finished_at=finished.isoformat(timespec="seconds"),
+                    recommendation_count=0,
+                    elapsed_seconds=elapsed,
+                    report_path="",
+                    status="CANCELLED",
+                    error_message=str(exc),
+                    diagnostics=diagnostics,
+                )
+            except Exception as exc:
+                finished = datetime.now()
+                elapsed = perf_counter() - timer
+                self.conn.rollback()
+                if report_path is not None:
+                    report_path.unlink(missing_ok=True)
+                try:
+                    self.conn.execute(
+                        """
+                        UPDATE recommendation_runs
+                        SET finished_at=?, status='FAILED', elapsed_seconds=?, diagnostics_json=?, error_message=?
+                        WHERE run_id=?
+                        """,
+                        (
+                            finished.isoformat(timespec="seconds"),
+                            elapsed,
+                            json.dumps(diagnostics, ensure_ascii=False),
+                            str(exc),
+                            run_id,
+                        ),
+                    )
+                    self.conn.commit()
+                except Exception:
+                    self.conn.rollback()
+                raise
         finally:
             self._process_lock.release()
 

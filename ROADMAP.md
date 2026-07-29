@@ -50,11 +50,12 @@
 | 27 | Strategy Validation & Promotion Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 전략 검증, Champion–Challenger 비교, 단계별 승격·강등, 증거 Manifest 관리 |
 | 28 | Strategy Monitoring & Drift Detection Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 운영 전략의 성능·위험·데이터·신호·체결 드리프트 탐지와 보호조치 요청 |
 | 29 | Model Registry & Inference Governance Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 모델 버전·artifact·승인·배포·추론·Shadow·롤백과 재현성 통제 |
+| 30 | Decision Explainability & Evidence Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 판단·차단·청산·NO_ACTION 근거, 증거 Bundle, 충실도·완전성·재현 hash 관리 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·모델거버넌스·운영·감사 계층 설계 완료
+[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·모델거버넌스·설명·증거·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -73,6 +74,8 @@
 12. Strategy Monitoring 기준선·PSI·건강 상태 resolver 최소 구현
 13. Model Registry 모델·artifact checksum·승인 guard 최소 구현
 14. 고정 모델 fixture 기반 결정론적 추론과 output guard 테스트
+15. Explainability 불변 모델·reason registry·fidelity validator 최소 구현
+16. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 설명 fixture와 hash 재현성 테스트
 
 ## 다음 작업
 
@@ -95,8 +98,11 @@
 17. `model_governance/models.py`, `registry.py`, `manifest.py`, `contract.py` 최소 구현
 18. 승인된 고정 sklearn fixture의 등록·추론·hash 재현성 테스트
 19. Champion–Challenger Shadow 결과 비교와 rollback request fixture 테스트
-20. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-21. Report Engine용 최소 JSON fixture 생성
+20. `explainability/models.py`, `reason_codes.py`, `collector.py`, `fidelity.py`, `hashing.py` 최소 구현
+21. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 고정 설명 fixture 테스트
+22. Explainability → Report Engine JSON adapter 작성
+23. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+24. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -143,3 +149,9 @@
 - 모델 출력은 Portfolio Risk hard block과 Decision·Order 계약을 우회할 수 없다.
 - 추론 실패나 INVALID 출력은 기본 매수 신호로 대체하지 않고 해당 입력을 차단하거나 DEGRADED 처리한다.
 - 모델 롤백은 사전에 승인된 이전 배포 버전으로만 수행하며 모든 변경을 감사 기록으로 남긴다.
+- Explainability Engine은 원본 Signal, Risk, Decision, Exit, Order 결과를 변경하거나 새로운 주문을 생성하지 않는다.
+- Risk hard block, FORCE_EXIT, VERIFY_REQUIRED는 긍정 Signal보다 높은 우선순위로 설명해야 한다.
+- 사용자용 자연어 설명보다 구조화 reason code와 Evidence Bundle을 감사 기준 기록으로 사용한다.
+- 설명의 action·수량·금액·수치는 원본 Snapshot과 일치해야 하며 불일치하면 fidelity FAIL로 처리한다.
+- 서로 다른 run의 증거를 결합하거나 필수 source hash가 불일치하면 설명을 REJECTED 처리한다.
+- 동일 원본 증거와 설명기 버전은 동일한 canonical evidence hash를 생성해야 한다.

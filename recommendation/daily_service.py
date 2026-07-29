@@ -167,6 +167,7 @@ class DailyRecommendationService:
 
         timer = perf_counter()
         diagnostics: dict[str, object] = {}
+        report_path: Path | None = None
         try:
             engine = InteractiveSurgePatternRecommender(self.db_path)
             try:
@@ -263,6 +264,8 @@ class DailyRecommendationService:
             elapsed = perf_counter() - timer
             diagnostics["cancelled"] = True
             self.conn.rollback()
+            if report_path is not None:
+                report_path.unlink(missing_ok=True)
             self.conn.execute(
                 """
                 UPDATE recommendation_runs
@@ -295,6 +298,8 @@ class DailyRecommendationService:
             finished = datetime.now()
             elapsed = perf_counter() - timer
             self.conn.rollback()
+            if report_path is not None:
+                report_path.unlink(missing_ok=True)
             self.conn.execute(
                 """
                 UPDATE recommendation_runs

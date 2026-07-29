@@ -36,14 +36,6 @@ PAGES = {
     ],
 }
 
-MOBILE_PAGES = [
-    st.Page("ade_home.py", title="홈", icon="🏠", default=True),
-    st.Page("pages/14_Recommendation_Workbench.py", title="추천", icon="📊"),
-    st.Page("pages/9_Trading_Desk.py", title="주문", icon="💳"),
-    st.Page("pages/15_Scheduled_Orders.py", title="예약", icon="🗓️"),
-    st.Page("pages/1_ADE_Cockpit.py", title="성과", icon="💼"),
-]
-
 
 def main() -> None:
     apply_design_system()

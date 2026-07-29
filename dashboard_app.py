@@ -36,6 +36,22 @@ PAGES = {
     ],
 }
 
+MOBILE_NAV_LINKS = (
+    ("/", "🏠", "홈"),
+    ("/Recommendation_Workbench", "📊", "추천"),
+    ("/Trading_Desk", "💳", "주문"),
+    ("/Scheduled_Orders", "🗓️", "예약"),
+    ("/ADE_Cockpit", "💼", "성과"),
+)
+
+
+def _mobile_nav_html() -> str:
+    links = "".join(
+        f'<a href="{href}" target="_self"><span>{icon}</span><span>{label}</span></a>'
+        for href, icon, label in MOBILE_NAV_LINKS
+    )
+    return f'<nav class="ade-mobile-top-nav" aria-label="모바일 빠른 메뉴">{links}</nav>'
+
 
 def main() -> None:
     apply_design_system()
@@ -99,14 +115,7 @@ def main() -> None:
           }
         }
         </style>
-        <nav class="ade-mobile-top-nav" aria-label="모바일 빠른 메뉴">
-          <a href="/" target="_self"><span>🏠</span><span>홈</span></a>
-          <a href="/Recommendation_Workbench" target="_self"><span>📊</span><span>추천</span></a>
-          <a href="/Trading_Desk" target="_self"><span>💳</span><span>주문</span></a>
-          <a href="/Scheduled_Orders" target="_self"><span>🗓️</span><span>예약</span></a>
-          <a href="/ADE_Cockpit" target="_self"><span>💼</span><span>성과</span></a>
-        </nav>
-        """,
+        """ + _mobile_nav_html(),
         unsafe_allow_html=True,
     )
 

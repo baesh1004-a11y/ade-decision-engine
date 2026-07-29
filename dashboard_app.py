@@ -61,63 +61,7 @@ def main() -> None:
         expanded=False,
     )
     navigation.run()
-
-    st.markdown(
-        """
-        <style>
-        .ade-mobile-top-nav{display:none}
-        @media(max-width:640px){
-          [data-testid="stSidebar"]{display:none!important}
-          [data-testid="stSidebarCollapsedControl"]{display:none!important}
-          .ade-mobile-top-nav{
-            position:fixed;
-            left:0;
-            right:0;
-            top:0;
-            bottom:auto;
-            z-index:9999;
-            display:grid;
-            grid-template-columns:repeat(5,minmax(0,1fr));
-            gap:0;
-            padding:calc(4px + env(safe-area-inset-top)) 6px 4px;
-            border:0;
-            border-bottom:1px solid #d1d5db;
-            border-radius:0;
-            background:#ffffff;
-            box-shadow:none;
-            backdrop-filter:none;
-          }
-          .ade-mobile-top-nav a{
-            min-width:0;
-            min-height:48px;
-            padding:4px 2px;
-            border-radius:0;
-            color:#6b7280;
-            text-decoration:none;
-            display:flex;
-            flex-direction:column;
-            align-items:center;
-            justify-content:center;
-            gap:2px;
-            font-size:10px;
-            font-weight:750;
-            line-height:1;
-            white-space:nowrap;
-          }
-          .ade-mobile-top-nav a span:first-child{font-size:17px;line-height:1}
-          .ade-mobile-top-nav a:hover,.ade-mobile-top-nav a:focus{
-            background:#f8fafc;
-            color:#2563eb;
-          }
-          [data-testid="stAppViewContainer"] .main .block-container{
-            padding-top:calc(60px + env(safe-area-inset-top))!important;
-            padding-bottom:18px!important;
-          }
-        }
-        </style>
-        """ + _mobile_nav_html(),
-        unsafe_allow_html=True,
-    )
+    st.markdown(_mobile_nav_html(), unsafe_allow_html=True)
 
 
 if __name__ == "__main__":

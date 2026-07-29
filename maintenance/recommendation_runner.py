@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ _JOBS: dict[str, dict[str, Any]] = {}
 _ACTIVE_STATES = {"STARTING", "RUNNING", "CANCELLING"}
 _HEARTBEAT_INTERVAL_SECONDS = 5
 _STALE_AFTER_SECONDS = 30
+_RUNTIME_DIR = Path(os.getenv("ADE_RUNTIME_DIR", "output"))
 _STAGE_LABELS = {
     "STARTING": "작업 준비",
     "PREPARE": "과거 패턴 준비",
@@ -30,11 +32,15 @@ _STAGE_LABELS = {
 
 
 def _status_path(market_code: str) -> Path:
-    return Path(f"output/{market_code}_recommendation_runtime.json")
+    return _RUNTIME_DIR / f"{market_code}_recommendation_runtime.json"
 
 
 def _lock_path(market_code: str) -> Path:
-    return Path(f"output/{market_code}_recommendation.lock")
+    return _RUNTIME_DIR / f"{market_code}_recommendation.lock"
+
+
+def _job_status_path(market_code: str) -> Path:
+    return _RUNTIME_DIR / f"{market_code}_job_status.json"
 
 
 def _now() -> str:
@@ -205,8 +211,8 @@ def start_job(
         def worker() -> None:
             service = DailyRecommendationService(db_path)
             manager = ADEJobManager(
-                lock_path=f"output/{market_code}_recommendation.lock",
-                status_path=f"output/{market_code}_job_status.json",
+                lock_path=_lock_path(market_code),
+                status_path=_job_status_path(market_code),
             )
 
             def on_progress(progress: dict[str, object]) -> None:

@@ -116,7 +116,7 @@ def _latest_result_panel(service, profile, latest) -> None:
         st.info("추천 결과가 비어 있습니다.")
         return
 
-    name_map = build_name_map(service.conn, profile.code)
+    name_map = build_name_map(service.conn, profile.code, details["ticker"].tolist())
     details["종목코드"] = details["ticker"].map(lambda v: normalize_ticker(v, profile.code))
     details["종목명"] = details.apply(lambda r: resolve_name(r.get("ticker"), r.get("name"), name_map, profile.code), axis=1)
     details["종목"] = details.apply(lambda r: display_symbol(r.get("종목명"), r.get("종목코드"), profile.code), axis=1)

@@ -120,8 +120,10 @@ def _latest_result_panel(service, profile, latest) -> None:
     details["종목코드"] = details["ticker"].map(lambda v: normalize_ticker(v, profile.code))
     details["종목명"] = details.apply(lambda r: resolve_name(r.get("ticker"), r.get("name"), name_map, profile.code), axis=1)
     details["종목"] = details.apply(lambda r: display_symbol(r.get("종목명"), r.get("종목코드"), profile.code), axis=1)
-    details["주봉"] = details["weekly_similarity"].astype(float).round(1)
-    details["STO"] = details["sto_similarity"].astype(float).round(1)
+    weekly_values = details["weekly_similarity"] if "weekly_similarity" in details.columns else pd.Series(index=details.index, dtype="float64")
+    sto_values = details["sto_similarity"] if "sto_similarity" in details.columns else pd.Series(index=details.index, dtype="float64")
+    details["주봉"] = pd.to_numeric(weekly_values, errors="coerce").round(1)
+    details["STO"] = pd.to_numeric(sto_values, errors="coerce").round(1)
 
     k1, k2, k3 = st.columns(3)
     k1.metric("실행 시각", str(latest.get("finished_at") or "-")[:16])

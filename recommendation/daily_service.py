@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
+from datahub.runtime_paths import runtime_path
 from datahub.sqlite_connection import connect_sqlite
 from report.recommendation_html_report import render_recommendation_html
 from surge.interactive_recommender import (
@@ -186,7 +187,7 @@ class DailyRecommendationService:
             finally:
                 engine.close()
 
-            report_path = Path("output/daily_recommendations") / f"{run_id}.html"
+            report_path = runtime_path("daily_recommendations", f"{run_id}.html")
             report_path = render_recommendation_html(
                 recommendations,
                 report_path,

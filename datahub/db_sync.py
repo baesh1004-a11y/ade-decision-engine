@@ -178,6 +178,15 @@ def _validate_sqlite(path: Path) -> None:
         connection.close()
 
 
+def _existing_database_is_valid(path: Path) -> bool:
+    try:
+        _validate_sqlite(path)
+    except Exception as exc:
+        _log(f"Existing database is unavailable or invalid: {path}: {exc}")
+        return False
+    return True
+
+
 def sync_database(url_env: str, destination: Path) -> bool:
     url = os.getenv(url_env, "").strip()
     if not url:
@@ -203,18 +212,21 @@ def sync_database(url_env: str, destination: Path) -> bool:
 
 
 def sync_market_databases() -> None:
-    failures: list[str] = []
+    fatal_failures: list[str] = []
     for url_env, destination in DATABASES:
         try:
             sync_database(url_env, destination)
         except Exception as exc:
-            failures.append(f"{destination}: {exc}")
             _log(f"ERROR {destination}: {exc}")
+            if _existing_database_is_valid(destination):
+                _log(f"Using existing valid database after sync failure: {destination}")
+                continue
+            fatal_failures.append(f"{destination}: {exc}")
 
     ensure_market_databases()
 
-    if failures:
-        raise RuntimeError("Database synchronization failed: " + " | ".join(failures))
+    if fatal_failures:
+        raise RuntimeError("Database synchronization failed and no valid fallback exists: " + " | ".join(fatal_failures))
 
 
 if __name__ == "__main__":

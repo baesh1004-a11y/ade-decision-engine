@@ -266,22 +266,25 @@ class DailyRecommendationService:
             self.conn.rollback()
             if report_path is not None:
                 report_path.unlink(missing_ok=True)
-            self.conn.execute(
-                """
-                UPDATE recommendation_runs
-                SET finished_at=?, status='CANCELLED', elapsed_seconds=?,
-                    diagnostics_json=?, error_message=?
-                WHERE run_id=?
-                """,
-                (
-                    finished.isoformat(timespec="seconds"),
-                    elapsed,
-                    json.dumps(diagnostics, ensure_ascii=False),
-                    str(exc),
-                    run_id,
-                ),
-            )
-            self.conn.commit()
+            try:
+                self.conn.execute(
+                    """
+                    UPDATE recommendation_runs
+                    SET finished_at=?, status='CANCELLED', elapsed_seconds=?,
+                        diagnostics_json=?, error_message=?
+                    WHERE run_id=?
+                    """,
+                    (
+                        finished.isoformat(timespec="seconds"),
+                        elapsed,
+                        json.dumps(diagnostics, ensure_ascii=False),
+                        str(exc),
+                        run_id,
+                    ),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
             return RecommendationRunResult(
                 run_id=run_id,
                 run_type=normalized_type,
@@ -300,21 +303,24 @@ class DailyRecommendationService:
             self.conn.rollback()
             if report_path is not None:
                 report_path.unlink(missing_ok=True)
-            self.conn.execute(
-                """
-                UPDATE recommendation_runs
-                SET finished_at=?, status='FAILED', elapsed_seconds=?, diagnostics_json=?, error_message=?
-                WHERE run_id=?
-                """,
-                (
-                    finished.isoformat(timespec="seconds"),
-                    elapsed,
-                    json.dumps(diagnostics, ensure_ascii=False),
-                    str(exc),
-                    run_id,
-                ),
-            )
-            self.conn.commit()
+            try:
+                self.conn.execute(
+                    """
+                    UPDATE recommendation_runs
+                    SET finished_at=?, status='FAILED', elapsed_seconds=?, diagnostics_json=?, error_message=?
+                    WHERE run_id=?
+                    """,
+                    (
+                        finished.isoformat(timespec="seconds"),
+                        elapsed,
+                        json.dumps(diagnostics, ensure_ascii=False),
+                        str(exc),
+                        run_id,
+                    ),
+                )
+                self.conn.commit()
+            except Exception:
+                self.conn.rollback()
             raise
         finally:
             self._process_lock.release()

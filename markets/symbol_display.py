@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 
 
 def normalize_ticker(value: object, market: str = "kr") -> str:
@@ -19,8 +19,31 @@ def normalize_ticker(value: object, market: str = "kr") -> str:
     return text.upper()
 
 
-def build_name_map(conn: sqlite3.Connection, market: str = "kr") -> dict[str, str]:
-    """Collect company names in authoritative priority order."""
+def build_name_map(
+    conn: sqlite3.Connection,
+    market: str = "kr",
+    tickers: Iterable[object] | None = None,
+) -> dict[str, str]:
+    """Collect company names in authoritative priority order.
+
+    When ``tickers`` is supplied, only rows relevant to those securities are
+    queried. This avoids scanning large history tables for screens that display
+    only a small recommendation set.
+    """
+    requested_raw = {
+        str(value or "").strip()
+        for value in (tickers or ())
+        if str(value or "").strip()
+    }
+    requested_normalized = {
+        normalize_ticker(value, market)
+        for value in requested_raw
+        if normalize_ticker(value, market)
+    }
+    restrict = tickers is not None
+    if restrict and not requested_normalized:
+        return {}
+
     result: dict[str, str] = {}
     tables = {
         str(row[0])
@@ -44,19 +67,32 @@ def build_name_map(conn: sqlite3.Connection, market: str = "kr") -> dict[str, st
         }
         if ticker_col not in columns or name_col not in columns:
             continue
-        where = ""
-        params: tuple[object, ...] = ()
+
+        clauses: list[str] = []
+        params: list[object] = []
         if "market" in columns:
-            where = " WHERE market=?"
-            params = (market,)
+            clauses.append("market=?")
+            params.append(market)
+        if restrict:
+            lookup_values = sorted(requested_raw | requested_normalized)
+            placeholders = ",".join("?" for _ in lookup_values)
+            clauses.append(f"{ticker_col} IN ({placeholders})")
+            params.extend(lookup_values)
+
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         for row in conn.execute(
             f"SELECT {ticker_col} AS ticker, {name_col} AS name FROM {table}{where}",
-            params,
+            tuple(params),
         ).fetchall():
             ticker = normalize_ticker(row[0], market)
+            if restrict and ticker not in requested_normalized:
+                continue
             name = str(row[1] or "").strip()
             if ticker and name and name != ticker and not name.isdigit():
                 result.setdefault(ticker, name)
+
+        if restrict and requested_normalized.issubset(result):
+            break
     return result
 
 

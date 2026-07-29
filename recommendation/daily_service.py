@@ -261,6 +261,7 @@ class DailyRecommendationService:
             finished = datetime.now()
             elapsed = perf_counter() - timer
             diagnostics["cancelled"] = True
+            self.conn.rollback()
             self.conn.execute(
                 """
                 UPDATE recommendation_runs
@@ -292,6 +293,7 @@ class DailyRecommendationService:
         except Exception as exc:
             finished = datetime.now()
             elapsed = perf_counter() - timer
+            self.conn.rollback()
             self.conn.execute(
                 """
                 UPDATE recommendation_runs

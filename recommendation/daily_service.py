@@ -15,6 +15,7 @@ from surge.interactive_recommender import (
     InteractiveSurgePatternRecommender,
     RecommendationCancelled,
 )
+from surge.multi_horizon import MULTI_PATTERN_VERSION
 
 ProgressCallback = Callable[[dict[str, object]], None]
 CancelCheck = Callable[[], bool]
@@ -128,7 +129,7 @@ class DailyRecommendationService:
         run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{normalized_type}-{uuid.uuid4().hex[:8]}"
         started = datetime.now()
         parameters = {
-            "algorithm": "pre-surge-120d-multi-horizon-v2",
+            "algorithm": MULTI_PATTERN_VERSION,
             "pattern_days": 120,
             "surge_definition": {
                 "FAST": "1-5 sessions to +30%",
@@ -191,18 +192,10 @@ class DailyRecommendationService:
                 report_path,
                 lookback_months=lookback_months,
             )
+            recommendation_rows = []
             for rank_no, item in enumerate(recommendations, start=1):
                 prediction = item.prediction
-                self.conn.execute(
-                    """
-                    INSERT INTO daily_recommendations(
-                        run_id, rank_no, market, ticker, name, decision,
-                        final_similarity, weekly_similarity, sto_similarity,
-                        prediction_grade, seven_day_up_probability,
-                        seven_day_expected_return, target_return, stop_return,
-                        payload_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
+                recommendation_rows.append(
                     (
                         run_id,
                         rank_no,
@@ -219,8 +212,20 @@ class DailyRecommendationService:
                         prediction.target_return if prediction else None,
                         prediction.stop_return if prediction else None,
                         json.dumps(item.to_dict(), ensure_ascii=False),
-                    ),
+                    )
                 )
+            self.conn.executemany(
+                """
+                INSERT INTO daily_recommendations(
+                    run_id, rank_no, market, ticker, name, decision,
+                    final_similarity, weekly_similarity, sto_similarity,
+                    prediction_grade, seven_day_up_probability,
+                    seven_day_expected_return, target_return, stop_return,
+                    payload_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                recommendation_rows,
+            )
 
             finished = datetime.now()
             elapsed = perf_counter() - timer

@@ -51,11 +51,12 @@
 | 28 | Strategy Monitoring & Drift Detection Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 운영 전략의 성능·위험·데이터·신호·체결 드리프트 탐지와 보호조치 요청 |
 | 29 | Model Registry & Inference Governance Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 모델 버전·artifact·승인·배포·추론·Shadow·롤백과 재현성 통제 |
 | 30 | Decision Explainability & Evidence Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 판단·차단·청산·NO_ACTION 근거, 증거 Bundle, 충실도·완전성·재현 hash 관리 |
+| 31 | Paper Trading & Portfolio Continuity Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 전일 PAPER 포트폴리오 승계, 종가 가상체결, NO_ACTION 기록, 비용·기업행동·벤치마크 연속 계산 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·모델거버넌스·설명·증거·운영·감사 계층 설계 완료
+[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·모델거버넌스·설명·증거·PAPER 연속운용·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -76,6 +77,9 @@
 14. 고정 모델 fixture 기반 결정론적 추론과 output guard 테스트
 15. Explainability 불변 모델·reason registry·fidelity validator 최소 구현
 16. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 설명 fixture와 hash 재현성 테스트
+17. PAPER PortfolioSnapshot·Fill·Ledger 불변 모델과 SQLite migration 구현
+18. 종가 기반 가상체결, 제약 계산, 일간·누적·벤치마크 성과 계산 구현
+19. 10거래일 연속 PAPER fixture와 NO_ACTION 상태 승계 테스트
 
 ## 다음 작업
 
@@ -101,8 +105,12 @@
 20. `explainability/models.py`, `reason_codes.py`, `collector.py`, `fidelity.py`, `hashing.py` 최소 구현
 21. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 고정 설명 fixture 테스트
 22. Explainability → Report Engine JSON adapter 작성
-23. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-24. Report Engine용 최소 JSON fixture 생성
+23. `paper_trading/models.py`, `constraints.py`, `fills.py`, `ledger.py`, `performance.py` 최소 구현
+24. 초기 1천만원·현금 10%·종목 10%·하루 신규 1종목 정책 fixture 작성
+25. BUY → HOLD → NO_ACTION → FORCE_EXIT 연속 거래일 통합 테스트
+26. Paper Trading → Portfolio Accounting → Explainability → Report JSON adapter 작성
+27. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+28. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -155,3 +163,10 @@
 - 설명의 action·수량·금액·수치는 원본 Snapshot과 일치해야 하며 불일치하면 fidelity FAIL로 처리한다.
 - 서로 다른 run의 증거를 결합하거나 필수 source hash가 불일치하면 설명을 REJECTED 처리한다.
 - 동일 원본 증거와 설명기 버전은 동일한 canonical evidence hash를 생성해야 한다.
+- Paper Trading Engine은 Signal·Risk·Decision을 생성하거나 변경하지 않고 승인된 결과만 가상 체결한다.
+- PAPER 포트폴리오는 동일 portfolio/date에 하나의 final snapshot만 가질 수 있다.
+- NO_ACTION과 HOLD도 가상체결 0건의 일일 상태로 반드시 기록한다.
+- 공식 종가 또는 확정 가격 스냅샷이 없으면 임의 가격으로 체결하지 않는다.
+- PAPER 매수 후 현금은 0 미만이 될 수 없고 최소 현금비중과 종목당 최대비중을 준수해야 한다.
+- 과거 final PAPER 원장은 수정하지 않으며 정정은 append-only adjustment event로 기록한다.
+- Paper Trading 경로의 실브로커 submit 호출은 항상 0건이어야 한다.

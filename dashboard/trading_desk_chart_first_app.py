@@ -32,22 +32,22 @@ def _cached_kis_client():
     return kis_market_data_from_env()
 
 
-@st.cache_data(ttl=5, max_entries=200, show_spinner=False)
+@st.cache_data(ttl=15, max_entries=200, show_spinner=False)
 def _cached_kis_quote(ticker: str) -> dict[str, object]:
     return _cached_kis_client().get_current_quote(ticker)
 
 
-@st.cache_data(ttl=900, max_entries=100, show_spinner=False)
+@st.cache_data(ttl=1800, max_entries=100, show_spinner=False)
 def _cached_kis_daily_bars(ticker: str) -> pd.DataFrame:
-    return _cached_kis_client().get_daily_bars(ticker, lookback_days=365)
+    return _cached_kis_client().get_daily_bars(ticker, lookback_days=240)
 
 
-@st.cache_data(ttl=30, max_entries=100, show_spinner=False)
+@st.cache_data(ttl=90, max_entries=100, show_spinner=False)
 def _cached_kis_intraday_bars(ticker: str) -> pd.DataFrame:
     return _cached_kis_client().get_intraday_bars(ticker, include_previous=True)
 
 
-@st.cache_data(ttl=30, max_entries=100, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=100, show_spinner=False)
 def _cached_kis_four_hour_bars(ticker: str) -> pd.DataFrame:
     return _cached_kis_client().get_four_hour_bars(ticker)
 
@@ -81,33 +81,31 @@ def _is_mobile_request(st) -> bool:
     return any(token in user_agent for token in ("android", "iphone", "ipad", "ipod", "mobile"))
 
 
-def _load_market_snapshot(st) -> dict[str, dict[str, object]]:
-    @st.cache_data(ttl=300, show_spinner=False)
-    def _fetch() -> dict[str, dict[str, object]]:
-        result: dict[str, dict[str, object]] = {}
-        try:
-            import yfinance as yf
-        except ImportError:
-            return result
-        symbols = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
-        for label, symbol in symbols.items():
-            try:
-                history = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=False)
-                closes = history["Close"].dropna()
-                if closes.empty:
-                    continue
-                current = float(closes.iloc[-1])
-                previous = float(closes.iloc[-2]) if len(closes) > 1 else current
-                change_rate = ((current - previous) / previous * 100.0) if previous else 0.0
-                result[label] = {"value": current, "change_rate": change_rate}
-            except Exception:
-                continue
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_market_snapshot() -> dict[str, dict[str, object]]:
+    result: dict[str, dict[str, object]] = {}
+    try:
+        import yfinance as yf
+    except ImportError:
         return result
-    return _fetch()
+    symbols = {"KOSPI": "^KS11", "KOSDAQ": "^KQ11", "USD/KRW": "KRW=X"}
+    for label, symbol in symbols.items():
+        try:
+            history = yf.Ticker(symbol).history(period="5d", interval="1d", auto_adjust=False)
+            closes = history["Close"].dropna()
+            if closes.empty:
+                continue
+            current = float(closes.iloc[-1])
+            previous = float(closes.iloc[-2]) if len(closes) > 1 else current
+            change_rate = ((current - previous) / previous * 100.0) if previous else 0.0
+            result[label] = {"value": current, "change_rate": change_rate}
+        except Exception:
+            continue
+    return result
 
 
 def _render_market_status(st) -> None:
-    snapshot = _load_market_snapshot(st)
+    snapshot = _cached_market_snapshot()
     section("오늘의 시장 현황", "지수와 환율 조회값")
     cards = st.columns(6, gap="small")
     items = [
@@ -178,14 +176,14 @@ def _yahoo_candidates(ticker: str) -> list[str]:
     return [f"{code}.KS", f"{code}.KQ"]
 
 
-@st.cache_data(ttl=60, max_entries=200, show_spinner=False)
+@st.cache_data(ttl=300, max_entries=200, show_spinner=False)
 def _load_fallback_bars(db_path: str, ticker: str, timeframe: str) -> tuple[pd.DataFrame, str]:
     period, interval = ("1y", "1d") if timeframe == "일봉" else ("5d", "5m")
     try:
         import yfinance as yf
         for yahoo_ticker in _yahoo_candidates(ticker):
             try:
-                frame = yf.download(yahoo_ticker, period=period, interval=interval, auto_adjust=False, progress=False, threads=False)
+                frame = yf.download(yahoo_ticker, period=period, interval=interval, auto_adjust=False, progress=False, threads=False, timeout=8)
                 normalized = _normalize_yahoo_frame(frame)
                 if normalized.empty:
                     continue
@@ -203,7 +201,7 @@ def _load_fallback_bars(db_path: str, ticker: str, timeframe: str) -> tuple[pd.D
     except ImportError:
         pass
     code = normalize_ticker(ticker, "kr")
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = sqlite3.connect(db_path, timeout=5)
     conn.row_factory = sqlite3.Row
     try:
         rows = conn.execute(
@@ -211,7 +209,7 @@ def _load_fallback_bars(db_path: str, ticker: str, timeframe: str) -> tuple[pd.D
                       close AS Close, volume AS Volume
                FROM price_bars
                WHERE market='kr' AND ticker IN (?, ?, ?)
-               ORDER BY trade_date DESC LIMIT 240""",
+               ORDER BY trade_date DESC LIMIT 180""",
             (code, f"{code}.KS", f"{code}.KQ"),
         ).fetchall()
         return pd.DataFrame([dict(row) for row in reversed(rows)]), "내부 최신 저장 일봉 · KIS 조회 실패 시 대체"
@@ -277,8 +275,10 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
     volume = float(quote.get("volume") or latest.get("Volume") or 0.0)
     ask_price = float(quote.get("ask_price") or 0.0)
     bid_price = float(quote.get("bid_price") or 0.0)
+    chart_bars = bars.tail(180 if timeframe == "일봉" else 240)
+    chart_height = 330 if mobile else 440
     if mobile:
-        st.plotly_chart(build_trading_chart(bars, label, height=360), width="stretch", config=CHART_CONFIG)
+        st.plotly_chart(build_trading_chart(chart_bars, label, height=chart_height), width="stretch", config=CHART_CONFIG)
         q1, q2 = st.columns(2)
         q1.metric("현재가" if live_quote else "최근 확인 가격", _format_price(current_price))
         if live_quote:
@@ -296,7 +296,7 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
     else:
         chart_column, quote_column = st.columns([4, 1], gap="medium")
         with chart_column:
-            st.plotly_chart(build_trading_chart(bars, label), width="stretch", config=CHART_CONFIG)
+            st.plotly_chart(build_trading_chart(chart_bars, label, height=chart_height), width="stretch", config=CHART_CONFIG)
         with quote_column:
             st.markdown("#### 실시간 시세" if live_quote else "#### 최근 확인 가격")
             st.metric("현재가" if live_quote else "최근 가격", _format_price(current_price))
@@ -349,7 +349,7 @@ def run(db_path: str = "datahub/market.db") -> None:
     service = TradingOrderService(db_path)
     mobile = _is_mobile_request(st)
     try:
-        recommendations = service.latest_recommendations(50)
+        recommendations = service.latest_recommendations(30)
         requests = service.pending_approval_requests()
         pending_count = len(requests)
         mode = "실전주문 활성" if env == "live" and live_enabled else "실전환경 · 주문 잠금" if env == "live" else "모의투자"
@@ -366,12 +366,15 @@ def run(db_path: str = "datahub/market.db") -> None:
             mobile_section = str(st.session_state.get("kr_mobile_section", "차트"))
             render_mobile_bottom_nav(st, pending_count=pending_count, state_key="kr_mobile_section")
         elif view_mode == "상세 보기":
-            _render_market_status(st)
+            with st.expander("시장 현황 보기", expanded=False):
+                _render_market_status(st)
         section("추천 종목 주문 목록", "최신 추천 실행 기준")
         if not recommendations:
             render_empty_state(st, "추천 결과가 없습니다", "추천종목 분석 화면에서 추천을 생성한 뒤 다시 확인하세요.", icon=":material/playlist_add:")
             _render_pending_approval(st, service, recommendations)
-            _render_execution_and_history(st, service)
+            if not mobile and view_mode == "상세 보기":
+                with st.expander("체결 및 주문 이력", expanded=False):
+                    _render_execution_and_history(st, service)
             return
         run_id = str(recommendations[0]["run_id"])
         run_finished = str(recommendations[0].get("run_finished_at") or "-")
@@ -405,22 +408,23 @@ def run(db_path: str = "datahub/market.db") -> None:
             watch_column, detail_column = st.columns([1, 3.7], gap="medium")
             with watch_column:
                 section("추천 종목")
-                for i, row in enumerate(recommendations):
+                for i, row in enumerate(recommendations[:20]):
                     ticker = normalize_ticker(row["ticker"], "kr")
                     if st.button(labels[i], key=f"watch_hover_{ticker}_{i}", help=_watch_hover_text(st, row, ticker), type="primary" if i == st.session_state[selection_key] else "secondary", width="stretch"):
                         st.session_state[selection_key] = i
-                st.caption(f"총 {len(recommendations)}개 추천 종목")
+                st.caption(f"상위 {min(len(recommendations), 20)}개 표시 · 전체 {len(recommendations)}개")
             index = int(st.session_state[selection_key])
             selected = recommendations[index]
             selected_code = normalize_ticker(selected["ticker"], "kr")
             selected_label = display_symbol(selected.get("name"), selected_code, "kr")
             st.session_state["workbench_selected_kr"] = selected_code
             with detail_column:
-                with st.container(border=True):
-                    _render_selected_summary(st, selected, selected_label)
-                    _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
-                detail_view = st.segmented_control("상세 화면", ["JP Radar", "추천 검증", "주문"], default="JP Radar", key=f"desktop_detail_view_{selected_code}", label_visibility="collapsed")
-                if detail_view == "JP Radar":
+                _render_selected_summary(st, selected, selected_label)
+                detail_view = st.segmented_control("상세 화면", ["차트", "JP Radar", "추천 검증", "주문"], default="차트", key=f"desktop_detail_view_{selected_code}", label_visibility="collapsed")
+                if detail_view == "차트":
+                    with st.container(border=True):
+                        _render_chart_with_quote_panel(st, db_path, str(selected["ticker"]), selected_label)
+                elif detail_view == "JP Radar":
                     _render_radar_panel(st, selected, selected_code)
                 elif detail_view == "추천 검증" and view_mode == "상세 보기":
                     _render_validation_panel(st, selected)
@@ -429,6 +433,7 @@ def run(db_path: str = "datahub/market.db") -> None:
         if not mobile or mobile_section == "승인":
             _render_pending_approval(st, service, recommendations)
         if not mobile and view_mode == "상세 보기":
-            _render_execution_and_history(st, service)
+            with st.expander("체결 및 주문 이력", expanded=False):
+                _render_execution_and_history(st, service)
     finally:
         service.close()

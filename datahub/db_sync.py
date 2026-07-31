@@ -10,17 +10,15 @@ from pathlib import Path
 from datahub.bootstrap import ensure_market_databases
 
 
-DATABASES = (
-    Path("datahub/market.db"),
-    Path("datahub/us_market.db"),
+DATABASE_ARCHIVES = (
+    ("MARKET_DB_ARCHIVE_URL", Path("datahub/market.db"), Path("datahub/.market-db-archive.zip")),
+    ("US_MARKET_DB_ARCHIVE_URL", Path("datahub/us_market.db"), Path("datahub/.us-market-db-archive.zip")),
 )
 
-_ARCHIVE_URL_ENV = "DB_ARCHIVE_URL"
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _PROGRESS_STEP_BYTES = 25 * 1024 * 1024
 _FULL_CHECK_ENV = "DB_SYNC_FULL_CHECK"
 _SQLITE_HEADER = b"SQLite format 3\x00"
-_ARCHIVE_PATH = Path("datahub/.db-archive.zip")
 
 
 def _log(message: str) -> None:
@@ -150,45 +148,47 @@ def _extract_database_member(
         candidate.unlink(missing_ok=True)
 
 
-def sync_database_archive() -> None:
-    archive_url = os.getenv(_ARCHIVE_URL_ENV, "").strip()
+def sync_database_archive(url_env: str, destination: Path, archive_path: Path) -> None:
+    archive_url = os.getenv(url_env, "").strip()
     if not archive_url:
-        missing = [str(path) for path in DATABASES if not _existing_database_is_valid(path)]
-        if missing:
-            raise RuntimeError(
-                f"{_ARCHIVE_URL_ENV} is not set and valid local databases are missing: " + ", ".join(missing)
-            )
-        _log(f"{_ARCHIVE_URL_ENV} is not set; using existing valid databases")
-        return
+        if _existing_database_is_valid(destination):
+            _log(f"{url_env} is not set; using existing valid {destination}")
+            return
+        raise RuntimeError(f"{url_env} is not set and valid local database is missing: {destination}")
 
-    _log(f"Downloading database archive from {_ARCHIVE_URL_ENV}")
-    _download(archive_url, _ARCHIVE_PATH)
+    _log(f"Downloading {destination.name} archive from {url_env}")
+    _download(archive_url, archive_path)
 
     try:
-        if not zipfile.is_zipfile(_ARCHIVE_PATH):
-            raise RuntimeError("Downloaded file is not a valid ZIP archive")
+        if not zipfile.is_zipfile(archive_path):
+            raise RuntimeError(f"Downloaded file for {destination.name} is not a valid ZIP archive")
 
-        with zipfile.ZipFile(_ARCHIVE_PATH) as archive:
-            for destination in DATABASES:
-                member = _find_archive_member(archive, destination.name)
-                _extract_database_member(archive, member, destination)
+        with zipfile.ZipFile(archive_path) as archive:
+            member = _find_archive_member(archive, destination.name)
+            _extract_database_member(archive, member, destination)
     finally:
-        _ARCHIVE_PATH.unlink(missing_ok=True)
+        archive_path.unlink(missing_ok=True)
 
 
 def sync_market_databases() -> None:
-    try:
-        sync_database_archive()
-    except Exception as exc:
-        _log(f"ERROR database archive synchronization failed: {exc}")
-        invalid = [str(path) for path in DATABASES if not _existing_database_is_valid(path)]
-        if invalid:
-            raise RuntimeError(
-                "Database synchronization failed and no valid fallback exists: " + ", ".join(invalid)
-            ) from exc
-        _log("Using existing valid databases after archive synchronization failure")
+    fatal_failures: list[str] = []
+
+    for url_env, destination, archive_path in DATABASE_ARCHIVES:
+        try:
+            sync_database_archive(url_env, destination, archive_path)
+        except Exception as exc:
+            _log(f"ERROR {destination.name} synchronization failed: {exc}")
+            if _existing_database_is_valid(destination):
+                _log(f"Using existing valid database after sync failure: {destination}")
+                continue
+            fatal_failures.append(f"{destination}: {exc}")
 
     ensure_market_databases()
+
+    if fatal_failures:
+        raise RuntimeError(
+            "Database synchronization failed and no valid fallback exists: " + " | ".join(fatal_failures)
+        )
 
 
 if __name__ == "__main__":

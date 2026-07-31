@@ -53,25 +53,22 @@ def run() -> None:
         st.error(f"데이터베이스를 찾을 수 없습니다: {profile.db_path}")
         return
 
-    conn = sqlite3.connect(str(profile.db_path), timeout=30)
+    conn = sqlite3.connect(str(profile.db_path), timeout=5)
     conn.row_factory = sqlite3.Row
     try:
-        context = load_latest_context(conn, profile.code, 50)
+        context = load_latest_context(conn, profile.code, 25)
         _render_generation_controls(profile, runtime, context)
 
         if context is None:
             st.info("저장된 추천 결과가 없습니다. 추천 생성 버튼을 먼저 실행하세요.")
             return
 
-        name_map = build_name_map(conn, profile.code)
+        recommendation_tickers = [str(row.get("ticker") or "") for row in context.recommendations]
+        name_map = build_name_map(conn, profile.code, recommendation_tickers)
         recommendations = base._enrich_recommendations(context.recommendations, name_map, profile.code)
         selected = _controller_selection(recommendations, profile.code)
         ticker = normalize_ticker(selected["ticker"], profile.code)
-        payload = base._safe_json(selected.get("payload_json"))
         validation = context.validations.get(ticker) or context.validations.get(str(selected["ticker"]))
-        pattern = base._selected_pattern(conn, payload)
-        current = base._current_bars(conn, profile.code, ticker, profile.price_source)
-        historical = base._pattern_bars(conn, pattern)
 
         summary_cols = st.columns(3)
         summary_cols[0].metric("추천 결과", f"{len(recommendations)}건")
@@ -82,25 +79,38 @@ def run() -> None:
             f"실행 유형 {context.run_type or '-'} · 주문 {len(context.current_orders)}건"
         )
 
-        step_header(1, "추천 목록", "검토할 종목을 선택합니다.")
-        _render_controller(recommendations, selected, profile.code)
-
-        step_header(2, "분석 및 검증", "차트와 검증 결과를 확인합니다.")
-        base._comparison_panel(
-            st,
-            selected,
-            current,
-            historical,
-            pattern,
-            payload,
-            profile.code,
-            profile.db_path,
-            context.run_id,
-            validation,
+        workbench_view = st.segmented_control(
+            "작업 화면",
+            options=["추천 목록", "분석 및 검증", "주문"],
+            default="추천 목록",
+            key=f"workbench_view_{profile.code}",
+            label_visibility="collapsed",
         )
 
-        step_header(3, "주문", "검토한 종목을 주문 화면으로 연결합니다.")
-        base._order_panel(st, selected, profile.code, validation, context)
+        if workbench_view == "추천 목록":
+            step_header(1, "추천 목록", "검토할 종목을 선택합니다.")
+            _render_controller(recommendations, selected, profile.code)
+        elif workbench_view == "분석 및 검증":
+            step_header(2, "분석 및 검증", "차트와 검증 결과를 확인합니다.")
+            payload = base._safe_json(selected.get("payload_json"))
+            pattern = base._selected_pattern(conn, payload)
+            current = base._current_bars(conn, profile.code, ticker, profile.price_source)
+            historical = base._pattern_bars(conn, pattern)
+            base._comparison_panel(
+                st,
+                selected,
+                current,
+                historical,
+                pattern,
+                payload,
+                profile.code,
+                profile.db_path,
+                context.run_id,
+                validation,
+            )
+        else:
+            step_header(3, "주문", "검토한 종목을 주문 화면으로 연결합니다.")
+            base._order_panel(st, selected, profile.code, validation, context)
     finally:
         conn.close()
 
@@ -153,18 +163,17 @@ def _render_generation_controls(profile, runtime, context) -> None:
         if action_cols[1].button("다시 불러오기", use_container_width=True, key=f"workbench_refresh_{profile.code}"):
             st.rerun()
 
-        current_runtime = get_status(profile.code)
-        state = str(current_runtime.get("state") or "IDLE")
-        if bool(current_runtime.get("running")):
-            progress = float(current_runtime.get("overall_progress", current_runtime.get("progress", 0.0)) or 0.0)
-            current = int(current_runtime.get("current") or current_runtime.get("processed_symbols") or 0)
-            total = int(current_runtime.get("total") or current_runtime.get("total_symbols") or 0)
+        state = str(runtime.get("state") or "IDLE")
+        if bool(runtime.get("running")):
+            progress = float(runtime.get("overall_progress", runtime.get("progress", 0.0)) or 0.0)
+            current = int(runtime.get("current") or runtime.get("processed_symbols") or 0)
+            total = int(runtime.get("total") or runtime.get("total_symbols") or 0)
             st.info("추천 작업을 실행하고 있습니다.")
-            st.progress(progress, text=str(current_runtime.get("message") or f"처리 {current:,}/{total:,}"))
+            st.progress(progress, text=str(runtime.get("message") or f"처리 {current:,}/{total:,}"))
         elif state == "COMPLETED":
-            st.success(f"추천 완료 · {int(current_runtime.get('recommendation_count') or 0)}건")
+            st.success(f"추천 완료 · {int(runtime.get('recommendation_count') or 0)}건")
         elif state in {"FAILED", "STALE", "CANCELLED"}:
-            st.warning(str(current_runtime.get("error_message") or current_runtime.get("message") or _state_label(state)))
+            st.warning(str(runtime.get("error_message") or runtime.get("message") or _state_label(state)))
 
 
 def _controller_selection(recommendations, market: str):
@@ -202,7 +211,6 @@ def _render_controller(recommendations, selected, market: str) -> None:
         ticker = frame.iloc[int(selected_rows[0])]["ticker"]
         if ticker != st.session_state.get(f"workbench_selected_{market}"):
             st.session_state[f"workbench_selected_{market}"] = ticker
-            st.rerun()
 
     with st.expander("모바일 종목 선택", expanded=False):
         for row in recommendations[:12]:

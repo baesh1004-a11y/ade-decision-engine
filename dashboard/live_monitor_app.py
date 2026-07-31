@@ -9,33 +9,45 @@ from types import SimpleNamespace
 import pandas as pd
 
 from dashboard.data import PaperDashboardData
+from dashboard.design_system import StatusBadge, apply_design_system, page_header, section
 from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
 from monitoring.live_monitor import ADELiveMonitor
 from recommendation.run_context import load_latest_context
 
 
+_STATUS_LABELS = {
+    "ALERT": "즉시 확인",
+    "BUY ZONE": "매수 검토",
+    "WATCH": "주의",
+    "NORMAL": "정상",
+    "RECOMMENDATION": "추천종목",
+    "POSITION": "보유종목",
+}
+
+
+def _status_label(value: object) -> str:
+    text = str(value or "").strip().upper()
+    return _STATUS_LABELS.get(text, str(value or "-"))
+
+
 def run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="ADE Live Monitor", page_icon="⚡", layout="wide")
-    _style(st)
+    st.set_page_config(page_title="ADE 실시간 모니터", page_icon="📡", layout="wide")
+    apply_design_system(st)
 
-    st.markdown(
-        """
-        <div class="live-hero">
-          <div><div class="eyebrow">ADE INTRADAY CONTROL</div><h1>추천종목 · 보유종목 실시간 모니터</h1>
-          <p>최신 완료 추천은 그대로 유지하고, 사용자가 자동 갱신을 켠 경우에만 KIS 현재가를 다시 조회합니다.</p></div>
-          <div class="live-badge"><span></span> KIS PAPER MONITOR</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    page_header(
+        title="실시간 모니터",
+        subtitle="추천종목과 보유종목의 장중 흐름을 확인합니다. 자동 갱신을 켠 경우에만 KIS 현재가를 다시 조회합니다.",
+        eyebrow="ADE · 실시간 모니터링",
+        badges=(StatusBadge("KIS 모의투자", "success"),),
     )
 
     c1, c2, c3, c4 = st.columns([1, 1, 1, 2])
-    interval = c1.selectbox("갱신주기", [10, 20, 30, 60], index=0, format_func=lambda x: f"{x}초")
+    interval = c1.selectbox("갱신 주기", [10, 20, 30, 60], index=0, format_func=lambda x: f"{x}초")
     auto = c2.toggle("자동 갱신", value=False)
-    top_n = c3.number_input("모니터 추천 수", min_value=1, max_value=20, value=10, step=1)
-    reload_latest = c4.button("최신 완료 추천 불러오기", type="primary", use_container_width=True)
+    top_n = c3.number_input("추천종목 수", min_value=1, max_value=20, value=10, step=1)
+    reload_latest = c4.button("최신 추천 다시 불러오기", type="primary", use_container_width=True)
 
     recommendations, run_info, name_map = _load_stored_recommendations(db_path, int(top_n))
     if reload_latest:
@@ -52,15 +64,15 @@ def run(db_path: str = "datahub/market.db") -> None:
     if run_info:
         st.caption(
             f"연결 실행 ID: {run_info['run_id']} · 완료 시각: {run_info.get('finished_at') or '-'} · "
-            f"추천 계산은 반복하지 않고 현재가만 갱신합니다."
+            "추천 계산은 반복하지 않고 현재가만 갱신합니다."
         )
     else:
-        st.warning("저장된 최신 완료 추천 실행이 없습니다. 먼저 통합 추천 워크벤치에서 추천을 생성하세요.")
+        st.warning("저장된 최신 추천 결과가 없습니다. 추천종목 분석에서 추천을 먼저 생성해 주세요.")
 
     info1, info2, info3, info4 = st.columns(4)
-    info1.metric("추천 모니터", len(recommendations))
-    info2.metric("보유 모니터", len(positions))
-    info3.metric("가격 소스", "KIS → 로컬 fallback")
+    info1.metric("추천종목", len(recommendations))
+    info2.metric("보유종목", len(positions))
+    info3.metric("가격 데이터", "KIS → 로컬 대체")
     info4.metric("화면 진입 시각", datetime.now().strftime("%H:%M:%S"))
 
     def monitor_body() -> None:
@@ -97,23 +109,30 @@ def run(db_path: str = "datahub/market.db") -> None:
         d.metric("정상", normal)
 
         if kis_error:
-            st.warning(f"KIS 현재가 일부 호출 실패로 로컬 최신 종가를 사용했습니다: {kis_error}")
+            st.warning(f"KIS 현재가 일부 호출에 실패하여 로컬 최신 종가를 사용했습니다: {kis_error}")
 
-        st.markdown("### 실시간 판단표")
+        section("실시간 판단표", "추천종목과 보유종목의 현재 상태를 한눈에 확인합니다.")
         display = frame.rename(
             columns={
                 "kind": "구분", "market": "시장", "symbol": "종목", "ticker": "종목코드", "name": "종목명",
                 "price": "현재가", "change_rate": "장중등락률", "reference_price": "평균단가",
-                "pnl_rate": "보유수익률", "seven_day_up_probability": "7일상승확률",
-                "seven_day_expected_return": "7일기대수익", "prediction_grade": "예측등급",
-                "status": "상태", "reason": "판단이유", "source": "가격소스", "updated_at": "갱신시각",
+                "pnl_rate": "보유수익률", "seven_day_up_probability": "7일 상승확률",
+                "seven_day_expected_return": "7일 기대수익", "prediction_grade": "예측등급",
+                "status": "상태", "reason": "판단 이유", "source": "가격 데이터", "updated_at": "갱신 시각",
             }
         )
+        if "구분" in display.columns:
+            display["구분"] = display["구분"].map(_status_label)
+        if "상태" in display.columns:
+            display["상태"] = display["상태"].map(_status_label)
+        if "시장" in display.columns:
+            display["시장"] = display["시장"].map(lambda value: "국내" if str(value).lower() == "kr" else str(value).upper())
+
         preferred = [
             "구분", "시장", "종목", "종목코드", "종목명", "현재가", "장중등락률", "평균단가",
-            "보유수익률", "7일상승확률", "7일기대수익", "예측등급", "상태", "판단이유", "가격소스", "갱신시각",
+            "보유수익률", "7일 상승확률", "7일 기대수익", "예측등급", "상태", "판단 이유", "가격 데이터", "갱신 시각",
         ]
-        display = display[[column for column in preferred if column in display.columns]]
+        display = display[[column for column in preferred if column in display.columns]].fillna("-")
         st.dataframe(
             display,
             use_container_width=True,
@@ -123,8 +142,8 @@ def run(db_path: str = "datahub/market.db") -> None:
                 "장중등락률": st.column_config.NumberColumn(format="%+.2f%%"),
                 "평균단가": st.column_config.NumberColumn(format="%,.0f원"),
                 "보유수익률": st.column_config.NumberColumn(format="%+.2f%%"),
-                "7일상승확률": st.column_config.NumberColumn(format="%.1f%%"),
-                "7일기대수익": st.column_config.NumberColumn(format="%+.2f%%"),
+                "7일 상승확률": st.column_config.NumberColumn(format="%.1f%%"),
+                "7일 기대수익": st.column_config.NumberColumn(format="%+.2f%%"),
             },
         )
 
@@ -132,13 +151,13 @@ def run(db_path: str = "datahub/market.db") -> None:
         pos_df = frame[frame["kind"] == "POSITION"].copy()
         left, right = st.columns(2)
         with left:
-            st.markdown("### 추천종목 장중 체크")
+            section("추천종목 장중 점검")
             _cards(st, rec_df)
         with right:
-            st.markdown("### 보유종목 장중 체크")
+            section("보유종목 장중 점검")
             _cards(st, pos_df)
 
-        st.caption(f"현재가 마지막 갱신: {datetime.now().strftime('%H:%M:%S')}")
+        st.caption(f"마지막 현재가 갱신: {datetime.now().strftime('%H:%M:%S')}")
 
     if auto and hasattr(st, "fragment"):
         @st.fragment(run_every=f"{int(interval)}s")
@@ -147,8 +166,8 @@ def run(db_path: str = "datahub/market.db") -> None:
         auto_fragment()
     else:
         if auto:
-            st.caption("현재 Streamlit 버전은 자동 fragment 갱신을 지원하지 않아 수동 갱신으로 동작합니다.")
-        if st.button("현재가 새로고침") or "live_monitor_first" not in st.session_state:
+            st.caption("현재 Streamlit 버전은 자동 갱신을 지원하지 않아 수동 갱신으로 동작합니다.")
+        if st.button("현재가 다시 불러오기") or "live_monitor_first" not in st.session_state:
             st.session_state["live_monitor_first"] = True
             monitor_body()
 
@@ -205,7 +224,7 @@ def _normalize_positions(frame: pd.DataFrame, name_map: dict[str, str]) -> pd.Da
 
 def _cards(st: object, frame: pd.DataFrame) -> None:
     if frame.empty:
-        st.caption("대상 없음")
+        st.markdown('<div class="ade-empty">대상이 없습니다.</div>', unsafe_allow_html=True)
         return
     for _, row in frame.iterrows():
         status = str(row["status"])
@@ -216,35 +235,17 @@ def _cards(st: object, frame: pd.DataFrame) -> None:
         st.markdown(
             f"""
             <div class="monitor-card {css}">
-              <div><b>{symbol}</b><small>{str(row['market']).upper()} · {row['source']}</small></div>
+              <div><b>{symbol}</b><small>국내 · {row['source']}</small></div>
               <div class="price">{float(row['price']):,.0f}원 <span>{float(row['change_rate']):+.2f}%{pnl_text}</span></div>
-              <div class="reason">{row['reason']}</div>
+              <div class="reason"><strong>{_status_label(status)}</strong> · {row['reason']}</div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
 
-def _style(st: object) -> None:
-    st.markdown(
-        """
-        <style>
-        .stApp{background:linear-gradient(135deg,#edf7ff 0%,#f8fbff 45%,#e9f3ff 100%);color:#13253a}
-        .block-container{max-width:1650px;padding-top:1.3rem}
-        .live-hero{display:flex;justify-content:space-between;align-items:center;padding:25px 30px;border-radius:28px;background:rgba(255,255,255,.78);border:1px solid rgba(77,151,220,.25);box-shadow:0 20px 55px rgba(59,106,153,.13);margin-bottom:16px}
-        .live-hero h1{margin:3px 0;font-size:36px;letter-spacing:-.04em}.live-hero p{margin:5px 0;color:#627991}
-        .eyebrow{font-size:12px;font-weight:800;letter-spacing:.16em;color:#3479b9}.live-badge{padding:10px 15px;border-radius:999px;background:#eaf7ef;color:#18794e;font-weight:800}.live-badge span{display:inline-block;width:9px;height:9px;border-radius:50%;background:#22c55e;margin-right:6px}
-        .monitor-card{padding:15px 17px;margin:9px 0;border-radius:18px;background:rgba(255,255,255,.82);border-left:5px solid #75a9d5;box-shadow:0 8px 28px rgba(57,93,128,.09)}
-        .monitor-card.alert{border-left-color:#ef4444}.monitor-card.buy-zone{border-left-color:#22c55e}.monitor-card.watch{border-left-color:#f59e0b}.monitor-card.normal{border-left-color:#60a5fa}
-        .monitor-card b{font-size:17px}.monitor-card small{display:block;color:#72869a;margin-top:2px}.monitor-card .price{font-size:22px;font-weight:850;margin-top:8px}.monitor-card .price span{font-size:14px;color:#49647e}.monitor-card .reason{margin-top:6px;color:#49647e}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ADE recommendation and position live monitor")
+    parser = argparse.ArgumentParser(description="ADE 추천종목 및 보유종목 실시간 모니터")
     parser.add_argument("--db", default="datahub/market.db")
     args = parser.parse_args()
     run(args.db)

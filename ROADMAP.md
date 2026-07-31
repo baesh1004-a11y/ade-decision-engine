@@ -52,11 +52,12 @@
 | 29 | Model Registry & Inference Governance Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 모델 버전·artifact·승인·배포·추론·Shadow·롤백과 재현성 통제 |
 | 30 | Decision Explainability & Evidence Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 판단·차단·청산·NO_ACTION 근거, 증거 Bundle, 충실도·완전성·재현 hash 관리 |
 | 31 | Paper Trading & Portfolio Continuity Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 전일 PAPER 포트폴리오 승계, 종가 가상체결, NO_ACTION 기록, 비용·기업행동·벤치마크 연속 계산 |
+| 32 | Universe Selection & Eligibility Engine v1 | 완료 | 미구현 | 계획 완료 | 미확인 | 시장·상품·상장·거래·데이터·유동성 기준으로 평가 Universe와 제외 사유를 결정론적으로 생성 |
 
 ## 설계 진행률
 
 ```text
-[██████████] 판단·주문·체결복구·리밸런싱·전략검증·모니터링·모델거버넌스·설명·증거·PAPER 연속운용·운영·감사 계층 설계 완료
+[██████████] Universe·판단·주문·체결복구·리밸런싱·전략검증·모니터링·모델거버넌스·설명·증거·PAPER 연속운용·운영·감사 계층 설계 완료
 ```
 
 ## 현재 우선순위
@@ -65,21 +66,23 @@
 2. `RunRequest`, `RunResult`, `StageResult` 모델 구현
 3. 기존 `main.py`/`ADEPipeline` adapter 작성
 4. 고정 CSV fixture 기반 스모크 테스트
-5. Candidate → Signal → Portfolio Risk → Decision 계약 정합성 검증
-6. Decision & Position Sizing 최소 코드 구현
-7. 손절·추적손절·이익보호 순수 함수와 Exit Proposal 모델 구현
-8. OrderIntent와 순수 검증 함수 최소 구현
-9. idempotency reservation과 DRY_RUN 경로 구현
-10. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
-11. Strategy Validation 필수검사와 Evidence Manifest 최소 구현
-12. Strategy Monitoring 기준선·PSI·건강 상태 resolver 최소 구현
-13. Model Registry 모델·artifact checksum·승인 guard 최소 구현
-14. 고정 모델 fixture 기반 결정론적 추론과 output guard 테스트
-15. Explainability 불변 모델·reason registry·fidelity validator 최소 구현
-16. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 설명 fixture와 hash 재현성 테스트
-17. PAPER PortfolioSnapshot·Fill·Ledger 불변 모델과 SQLite migration 구현
-18. 종가 기반 가상체결, 제약 계산, 일간·누적·벤치마크 성과 계산 구현
-19. 10거래일 연속 PAPER fixture와 NO_ACTION 상태 승계 테스트
+5. Universe → Candidate → Signal → Portfolio Risk → Decision 계약 정합성 검증
+6. Universe Eligibility 모델·reason registry·기본 정책 구현
+7. listing/product/history/price/liquidity 순수 필터와 snapshot hash 구현
+8. Decision & Position Sizing 최소 코드 구현
+9. 손절·추적손절·이익보호 순수 함수와 Exit Proposal 모델 구현
+10. OrderIntent와 순수 검증 함수 최소 구현
+11. idempotency reservation과 DRY_RUN 경로 구현
+12. broker execution ID 기반 중복 제거와 VERIFY_REQUIRED 단건 대사 구현
+13. Strategy Validation 필수검사와 Evidence Manifest 최소 구현
+14. Strategy Monitoring 기준선·PSI·건강 상태 resolver 최소 구현
+15. Model Registry 모델·artifact checksum·승인 guard 최소 구현
+16. 고정 모델 fixture 기반 결정론적 추론과 output guard 테스트
+17. Explainability 불변 모델·reason registry·fidelity validator 최소 구현
+18. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 설명 fixture와 hash 재현성 테스트
+19. PAPER PortfolioSnapshot·Fill·Ledger 불변 모델과 SQLite migration 구현
+20. 종가 기반 가상체결, 제약 계산, 일간·누적·벤치마크 성과 계산 구현
+21. 10거래일 연속 PAPER fixture와 NO_ACTION 상태 승계 테스트
 
 ## 다음 작업
 
@@ -87,30 +90,33 @@
 2. `core/run_models.py`, `core/run_repository.py`, `core/run_state_store.py` 구현
 3. run/stage 상태 전이 단위 테스트 작성
 4. 기존 파이프라인을 Orchestrator stage로 래핑
-5. DataHub → Feature → Signal → Risk → Decision fixture 통합 테스트
-6. `decision/models.py`, `decision/sizing.py`, `decision/engine.py` 최소 구현
-7. `portfolio/rebalancing/models.py`, `exit_rules.py`, `constraints.py`, `sizing.py` 최소 구현
-8. Rebalancing → Decision → OrderIntent 고정 포트폴리오 fixture 테스트
-9. `order/models.py`, `order/contract.py`, `order/pretrade.py`, `order/pricing.py` 최소 구현
-10. SQLite idempotency reservation과 `DryRunBrokerAdapter` 구현
-11. `execution/reconciliation/` 모델·중복 제거·resolver 최소 구현
-12. VERIFY_REQUIRED → broker evidence → 상태 확정 fixture 테스트
-13. `strategy_validation/models.py`, `mandatory.py`, `manifest.py` 최소 구현
-14. 고정 Backtest 결과로 BACKTEST_APPROVED/REJECTED 판정 테스트
-15. `strategy_monitoring/models.py`, `baselines.py`, `distribution.py`, `health.py` 최소 구현
-16. 고정 PAPER fixture로 HEALTHY/DEGRADED/CRITICAL 판정 테스트
-17. `model_governance/models.py`, `registry.py`, `manifest.py`, `contract.py` 최소 구현
-18. 승인된 고정 sklearn fixture의 등록·추론·hash 재현성 테스트
-19. Champion–Challenger Shadow 결과 비교와 rollback request fixture 테스트
-20. `explainability/models.py`, `reason_codes.py`, `collector.py`, `fidelity.py`, `hashing.py` 최소 구현
-21. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 고정 설명 fixture 테스트
-22. Explainability → Report Engine JSON adapter 작성
-23. `paper_trading/models.py`, `constraints.py`, `fills.py`, `ledger.py`, `performance.py` 최소 구현
-24. 초기 1천만원·현금 10%·종목 10%·하루 신규 1종목 정책 fixture 작성
-25. BUY → HOLD → NO_ACTION → FORCE_EXIT 연속 거래일 통합 테스트
-26. Paper Trading → Portfolio Accounting → Explainability → Report JSON adapter 작성
-27. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
-28. Report Engine용 최소 JSON fixture 생성
+5. `universe/models.py`, `reason_codes.py`, `resolver.py`, `hashing.py`, `repository.py` 최소 구현
+6. KOSPI/KOSDAQ 고정 종목 마스터·OHLCV·유동성 fixture 작성
+7. 빈 Universe → Signal `NO_CANDIDATE` → Decision `NO_ACTION` 통합 테스트
+8. DataHub → Data Quality → Universe → Feature → Signal → Risk → Decision fixture 통합 테스트
+9. `decision/models.py`, `decision/sizing.py`, `decision/engine.py` 최소 구현
+10. `portfolio/rebalancing/models.py`, `exit_rules.py`, `constraints.py`, `sizing.py` 최소 구현
+11. Rebalancing → Decision → OrderIntent 고정 포트폴리오 fixture 테스트
+12. `order/models.py`, `order/contract.py`, `order/pretrade.py`, `order/pricing.py` 최소 구현
+13. SQLite idempotency reservation과 `DryRunBrokerAdapter` 구현
+14. `execution/reconciliation/` 모델·중복 제거·resolver 최소 구현
+15. VERIFY_REQUIRED → broker evidence → 상태 확정 fixture 테스트
+16. `strategy_validation/models.py`, `mandatory.py`, `manifest.py` 최소 구현
+17. 고정 Backtest 결과로 BACKTEST_APPROVED/REJECTED 판정 테스트
+18. `strategy_monitoring/models.py`, `baselines.py`, `distribution.py`, `health.py` 최소 구현
+19. 고정 PAPER fixture로 HEALTHY/DEGRADED/CRITICAL 판정 테스트
+20. `model_governance/models.py`, `registry.py`, `manifest.py`, `contract.py` 최소 구현
+21. 승인된 고정 sklearn fixture의 등록·추론·hash 재현성 테스트
+22. Champion–Challenger Shadow 결과 비교와 rollback request fixture 테스트
+23. `explainability/models.py`, `reason_codes.py`, `collector.py`, `fidelity.py`, `hashing.py` 최소 구현
+24. BUY/RISK_BLOCK/NO_ACTION/FORCE_EXIT 고정 설명 fixture 테스트
+25. Explainability → Report Engine JSON adapter 작성
+26. `paper_trading/models.py`, `constraints.py`, `fills.py`, `ledger.py`, `performance.py` 최소 구현
+27. 초기 1천만원·현금 10%·종목 10%·하루 신규 1종목 정책 fixture 작성
+28. BUY → HOLD → NO_ACTION → FORCE_EXIT 연속 거래일 통합 테스트
+29. Paper Trading → Portfolio Accounting → Explainability → Report JSON adapter 작성
+30. 기존 Candidate/Risk/Position/Entry/Exit adapter 작성
+31. Report Engine용 최소 JSON fixture 생성
 
 ## 운영 원칙
 
@@ -170,3 +176,9 @@
 - PAPER 매수 후 현금은 0 미만이 될 수 없고 최소 현금비중과 종목당 최대비중을 준수해야 한다.
 - 과거 final PAPER 원장은 수정하지 않으며 정정은 append-only adjustment event로 기록한다.
 - Paper Trading 경로의 실브로커 submit 호출은 항상 0건이어야 한다.
+- Signal Engine은 final Universe Snapshot의 `eligible_ids`만 신규 후보 입력으로 사용한다.
+- 하드 제외 종목과 거래정지 종목에는 신규 BUY를 생성할 수 없다.
+- 보유종목의 적격성 저하는 포지션 삭제나 임의 매도로 처리하지 않고 Risk·Rebalancing·Report에 전달한다.
+- 빈 Universe에는 임의 후보를 추가하지 않고 `NO_CANDIDATE`와 `NO_ACTION`을 기록한다.
+- Universe 수동 override는 하드 안전 규칙을 해제할 수 없다.
+- 동일 입력·정책의 Universe Snapshot은 종목 입력 순서와 무관하게 동일한 hash를 생성해야 한다.

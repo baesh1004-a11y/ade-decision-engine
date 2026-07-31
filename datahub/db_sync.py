@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import shutil
 import sqlite3
-import tempfile
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -21,6 +20,7 @@ _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _PROGRESS_STEP_BYTES = 25 * 1024 * 1024
 _FULL_CHECK_ENV = "DB_SYNC_FULL_CHECK"
 _SQLITE_HEADER = b"SQLite format 3\x00"
+_ARCHIVE_PATH = Path("datahub/.db-archive.zip")
 
 
 def _log(message: str) -> None:
@@ -35,6 +35,9 @@ def _read_prefix(path: Path, size: int = 512) -> bytes:
 
 
 def _download(url: str, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.unlink(missing_ok=True)
+
     request = urllib.request.Request(
         url,
         headers={
@@ -65,11 +68,13 @@ def _download(url: str, destination: Path) -> None:
                     next_progress += _PROGRESS_STEP_BYTES
 
     if expected_bytes is not None and downloaded_bytes != expected_bytes:
+        destination.unlink(missing_ok=True)
         raise RuntimeError(
             f"Incomplete download: expected {expected_bytes:,} bytes, received {downloaded_bytes:,} bytes"
         )
 
     if downloaded_bytes == 0:
+        destination.unlink(missing_ok=True)
         raise RuntimeError("Downloaded archive is empty")
 
     _log(f"Archive download complete ({downloaded_bytes / (1024 * 1024):,.1f} MiB)")
@@ -109,23 +114,40 @@ def _existing_database_is_valid(path: Path) -> bool:
     return True
 
 
-def _safe_extract_archive(archive_path: Path, destination: Path) -> None:
-    with zipfile.ZipFile(archive_path) as archive:
-        destination_root = destination.resolve()
-        for member in archive.infolist():
-            member_path = (destination / member.filename).resolve()
-            if member_path != destination_root and destination_root not in member_path.parents:
-                raise RuntimeError(f"Unsafe ZIP member path: {member.filename}")
-        archive.extractall(destination)
-
-
-def _find_database(extracted_root: Path, filename: str) -> Path:
-    matches = [path for path in extracted_root.rglob(filename) if path.is_file()]
+def _find_archive_member(archive: zipfile.ZipFile, filename: str) -> zipfile.ZipInfo:
+    matches = [
+        member
+        for member in archive.infolist()
+        if not member.is_dir() and Path(member.filename).name == filename
+    ]
     if not matches:
         raise RuntimeError(f"Archive does not contain required database: {filename}")
     if len(matches) > 1:
         raise RuntimeError(f"Archive contains multiple copies of required database: {filename}")
     return matches[0]
+
+
+def _extract_database_member(
+    archive: zipfile.ZipFile,
+    member: zipfile.ZipInfo,
+    destination: Path,
+) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    candidate = destination.with_name(destination.name + ".candidate")
+    candidate.unlink(missing_ok=True)
+
+    try:
+        _log(f"Extracting {destination.name}")
+        with archive.open(member, "r") as source, candidate.open("wb") as output:
+            shutil.copyfileobj(source, output, length=_DOWNLOAD_CHUNK_SIZE)
+
+        _log(f"Validating {destination.name}")
+        _validate_sqlite(candidate)
+        size_mb = candidate.stat().st_size / (1024 * 1024)
+        os.replace(candidate, destination)
+        _log(f"Installed {destination} ({size_mb:,.1f} MiB, validation=ok)")
+    finally:
+        candidate.unlink(missing_ok=True)
 
 
 def sync_database_archive() -> None:
@@ -139,39 +161,19 @@ def sync_database_archive() -> None:
         _log(f"{_ARCHIVE_URL_ENV} is not set; using existing valid databases")
         return
 
-    with tempfile.TemporaryDirectory(prefix="ade-db-sync-") as temp_dir:
-        temp_root = Path(temp_dir)
-        archive_path = temp_root / "databases.zip"
-        extracted_root = temp_root / "extracted"
-        extracted_root.mkdir(parents=True, exist_ok=True)
+    _log(f"Downloading database archive from {_ARCHIVE_URL_ENV}")
+    _download(archive_url, _ARCHIVE_PATH)
 
-        _log(f"Downloading database archive from {_ARCHIVE_URL_ENV}")
-        _download(archive_url, archive_path)
-        if not zipfile.is_zipfile(archive_path):
+    try:
+        if not zipfile.is_zipfile(_ARCHIVE_PATH):
             raise RuntimeError("Downloaded file is not a valid ZIP archive")
 
-        _log("Extracting database archive")
-        _safe_extract_archive(archive_path, extracted_root)
-
-        candidates: dict[Path, Path] = {}
-        for destination in DATABASES:
-            source = _find_database(extracted_root, destination.name)
-            _log(f"Validating {destination.name}")
-            _validate_sqlite(source)
-            candidates[destination] = source
-
-        for destination, source in candidates.items():
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            candidate = destination.with_name(destination.name + ".candidate")
-            candidate.unlink(missing_ok=True)
-            try:
-                shutil.copyfile(source, candidate)
-                _validate_sqlite(candidate)
-                size_mb = candidate.stat().st_size / (1024 * 1024)
-                os.replace(candidate, destination)
-                _log(f"Installed {destination} ({size_mb:,.1f} MiB, validation=ok)")
-            finally:
-                candidate.unlink(missing_ok=True)
+        with zipfile.ZipFile(_ARCHIVE_PATH) as archive:
+            for destination in DATABASES:
+                member = _find_archive_member(archive, destination.name)
+                _extract_database_member(archive, member, destination)
+    finally:
+        _ARCHIVE_PATH.unlink(missing_ok=True)
 
 
 def sync_market_databases() -> None:

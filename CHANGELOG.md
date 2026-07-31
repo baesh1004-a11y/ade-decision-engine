@@ -1,5 +1,23 @@
 # Changelog
 
+## ADE Design v0.1 — Universe Selection & Eligibility Engine v1
+
+### Added
+
+- Added `Universe Selection & Eligibility Engine v1` specification.
+- Defined `ELIGIBLE`, `WATCH_ONLY`, and `EXCLUDED` states with structured reason codes and immutable Universe Snapshots.
+- Added market, product type, listing status, trading status, history, price, OHLCV completeness, liquidity, corporate-action, and manual-exclusion gates.
+- Added separate handling for held positions so degraded eligibility never deletes a position or creates an implicit sell decision.
+- Added deterministic Universe hashing, SQLite schemas, fixed integration fixtures, property tests, and empty-Universe `NO_CANDIDATE → NO_ACTION` behavior.
+
+### Safety
+
+- Signal generation may use only the final Universe Snapshot's `eligible_ids` for new-entry candidates.
+- Hard-excluded and trading-suspended instruments cannot generate a new BUY.
+- Manual overrides may only make eligibility more conservative; they cannot bypass hard safety rules.
+- A held instrument that becomes suspended or data-uncertain remains in the portfolio ledger and is escalated to Risk, Rebalancing, Accounting, and Report.
+- An empty Universe never causes fallback symbols to be inserted.
+
 ## ADE v1.0.4
 
 ### Visual system
@@ -111,6 +129,9 @@
 - Strategy Validation & Promotion Engine v1 specification.
 - Strategy Monitoring & Drift Detection Engine v1 specification.
 - Model Registry & Inference Governance Engine v1 specification.
+- Decision Explainability & Evidence Engine v1 specification.
+- Paper Trading & Portfolio Continuity Engine v1 specification.
+- Universe Selection & Eligibility Engine v1 specification.
 
 ### Updated
 
@@ -149,6 +170,9 @@
 - Added atomic model bundle loading, feature-schema and snapshot contract validation, deterministic inference hashing, and output guards.
 - Added Champion–Challenger shadow inference, deployment aliases, approved fallback pointers, and rollback requests.
 - Connected inference evidence to Strategy Validation, Strategy Monitoring, Audit, and Report layers.
+- Added immutable explanation requests, normalized reason codes, counterfactual boundaries, fidelity validation, and Evidence Bundle hashing.
+- Added append-only PAPER cash/position ledgers, official-close virtual fills, daily continuity, NO_ACTION persistence, and benchmark performance tracking.
+- Added deterministic eligible/watch/excluded Universe generation with held-position exceptions and structured exclusion evidence.
 
 ### Notes
 
@@ -189,9 +213,15 @@
 - Invalid inference output must not be replaced with a default buy signal.
 - Model output cannot override Portfolio Risk hard blocks or Decision and Order contracts.
 - Rollback is restricted to a previously approved deployment and must produce an audit event.
+- Explainability output must preserve original actions, quantities, amounts, thresholds, source references, and evidence lineage.
+- Paper Trading must not call a live broker and must retain immutable daily portfolio continuity.
+- Universe selection may restrict candidate generation but cannot create a signal, delete a held position, or bypass Risk and Rebalancing boundaries.
 
 ### Next
 
+- Implement Universe Eligibility models, reason registry, policy snapshot, deterministic resolver, and SQLite repository.
+- Add KOSPI/KOSDAQ instrument-master, OHLCV, liquidity, suspension, and held-position fixtures.
+- Test `empty Universe → NO_CANDIDATE → NO_ACTION` end to end.
 - Implement the minimal Decision & Position Sizing models and pure sizing functions.
 - Implement Portfolio Rebalancing models and pure stop-loss, trailing-stop, profit-protection, constraint, ranking, and sizing functions.
 - Add a fixed-portfolio Rebalancing → Decision → OrderIntent integration fixture.
@@ -210,5 +240,5 @@
 - Implement `RunRequest`, `RunResult`, `StageResult`, and the repository interface.
 - Implement SQLite run/stage state transitions and transactional artifact storage.
 - Wrap the existing analysis pipeline with an Orchestrator adapter.
-- Run a fixed-fixture DataHub → Feature → Model Inference → Signal → Risk → Decision → Rebalancing → Order → Reconciliation → Monitoring smoke test.
+- Run a fixed-fixture DataHub → Data Quality → Universe → Feature → Model Inference → Signal → Risk → Decision → Rebalancing → Order → Reconciliation → Monitoring smoke test.
 - Generate minimal Report Engine JSON fixture output.

@@ -36,19 +36,19 @@ def _kst_text(value) -> str:
     return parsed.astimezone(ZoneInfo("Asia/Seoul")).strftime("%Y-%m-%d %H:%M:%S KST")
 
 
-@st.cache_data(ttl=30, max_entries=100, show_spinner=False)
+@st.cache_data(ttl=120, max_entries=80, show_spinner=False)
 def _load_us_chart(ticker: str) -> tuple[pd.DataFrame, str | None]:
     try:
         import yfinance as yf
 
         frame = yf.download(
             ticker,
-            period="5d",
+            period="2d",
             interval="5m",
             auto_adjust=False,
             progress=False,
             threads=False,
-            timeout=10,
+            timeout=8,
         )
         if isinstance(frame.columns, pd.MultiIndex):
             frame.columns = frame.columns.get_level_values(0)
@@ -56,7 +56,7 @@ def _load_us_chart(ticker: str) -> tuple[pd.DataFrame, str | None]:
         date_column = "Datetime" if "Datetime" in frame.columns else "Date"
         frame = frame.rename(columns={date_column: "Date"})
         keep = [column for column in ["Date", "Open", "High", "Low", "Close", "Volume"] if column in frame.columns]
-        return frame[keep].dropna(subset=["Close"]), None
+        return frame[keep].dropna(subset=["Close"]).tail(220), None
     except Exception as exc:
         LOGGER.exception("US chart download failed for %s", ticker)
         return pd.DataFrame(), str(exc)
@@ -68,8 +68,9 @@ def run(db_path: str = "datahub/us_market.db") -> None:
 
     service = USTradingOrderService(db_path)
     try:
-        recommendations = service.latest_recommendations(50)
-        pending_count = len(service.pending_approval_requests())
+        recommendations = service.latest_recommendations(30)
+        pending = service.pending_approval_requests()
+        pending_count = len(pending)
         env = os.getenv("KIS_ENV", "paper").lower()
         live_enabled = os.getenv("KIS_US_LIVE_ORDER_ENABLED", "NO").upper() == "YES"
         kis_ready = bool(os.getenv("KIS_APP_KEY") and os.getenv("KIS_APP_SECRET"))
@@ -107,7 +108,8 @@ def run(db_path: str = "datahub/us_market.db") -> None:
             )
         else:
             if view_mode == "상세 보기":
-                st.dataframe(_order_list_frame(recommendations), width="stretch", hide_index=True)
+                with st.expander("추천종목 전체 목록", expanded=False):
+                    st.dataframe(_order_list_frame(recommendations), width="stretch", hide_index=True)
 
             labels = [
                 f"#{row['rank_no']} {row.get('name') or row['ticker']} ({row['ticker']}) · "
@@ -130,18 +132,35 @@ def run(db_path: str = "datahub/us_market.db") -> None:
             ticker = str(selected["ticker"]).upper()
             st.session_state["workbench_selected_us"] = ticker
 
-            if not mobile or mobile_section == "차트":
-                with st.container(border=True):
-                    _render_live_chart(st, ticker, selected.get("name") or ticker)
-            if (not mobile and view_mode == "상세 보기") or mobile_section == "분석":
-                _render_analysis_actions(st, selected, ticker)
-            if not mobile or mobile_section == "주문":
-                _render_order_form(st, service, selected, ticker)
+            if mobile:
+                if mobile_section == "차트":
+                    with st.container(border=True):
+                        _render_live_chart(st, ticker, selected.get("name") or ticker)
+                elif mobile_section == "분석":
+                    _render_analysis_actions(st, selected, ticker)
+                elif mobile_section == "주문":
+                    _render_order_form(st, service, selected, ticker)
+            else:
+                detail_view = st.segmented_control(
+                    "상세 화면",
+                    ["차트", "분석", "주문"],
+                    default="차트",
+                    label_visibility="collapsed",
+                    key=f"us_detail_view_{ticker}",
+                )
+                if detail_view == "차트":
+                    with st.container(border=True):
+                        _render_live_chart(st, ticker, selected.get("name") or ticker)
+                elif detail_view == "분석":
+                    _render_analysis_actions(st, selected, ticker)
+                else:
+                    _render_order_form(st, service, selected, ticker)
 
         if not mobile or mobile_section == "승인":
-            _render_pending(st, service, recommendations)
+            _render_pending(st, service, recommendations, pending)
         if not mobile and view_mode == "상세 보기":
-            _render_execution(st, service)
+            with st.expander("체결·보유종목·위험관리", expanded=False):
+                _render_execution(st, service)
     finally:
         service.close()
 
@@ -183,7 +202,7 @@ def _render_live_chart(st, ticker: str, label: str) -> None:
             with st.expander("오류 원인 확인"):
                 st.code(error)
     else:
-        chart_height = 360 if _is_mobile_request(st) else 520
+        chart_height = 340 if _is_mobile_request(st) else 440
         st.plotly_chart(
             build_trading_chart(frame, f"{label} ({ticker})", height=chart_height),
             width="stretch",
@@ -277,9 +296,9 @@ def _render_order_form(st, service, selected: dict, ticker: str) -> None:
             st.error(f"주문 요청 생성 실패: {exc}")
 
 
-def _render_pending(st, service, recommendations: list[dict]) -> None:
+def _render_pending(st, service, recommendations: list[dict], pending: list[dict] | None = None) -> None:
     section("사용자 승인", "승인 후에만 KIS로 주문을 전송합니다.")
-    pending = service.pending_approval_requests()
+    pending = pending if pending is not None else service.pending_approval_requests()
     current_run_id = str(recommendations[0]["run_id"]) if recommendations else ""
     if not pending:
         st.info("승인 대기 주문이 없습니다.")
@@ -347,7 +366,7 @@ def _render_execution(st, service) -> None:
             st.error(f"위험관리 점검 실패: {exc}")
 
     section("주문 요청 이력")
-    order_df = pd.DataFrame(service.order_history(100))
+    order_df = pd.DataFrame(service.order_history(50))
     if not order_df.empty:
         order_df["created_at"] = order_df["created_at"].map(_kst_text)
         order_df["status"] = order_df["status"].map(status_text)
@@ -386,7 +405,7 @@ def _render_execution(st, service) -> None:
         st.dataframe(shown, width="stretch", hide_index=True, row_height=40)
 
     section("체결 이력")
-    execution_df = pd.DataFrame(service.execution_history(100))
+    execution_df = pd.DataFrame(service.execution_history(50))
     if not execution_df.empty:
         execution_df["captured_at"] = execution_df["captured_at"].map(_kst_text)
         execution_df["status"] = execution_df["status"].map(status_text)

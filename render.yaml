@@ -9,8 +9,10 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
-      - key: DB_ARCHIVE_URL
+      - key: MARKET_DB_ARCHIVE_URL
         value: https://pub-952a5fb7e0c6404e8a91d0ac4f32b660.r2.dev/ade-market-db.zip
+      - key: US_MARKET_DB_ARCHIVE_URL
+        sync: false
       - key: KIS_ENV
         value: paper
       - key: KIS_APP_KEY

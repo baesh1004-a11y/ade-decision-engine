@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import logging
+import os
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -10,9 +10,13 @@ import pandas as pd
 import streamlit as st
 
 from dashboard.charts import CHART_CONFIG, build_trading_chart
+from dashboard.design_system import StatusBadge, apply_design_system, page_header, section
 from dashboard.trading_desk_ui import (
-    render_empty_state, render_mobile_bottom_nav, render_order_timeline,
-    render_view_mode, status_text,
+    render_empty_state,
+    render_mobile_bottom_nav,
+    render_order_timeline,
+    render_view_mode,
+    status_text,
 )
 from meta_score.validation_context import EnvironmentAdvisor
 from trading.us_order_service import USTradingOrderService
@@ -38,8 +42,13 @@ def _load_us_chart(ticker: str) -> tuple[pd.DataFrame, str | None]:
         import yfinance as yf
 
         frame = yf.download(
-            ticker, period="5d", interval="5m", auto_adjust=False,
-            progress=False, threads=False, timeout=10,
+            ticker,
+            period="5d",
+            interval="5m",
+            auto_adjust=False,
+            progress=False,
+            threads=False,
+            timeout=10,
         )
         if isinstance(frame.columns, pd.MultiIndex):
             frame.columns = frame.columns.get_level_values(0)
@@ -54,10 +63,8 @@ def _load_us_chart(ticker: str) -> tuple[pd.DataFrame, str | None]:
 
 
 def run(db_path: str = "datahub/us_market.db") -> None:
-    import streamlit as st
-
-    st.set_page_config(page_title="ADE US Trading Desk", page_icon="🇺🇸", layout="wide")
-    _style(st)
+    st.set_page_config(page_title="ADE 미국 트레이딩", page_icon="🇺🇸", layout="wide")
+    apply_design_system()
 
     service = USTradingOrderService(db_path)
     try:
@@ -65,20 +72,40 @@ def run(db_path: str = "datahub/us_market.db") -> None:
         pending_count = len(service.pending_approval_requests())
         env = os.getenv("KIS_ENV", "paper").lower()
         live_enabled = os.getenv("KIS_US_LIVE_ORDER_ENABLED", "NO").upper() == "YES"
-        _render_us_status_header(st, env, live_enabled, len(recommendations), pending_count)
+        kis_ready = bool(os.getenv("KIS_APP_KEY") and os.getenv("KIS_APP_SECRET"))
+        if env == "live" and live_enabled:
+            mode_label, mode_tone = "실전 주문 활성", "error"
+        elif env == "live":
+            mode_label, mode_tone = "실전 환경 · 주문 잠금", "warning"
+        else:
+            mode_label, mode_tone = "모의투자", "success"
+        page_header(
+            "미국 트레이딩",
+            "추천 확인부터 차트·분석·주문 요청·사용자 승인·KIS 전송까지 한 화면에서 관리합니다.",
+            eyebrow="ADE · 미국시장 주문 관리",
+            badges=(
+                StatusBadge(mode_label, mode_tone),
+                StatusBadge("KIS 설정 완료" if kis_ready else "KIS 설정 확인", "success" if kis_ready else "warning"),
+                StatusBadge(f"추천 {len(recommendations)}종목", "info"),
+                StatusBadge(f"승인 대기 {pending_count}건", "neutral"),
+            ),
+        )
+
         view_mode = render_view_mode(st, service, market="us")
         mobile = _is_mobile_request(st)
         mobile_section = str(st.session_state.get("us_mobile_section", "차트")) if mobile else "전체"
         if mobile:
             render_mobile_bottom_nav(st, pending_count=pending_count, state_key="us_mobile_section")
-        st.markdown("### 1. 추천 종목 주문 리스트")
+
+        section("추천종목 주문 목록", "최신 완료 추천 실행의 종목을 주문 후보로 보여줍니다.")
         if not recommendations:
             render_empty_state(
-                st, "미국 추천 결과가 없습니다",
-                "US Daily Center에서 추천을 생성한 뒤 다시 확인하세요.", icon=":material/playlist_add:",
+                st,
+                "미국 추천 결과가 없습니다",
+                "미국 일일 분석에서 추천을 생성한 뒤 다시 확인하세요.",
+                icon=":material/playlist_add:",
             )
         else:
-            st.caption("최신 추천 실행의 모든 종목을 주문 리스트에 포함합니다.")
             if view_mode == "상세 보기":
                 st.dataframe(_order_list_frame(recommendations), width="stretch", hide_index=True)
 
@@ -120,16 +147,18 @@ def run(db_path: str = "datahub/us_market.db") -> None:
 
 
 def _order_list_frame(recommendations: list[dict]) -> pd.DataFrame:
-    return pd.DataFrame([
-        {
-            "순위": int(row["rank_no"]),
-            "종목": row.get("name") or row["ticker"],
-            "티커": str(row["ticker"]).upper(),
-            "검증 조언": _decision_label(str(row.get("decision") or "UNVALIDATED")),
-            "주문 상태": "주문 가능",
-        }
-        for row in recommendations
-    ])
+    return pd.DataFrame(
+        [
+            {
+                "순위": int(row["rank_no"]),
+                "종목": row.get("name") or row["ticker"],
+                "티커": str(row["ticker"]).upper(),
+                "검증 조언": _decision_label(str(row.get("decision") or "UNVALIDATED")),
+                "주문 상태": "주문 가능",
+            }
+            for row in recommendations
+        ]
+    )
 
 
 def _is_mobile_request(st) -> bool:
@@ -140,38 +169,15 @@ def _is_mobile_request(st) -> bool:
     return any(token in user_agent for token in ("android", "iphone", "ipad", "mobile"))
 
 
-def _render_us_status_header(st, env: str, live_enabled: bool, rec_count: int, pending_count: int) -> None:
-    if env == "live" and live_enabled:
-        mode, mode_class = "■ 실전주문 활성", "danger"
-    elif env == "live":
-        mode, mode_class = "▲ 실전환경 · 주문 잠금", "warning"
-    else:
-        mode, mode_class = "● 모의투자", "safe"
-    kis_ready = bool(os.getenv("KIS_APP_KEY") and os.getenv("KIS_APP_SECRET"))
-    st.markdown(
-        f"""
-        <div class="status-hero">
-          <div><div class="eyebrow">ADE · US TRADING DESK</div><h1>미국 주문관리</h1>
-          <p>추천 확인 → 차트·분석 → 주문 요청 → 사용자 승인 → KIS 전송</p></div>
-          <div class="status-cluster">
-            <span class="status-badge {mode_class}">{mode}</span>
-            <span class="status-badge {'safe' if kis_ready else 'warning'}">{'● KIS 설정됨' if kis_ready else '▲ KIS 설정 확인'}</span>
-            <span class="status-badge neutral">추천 {rec_count}종목</span>
-            <span class="status-badge neutral">승인 대기 {pending_count}건</span>
-          </div>
-        </div>
-        """, unsafe_allow_html=True,
-    )
-
-
 def _render_live_chart(st, ticker: str, label: str) -> None:
-    st.markdown(f"### 현재 차트 · {label} ({ticker})")
+    section(f"현재 차트 · {label} ({ticker})", "Yahoo Finance 5분봉")
     frame, error = _load_us_chart(ticker)
-
     if frame.empty:
         render_empty_state(
-            st, "미국 차트를 불러오지 못했습니다",
-            "잠시 후 다시 조회하거나 오류 원인을 확인하세요.", icon=":material/error:",
+            st,
+            "미국 차트를 불러오지 못했습니다",
+            "잠시 후 다시 조회하거나 오류 원인을 확인하세요.",
+            icon=":material/error:",
         )
         if error:
             with st.expander("오류 원인 확인"):
@@ -180,18 +186,18 @@ def _render_live_chart(st, ticker: str, label: str) -> None:
         chart_height = 360 if _is_mobile_request(st) else 520
         st.plotly_chart(
             build_trading_chart(frame, f"{label} ({ticker})", height=chart_height),
-            width="stretch", config=CHART_CONFIG,
+            width="stretch",
+            config=CHART_CONFIG,
         )
-        st.caption("Yahoo Finance 5분봉 · 종목을 변경하거나 새로고침하면 최신 데이터를 다시 조회합니다.")
-    if st.button("다시 조회", icon=":material/refresh:", width="stretch", key=f"refresh_us_chart_{ticker}"):
+    if st.button("다시 불러오기", icon=":material/refresh:", width="stretch", key=f"refresh_us_chart_{ticker}"):
         _load_us_chart.clear()
         st.rerun()
 
 
 def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
-    st.markdown("### 추천 분석 연결")
+    section("추천 분석", "시장·업종 환경과 저장된 검증 조언을 확인합니다.")
     c1, c2 = st.columns(2)
-    if c1.button("JP Radar 확인", width="stretch", key=f"us_jp_radar_{ticker}"):
+    if c1.button("시장·업종 환경 확인", width="stretch", key=f"us_jp_radar_{ticker}"):
         recommendation = SimpleNamespace(
             market="us",
             ticker=ticker,
@@ -200,46 +206,58 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
             matched_max_drawdown=0.0,
         )
         st.session_state[f"us_jp_radar_result_{ticker}"] = EnvironmentAdvisor().analyze(recommendation)
-    if c2.button("추천종목 검증 조언 확인", width="stretch", key=f"us_validation_{ticker}"):
+    if c2.button("추천 검증 조언 확인", width="stretch", key=f"us_validation_{ticker}"):
         st.session_state[f"us_validation_open_{ticker}"] = True
 
     radar = st.session_state.get(f"us_jp_radar_result_{ticker}")
     if radar is not None:
         a, b = st.columns(2)
-        a.metric("전체 시장 JP Radar", str(radar.market_signal))
-        b.metric("해당 업종 JP Radar", str(radar.sector_signal))
+        a.metric("전체 시장 신호", str(radar.market_signal))
+        b.metric("해당 업종 신호", str(radar.sector_signal))
 
     if st.session_state.get(f"us_validation_open_{ticker}"):
         st.markdown(f"**추천 검증 조언:** {_decision_label(str(selected.get('decision') or 'UNVALIDATED'))}")
         if str(selected.get("decision") or "UNVALIDATED") == "UNVALIDATED":
-            st.info("아직 저장된 검증 조언이 없습니다. 통합 추천 워크벤치에서 환경 조언을 실행하세요.")
+            st.info("아직 저장된 검증 조언이 없습니다. 추천종목 분석에서 환경 조언을 실행하세요.")
 
 
 def _render_order_form(st, service, selected: dict, ticker: str) -> None:
-    st.markdown("### ① 주문 입력 → ② 내용 확인 → ③ 승인 대기")
+    section("주문 요청", "주문 입력 → 내용 확인 → 승인 대기")
     default_exchange = service.exchange_for_ticker(ticker)
     with st.form(f"us_order_form_{ticker}"):
         c1, c2, c3, c4 = st.columns(4)
-        side = c1.selectbox("주문 방향", ["BUY", "SELL"], key=f"us_side_{ticker}")
+        side = c1.selectbox("주문 방향", ["BUY", "SELL"], format_func=lambda value: "매수" if value == "BUY" else "매도", key=f"us_side_{ticker}")
         exchange = c2.selectbox(
-            "거래소", ["NASD", "NYSE", "AMEX"],
-            index=["NASD", "NYSE", "AMEX"].index(default_exchange), key=f"us_exchange_{ticker}",
+            "거래소",
+            ["NASD", "NYSE", "AMEX"],
+            index=["NASD", "NYSE", "AMEX"].index(default_exchange),
+            key=f"us_exchange_{ticker}",
         )
         quantity = c3.number_input("수량", min_value=1, value=1, step=1, key=f"us_quantity_{ticker}")
         limit_price = c4.number_input(
-            "지정가(USD)", min_value=0.01, value=1.00, step=0.01, format="%.2f", key=f"us_price_{ticker}"
+            "지정가(USD)",
+            min_value=0.01,
+            value=1.00,
+            step=0.01,
+            format="%.2f",
+            key=f"us_price_{ticker}",
         )
         r1, r2 = st.columns(2)
         target = r1.number_input(
-            "익절 기준 수익률(%)", value=float(selected.get("target_return") or 0.0), step=0.1, key=f"us_target_{ticker}"
+            "익절 기준 수익률(%)",
+            value=float(selected.get("target_return") or 0.0),
+            step=0.1,
+            key=f"us_target_{ticker}",
         )
         stop = r2.number_input(
-            "손절 기준 수익률(%)", value=float(selected.get("stop_return") or 0.0), step=0.1, key=f"us_stop_{ticker}"
+            "손절 기준 수익률(%)",
+            value=float(selected.get("stop_return") or 0.0),
+            step=0.1,
+            key=f"us_stop_{ticker}",
         )
         estimated = int(quantity) * float(limit_price)
-        st.markdown("**② 내용 확인**")
-        st.caption(f"{ticker} · {side} {int(quantity)}주 · 예상 주문금액 ${estimated:,.2f}")
-        submitted = st.form_submit_button("미국주식 주문 요청 만들기", type="primary", width="stretch")
+        st.caption(f"{ticker} · {'매수' if side == 'BUY' else '매도'} {int(quantity)}주 · 예상 주문금액 ${estimated:,.2f}")
+        submitted = st.form_submit_button("주문 요청 생성", type="primary", width="stretch")
     if submitted:
         try:
             request_id = service.create_request(
@@ -254,24 +272,24 @@ def _render_order_form(st, service, selected: dict, ticker: str) -> None:
                 source_run_id=str(selected["run_id"]),
                 source_rank=int(selected["rank_no"]),
             )
-            st.success(f"③ 승인 대기 · 요청번호 {request_id} · 30분 안에 승인하세요.", icon=":material/pending_actions:")
+            st.success(f"승인 대기 주문을 만들었습니다. 요청번호 {request_id} · 30분 안에 승인하세요.")
         except Exception as exc:
             st.error(f"주문 요청 생성 실패: {exc}")
 
 
 def _render_pending(st, service, recommendations: list[dict]) -> None:
-    st.markdown("### 2. 사용자 승인 후 KIS 전송")
+    section("사용자 승인", "승인 후에만 KIS로 주문을 전송합니다.")
     pending = service.pending_approval_requests()
     current_run_id = str(recommendations[0]["run_id"]) if recommendations else ""
     if not pending:
-        st.caption("승인 대기 주문이 없습니다.")
+        st.info("승인 대기 주문이 없습니다.")
         return
     request_index = st.selectbox(
         "승인 대기 주문",
         range(len(pending)),
         format_func=lambda index: (
             ("현재 실행 · " if str(pending[index].get("source_run_id") or "") == current_run_id else "이전 실행 · ")
-            + f"{pending[index]['ticker']} {pending[index]['side']} {pending[index]['quantity']}주 "
+            + f"{pending[index]['ticker']} {'매수' if pending[index]['side'] == 'BUY' else '매도'} {pending[index]['quantity']}주 "
             f"${float(pending[index]['limit_price']):.2f} · {pending[index].get('created_at') or '-'}"
         ),
     )
@@ -283,14 +301,14 @@ def _render_pending(st, service, recommendations: list[dict]) -> None:
     approval = st.text_input("위 승인 문구를 정확히 입력")
     confirm = st.checkbox("종목·거래소·방향·수량·지정가를 확인했습니다.")
     approve_col, cancel_col = st.columns(2)
-    if approve_col.button("승인하고 KIS 미국주식 주문 전송", disabled=not confirm, type="primary"):
+    if approve_col.button("승인 후 KIS 전송", disabled=not confirm, type="primary"):
         try:
             result = service.approve_and_send(str(row["request_id"]), approval)
             st.success(f"주문 결과: {result.get('message')} · 주문번호 {result.get('order_id')}")
             st.rerun()
         except Exception as exc:
             st.error(f"주문 전송 실패: {exc}")
-    if cancel_col.button("이 주문 요청 취소"):
+    if cancel_col.button("주문 요청 취소"):
         try:
             service.cancel_request(str(row["request_id"]))
             st.success("주문 요청을 취소했습니다.")
@@ -300,84 +318,125 @@ def _render_pending(st, service, recommendations: list[dict]) -> None:
 
 
 def _render_execution(st, service) -> None:
-    st.markdown("### 3. 체결·보유종목·손절익절")
+    section("체결·보유종목·위험관리", "주문·체결 조회와 손절·익절 조건을 점검합니다.")
     c1, c2, c3 = st.columns(3)
-    if c1.button("미국 주문·체결 새로고침", width="stretch"):
+    if c1.button("주문·체결 다시 불러오기", width="stretch"):
         try:
             rows = service.refresh_executions(days=7)
-            st.success(f"최근 주문·체결 {len(rows)}건 확인")
+            st.success(f"최근 주문·체결 {len(rows)}건을 확인했습니다.")
         except Exception as exc:
             st.error(f"체결 조회 실패: {exc}")
-    if c2.button("미국 보유종목 동기화", width="stretch"):
+    if c2.button("보유종목 동기화", width="stretch"):
         try:
             rows = service.sync_positions()
-            st.success(f"미국 보유종목 {len(rows)}개 동기화")
+            st.success(f"미국 보유종목 {len(rows)}개를 동기화했습니다.")
             if rows:
                 st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
         except Exception as exc:
             st.error(f"보유종목 동기화 실패: {exc}")
     create_sell = c3.checkbox("조건 충족 시 매도요청 생성", value=False)
-    if st.button("미국 손절·익절 조건 점검", width="stretch"):
+    if st.button("손절·익절 조건 점검", width="stretch"):
         try:
             actions = service.monitor_risk(create_sell_requests=create_sell)
             if actions:
                 st.warning(f"조건 충족 {len(actions)}건")
                 st.dataframe(pd.DataFrame(actions), width="stretch", hide_index=True)
             else:
-                st.success("현재 손절·익절 조건 충족 종목이 없습니다.")
+                st.success("현재 손절·익절 조건을 충족한 종목이 없습니다.")
         except Exception as exc:
             st.error(f"위험관리 점검 실패: {exc}")
 
-    st.markdown("### 미국 주문 요청 이력")
+    section("주문 요청 이력")
     order_df = pd.DataFrame(service.order_history(100))
     if not order_df.empty:
         order_df["created_at"] = order_df["created_at"].map(_kst_text)
         order_df["status"] = order_df["status"].map(status_text)
-        keep = [column for column in [
-            "created_at", "ticker", "name", "exchange", "side", "quantity", "limit_price",
-            "status", "broker_order_id", "broker_message", "error_message",
-        ] if column in order_df.columns]
-        st.dataframe(
-            order_df[keep], width="stretch", hide_index=True, row_height=40,
-            column_config={
-                "ticker": st.column_config.TextColumn("티커", pinned=True),
-                "status": st.column_config.TextColumn("상태", pinned=True),
-                "quantity": st.column_config.NumberColumn("수량", format="%d주"),
-                "limit_price": st.column_config.NumberColumn("지정가", format="$%.2f"),
-            },
+        keep = [
+            column
+            for column in [
+                "created_at",
+                "ticker",
+                "name",
+                "exchange",
+                "side",
+                "quantity",
+                "limit_price",
+                "status",
+                "broker_order_id",
+                "broker_message",
+                "error_message",
+            ]
+            if column in order_df.columns
+        ]
+        shown = order_df[keep].rename(
+            columns={
+                "created_at": "생성 시각",
+                "ticker": "티커",
+                "name": "종목명",
+                "exchange": "거래소",
+                "side": "방향",
+                "quantity": "수량",
+                "limit_price": "지정가",
+                "status": "상태",
+                "broker_order_id": "주문번호",
+                "broker_message": "주문 메시지",
+                "error_message": "오류 메시지",
+            }
         )
+        st.dataframe(shown, width="stretch", hide_index=True, row_height=40)
 
-    st.markdown("### 미국 체결 이력")
+    section("체결 이력")
     execution_df = pd.DataFrame(service.execution_history(100))
     if not execution_df.empty:
         execution_df["captured_at"] = execution_df["captured_at"].map(_kst_text)
         execution_df["status"] = execution_df["status"].map(status_text)
-        keep = [column for column in [
-            "captured_at", "broker_order_id", "ticker", "exchange", "side", "ordered_quantity",
-            "filled_quantity", "filled_price", "status",
-        ] if column in execution_df.columns]
-        st.dataframe(
-            execution_df[keep], width="stretch", hide_index=True, row_height=40,
-            column_config={
-                "ticker": st.column_config.TextColumn("티커", pinned=True),
-                "status": st.column_config.TextColumn("상태", pinned=True),
-                "ordered_quantity": st.column_config.NumberColumn("주문", format="%d주"),
-                "filled_quantity": st.column_config.NumberColumn("체결", format="%d주"),
-                "filled_price": st.column_config.NumberColumn("체결가", format="$%.2f"),
-            },
+        keep = [
+            column
+            for column in [
+                "captured_at",
+                "broker_order_id",
+                "ticker",
+                "exchange",
+                "side",
+                "ordered_quantity",
+                "filled_quantity",
+                "filled_price",
+                "status",
+            ]
+            if column in execution_df.columns
+        ]
+        shown = execution_df[keep].rename(
+            columns={
+                "captured_at": "확인 시각",
+                "broker_order_id": "주문번호",
+                "ticker": "티커",
+                "exchange": "거래소",
+                "side": "방향",
+                "ordered_quantity": "주문 수량",
+                "filled_quantity": "체결 수량",
+                "filled_price": "체결가",
+                "status": "상태",
+            }
         )
+        st.dataframe(shown, width="stretch", hide_index=True, row_height=40)
     if not order_df.empty:
-        st.markdown("### 선택 주문 진행 과정")
+        section("선택 주문 진행 과정")
         timeline_index = st.selectbox(
-            "진행 과정을 확인할 주문", range(len(order_df)),
+            "진행 과정을 확인할 주문",
+            range(len(order_df)),
             format_func=lambda i: f"{order_df.iloc[i].get('ticker', '-')} · {status_text(order_df.iloc[i].get('status'))}",
             key="us_order_timeline_select",
         )
         order = dict(order_df.iloc[timeline_index])
-        matching = [] if execution_df.empty else [
-            dict(row) for _, row in execution_df.iterrows()
-            if str(row.get("request_id") or "") == str(order.get("request_id") or "")
-        ]
+        matching = (
+            []
+            if execution_df.empty
+            else [
+                dict(row)
+                for _, row in execution_df.iterrows()
+                if str(row.get("request_id") or "") == str(order.get("request_id") or "")
+            ]
+        )
         render_order_timeline(st, order, matching, time_formatter=_kst_text)
     st.caption("모의투자에서도 주문은 사용자 승인 후에만 전송됩니다.")
 
@@ -390,26 +449,6 @@ def _decision_label(value: str) -> str:
         "PASS": "제외",
         "UNVALIDATED": "미검증",
     }.get(value, value)
-
-
-def _style(st) -> None:
-    st.markdown(
-        """
-        <style>
-        .stApp{background:#F6F8FB;color:#172033;font-family:Pretendard,"Malgun Gothic",Arial,sans-serif}
-        .block-container{max-width:1480px;padding:24px 24px 32px;margin:0 auto}
-        .status-hero{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:20px 24px;border-radius:16px;background:#FFFFFF;border:1px solid #D9E0EA;box-shadow:0 2px 8px rgba(23,32,51,.05);margin-bottom:24px}
-        .status-hero h1{margin:2px 0;font-size:32px;font-weight:600}.status-hero p{margin:8px 0 0;color:#64748B;font-size:15px}.eyebrow{font-size:12px;letter-spacing:.12em;font-weight:600;color:#1D4ED8}
-        .status-cluster{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
-        .status-badge{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid transparent}
-        .status-badge.safe{color:#137044;background:#e9f8f0;border-color:#bde8cf}.status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}.status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}.status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
-        div.stButton > button:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
-        [data-testid="stCaptionContainer"]{color:#51677d}
-        @media(max-width:900px){.block-container{padding:16px 14px 72px}.status-hero{align-items:flex-start;flex-direction:column;padding:16px}.status-hero h1{font-size:26px}.status-cluster{justify-content:flex-start}}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 if __name__ == "__main__":

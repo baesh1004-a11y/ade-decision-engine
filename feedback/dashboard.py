@@ -5,6 +5,7 @@ from datetime import date
 
 import pandas as pd
 
+from dashboard.design_system import StatusBadge, apply_design_system, page_header, section
 from feedback.engine import FeedbackEngine
 
 
@@ -22,22 +23,8 @@ BUCKETS = [
 def run(db_path: str = "datahub/market.db") -> None:
     import streamlit as st
 
-    st.set_page_config(page_title="ADE Feedback", page_icon="↻", layout="wide")
-    _style(st)
-
-    st.markdown(
-        """
-        <div class="hero">
-          <div>
-            <div class="eyebrow">ADE PERFORMANCE VALIDATION</div>
-            <h1>Feedback Dashboard</h1>
-            <p>추천 이후 실제 성과를 매일 기록하고 종목별·점수별 통계로 검증합니다.</p>
-          </div>
-          <div class="badge">DAILY TRACK → ANALYZE → VERIFY</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.set_page_config(page_title="ADE 성과 분석", page_icon="↻", layout="wide")
+    apply_design_system()
 
     engine = FeedbackEngine(db_path)
     try:
@@ -46,8 +33,20 @@ def run(db_path: str = "datahub/market.db") -> None:
             st.session_state["feedback_auto_update_result"] = engine.update_open_cases()
             st.session_state["feedback_auto_update_date"] = today
 
+        summary = engine.summary()
+        page_header(
+            "성과 분석",
+            "추천 이후 실제 성과를 매일 기록하고 종목별·점수별 통계로 검증합니다.",
+            eyebrow="ADE · 추천 성과 검증",
+            badges=(
+                StatusBadge(f"추적 중 {summary.open_count}건", "info"),
+                StatusBadge(f"7일 완료 {summary.completed}건", "success"),
+                StatusBadge(f"적중률 {summary.hit_rate:.1f}%", "neutral"),
+            ),
+        )
+
         c1, c2 = st.columns([1, 3])
-        if c1.button("오늘 성과 업데이트", type="primary"):
+        if c1.button("오늘 성과 다시 불러오기", type="primary", use_container_width=True):
             result = engine.update_open_cases()
             st.session_state["feedback_auto_update_result"] = result
             st.success(
@@ -55,11 +54,10 @@ def run(db_path: str = "datahub/market.db") -> None:
             )
         auto_result = st.session_state.get("feedback_auto_update_result", {})
         c2.caption(
-            "대시보드를 여는 날마다 한 번 자동 업데이트합니다. "
+            "화면을 여는 날마다 한 번 자동으로 갱신합니다. "
             f"오늘 처리: 대상 {auto_result.get('updated_cases', 0)}건 · 신규 {auto_result.get('inserted_days', 0)}건 · 완료 {auto_result.get('completed', 0)}건"
         )
 
-        summary = engine.summary()
         k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
         k1.metric("전체 사례", summary.total)
         k2.metric("추적 중", summary.open_count)
@@ -71,7 +69,7 @@ def run(db_path: str = "datahub/market.db") -> None:
 
         cases = engine.cases_dataframe()
         ticker_stats = engine.ticker_statistics()
-        tab1, tab2, tab3, tab4 = st.tabs(["Live Tracking", "History", "Statistics", "Insights"])
+        tab1, tab2, tab3, tab4 = st.tabs(["실시간 추적", "전체 이력", "통계", "인사이트"])
 
         with tab1:
             live = cases[cases["status"] == "OPEN"].copy() if not cases.empty else pd.DataFrame()
@@ -79,11 +77,40 @@ def run(db_path: str = "datahub/market.db") -> None:
                 st.info("현재 추적 중인 추천 사례가 없습니다.")
             else:
                 live_cols = [
-                    "snapshot_date", "market", "ticker", "name", "meta_score", "latest_day_no",
-                    "current_return", "running_max_return", "running_min_return", "drawdown_from_peak",
-                    "target_return", "stop_return", "target_hit", "stop_hit",
+                    "snapshot_date",
+                    "market",
+                    "ticker",
+                    "name",
+                    "meta_score",
+                    "latest_day_no",
+                    "current_return",
+                    "running_max_return",
+                    "running_min_return",
+                    "drawdown_from_peak",
+                    "target_return",
+                    "stop_return",
+                    "target_hit",
+                    "stop_hit",
                 ]
-                st.dataframe(live[[c for c in live_cols if c in live.columns]], use_container_width=True, hide_index=True)
+                shown = live[[c for c in live_cols if c in live.columns]].rename(
+                    columns={
+                        "snapshot_date": "추천일",
+                        "market": "시장",
+                        "ticker": "종목코드",
+                        "name": "종목명",
+                        "meta_score": "메타 스코어",
+                        "latest_day_no": "진행일",
+                        "current_return": "현재수익률",
+                        "running_max_return": "최고수익률",
+                        "running_min_return": "최저수익률",
+                        "drawdown_from_peak": "고점대비 낙폭",
+                        "target_return": "익절 기준",
+                        "stop_return": "손절 기준",
+                        "target_hit": "익절 도달",
+                        "stop_hit": "손절 도달",
+                    }
+                )
+                st.dataframe(shown, use_container_width=True, hide_index=True)
 
                 selected = st.selectbox(
                     "추적 종목",
@@ -100,7 +127,13 @@ def run(db_path: str = "datahub/market.db") -> None:
                 d.metric("고점대비 낙폭", f"{float(row.get('drawdown_from_peak') or 0):+.2f}%")
                 e.metric("진행일", f"D{int(row.get('latest_day_no') or 0)}")
                 if not daily.empty:
-                    chart = daily.set_index("day_no")[["return_rate", "running_max_return", "drawdown_from_peak"]]
+                    chart = daily.set_index("day_no")[["return_rate", "running_max_return", "drawdown_from_peak"]].rename(
+                        columns={
+                            "return_rate": "수익률",
+                            "running_max_return": "누적 최고수익률",
+                            "drawdown_from_peak": "고점대비 낙폭",
+                        }
+                    )
                     st.line_chart(chart, height=420)
                     st.dataframe(daily, use_container_width=True, hide_index=True)
 
@@ -109,16 +142,49 @@ def run(db_path: str = "datahub/market.db") -> None:
                 st.info("저장된 추천 사례가 없습니다.")
             else:
                 history_cols = [
-                    "snapshot_date", "market", "ticker", "name", "decision", "grade", "meta_score",
-                    "predicted_7d_return", "current_return", "actual_7d_return", "actual_max_return",
-                    "actual_min_return", "predicted_peak_day", "actual_peak_day", "success", "status",
+                    "snapshot_date",
+                    "market",
+                    "ticker",
+                    "name",
+                    "decision",
+                    "grade",
+                    "meta_score",
+                    "predicted_7d_return",
+                    "current_return",
+                    "actual_7d_return",
+                    "actual_max_return",
+                    "actual_min_return",
+                    "predicted_peak_day",
+                    "actual_peak_day",
+                    "success",
+                    "status",
                 ]
-                st.dataframe(cases[[c for c in history_cols if c in cases.columns]], use_container_width=True, hide_index=True)
+                shown = cases[[c for c in history_cols if c in cases.columns]].rename(
+                    columns={
+                        "snapshot_date": "추천일",
+                        "market": "시장",
+                        "ticker": "종목코드",
+                        "name": "종목명",
+                        "decision": "판정",
+                        "grade": "등급",
+                        "meta_score": "메타 스코어",
+                        "predicted_7d_return": "예측 7일수익률",
+                        "current_return": "현재수익률",
+                        "actual_7d_return": "실제 7일수익률",
+                        "actual_max_return": "실제 최고수익률",
+                        "actual_min_return": "실제 최저수익률",
+                        "predicted_peak_day": "예측 고점일",
+                        "actual_peak_day": "실제 고점일",
+                        "success": "성공 여부",
+                        "status": "상태",
+                    }
+                )
+                st.dataframe(shown, use_container_width=True, hide_index=True)
 
                 selected = st.selectbox(
                     "이력 상세",
                     list(cases.index),
-                    format_func=lambda i: f"{cases.loc[i, 'snapshot_date']} · {cases.loc[i, 'name'] or cases.loc[i, 'ticker']} · Meta {cases.loc[i, 'meta_score']:.2f}",
+                    format_func=lambda i: f"{cases.loc[i, 'snapshot_date']} · {cases.loc[i, 'name'] or cases.loc[i, 'ticker']} · 메타 {cases.loc[i, 'meta_score']:.2f}",
                     key="history_case",
                 )
                 row = cases.loc[selected]
@@ -128,7 +194,7 @@ def run(db_path: str = "datahub/market.db") -> None:
                     st.dataframe(daily, use_container_width=True, hide_index=True)
 
         with tab3:
-            st.markdown("### 종목별 장기 통계")
+            section("종목별 장기 통계")
             if ticker_stats.empty:
                 st.info("통계를 계산할 종목 데이터가 없습니다.")
             else:
@@ -152,11 +218,11 @@ def run(db_path: str = "datahub/market.db") -> None:
                     "점수 구간 검증",
                     ["meta_score", "replay_score", "prediction_score", "jp_radar_score", "risk_score"],
                     format_func=lambda x: {
-                        "meta_score": "Meta",
-                        "replay_score": "Replay",
-                        "prediction_score": "Prediction",
-                        "jp_radar_score": "JP Radar",
-                        "risk_score": "Risk",
+                        "meta_score": "메타 스코어",
+                        "replay_score": "리플레이 스코어",
+                        "prediction_score": "예측 스코어",
+                        "jp_radar_score": "시장환경 스코어",
+                        "risk_score": "위험 스코어",
                     }[x],
                 )
                 factor_stats = engine.bucket_stats(factor, BUCKETS)
@@ -165,14 +231,14 @@ def run(db_path: str = "datahub/market.db") -> None:
                     st.bar_chart(factor_stats.set_index("bucket")[["hit_rate", "avg_7d_return"]], height=360)
 
         with tab4:
-            st.markdown("### 자동 인사이트")
+            section("자동 인사이트")
             for text in engine.insights():
                 st.info(text)
 
             if not ticker_stats.empty:
                 eligible = ticker_stats[ticker_stats["completed_count"] >= 1].copy()
                 if not eligible.empty:
-                    st.markdown("### 종목별 적중률 vs 평균수익")
+                    section("종목별 적중률과 평균수익")
                     st.scatter_chart(
                         eligible,
                         x="hit_rate",
@@ -182,28 +248,13 @@ def run(db_path: str = "datahub/market.db") -> None:
                         height=460,
                     )
 
-        st.caption("성공 기준: 추천 시점 종가 대비 7거래일 종가 수익률이 0% 초과")
+        st.caption("성공 기준: 추천 시점 종가 대비 7거래일 종가 수익률이 0%를 초과한 경우")
     finally:
         engine.close()
 
 
-def _style(st: object) -> None:
-    st.markdown(
-        """
-        <style>
-        .stApp{background:linear-gradient(135deg,#eef7ff,#fbfdff 48%,#edf4ff);color:#15283b}
-        .block-container{max-width:1650px;padding-top:1.25rem}
-        .hero{display:flex;justify-content:space-between;align-items:center;padding:24px 28px;border-radius:26px;background:rgba(255,255,255,.84);border:1px solid rgba(72,145,210,.22);box-shadow:0 18px 48px rgba(64,106,147,.12);margin-bottom:16px}
-        .hero h1{margin:3px 0;letter-spacing:-.04em}.hero p{margin:5px 0;color:#687d92}.eyebrow{font-size:12px;letter-spacing:.15em;font-weight:800;color:#3479b9}.badge{padding:11px 15px;border-radius:999px;background:#eaf4ff;color:#286ba6;font-weight:800}
-        @media(max-width:768px){.block-container{padding:.75rem}.hero{display:block;padding:18px}.badge{display:inline-block;margin-top:12px}}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser(description="ADE Feedback Dashboard")
+    parser = argparse.ArgumentParser(description="ADE 성과 분석")
     parser.add_argument("--db", default="datahub/market.db")
     args = parser.parse_args()
     run(args.db)

@@ -88,6 +88,36 @@ def _render_event_table(*, compact: bool = False) -> None:
         st.caption(warning)
 
 
+def _render_sector_strength() -> None:
+    rows, sector_error = load_sector_strength(get_market_profile("kr").db_path, limit=10)
+    if not rows:
+        st.info(sector_error or "섹터 강도 데이터가 없습니다.")
+        return
+
+    normalized = []
+    for row in rows:
+        turnover = row.get("turnover")
+        normalized.append(
+            {
+                "업종": row.get("sector"),
+                "등락률(%)": row.get("change_rate"),
+                "강도점수": row.get("relative_strength"),
+                "상승비율": row.get("breadth"),
+                "거래대금(억원)": round(float(turnover) / 100_000_000, 1) if turnover not in (None, "") else None,
+                "기준일": row.get("as_of") or "-",
+                "출처": row.get("source") or "-",
+            }
+        )
+    st.dataframe(normalized, hide_index=True, use_container_width=True)
+    leader = normalized[0]
+    st.caption(
+        f"현재 강도 상위 업종: {leader['업종']} · 등락률 {float(leader.get('등락률(%)') or 0):+.2f}% · "
+        f"강도점수 {float(leader.get('강도점수') or 0):.1f}"
+    )
+    if sector_error:
+        st.caption(f"참고: {sector_error}")
+
+
 def _render_market_overview() -> None:
     st.markdown("### 시장의 현재 정보")
     fragment = getattr(st, "fragment", None)
@@ -104,11 +134,7 @@ def _render_market_overview() -> None:
     _render_event_table(compact=True)
 
     st.markdown("#### 국내 섹터 강도")
-    rows, sector_error = load_sector_strength(get_market_profile("kr").db_path)
-    if rows:
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-    else:
-        st.info(sector_error or "섹터 강도 데이터가 없습니다.")
+    _render_sector_strength()
 
     with st.expander("데이터 연결 진단"):
         metrics, market_error = load_market_overview()
@@ -127,14 +153,21 @@ def _render_market_overview() -> None:
                 }
             )
         event_rows, event_warning = load_economic_calendar(days_ahead=90)
+        sector_rows, sector_warning = load_sector_strength(get_market_profile("kr").db_path, limit=10)
         st.dataframe(
             kis_rows
             + [
                 {
-                    "데이터 소스": "경제 캘린더 · 규칙 기반",
-                    "상태": "부분 연결" if event_rows else "데이터 없음",
+                    "데이터 소스": "경제 캘린더 · 공식/규칙 결합",
+                    "상태": "연결" if event_rows else "데이터 없음",
                     "최근 기준시각": time.strftime("%m-%d %H:%M:%S"),
                     "상세": f"향후 90일 {len(event_rows)}건" + (f" · {event_warning}" if event_warning else ""),
+                },
+                {
+                    "데이터 소스": "국내 섹터 강도",
+                    "상태": "정상" if sector_rows else "오류",
+                    "최근 기준시각": time.strftime("%m-%d %H:%M:%S"),
+                    "상세": f"상위 {len(sector_rows)}개 업종" + (f" · {sector_warning}" if sector_warning else ""),
                 },
                 {
                     "데이터 소스": "Yahoo 시장지표 · fallback/참고용",

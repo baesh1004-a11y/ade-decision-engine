@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
+import re
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
 from typing import Callable
 
@@ -47,7 +49,7 @@ class KISTradeSnapshot:
 
 
 class KISWebSocketMarketClient:
-    """Shared KIS domestic market-data WebSocket client with bounded subscriptions."""
+    """Shared KIS domestic market-data WebSocket client with session leases."""
 
     PAPER_APPROVAL_URL = "https://openapivts.koreainvestment.com:29443/oauth2/Approval"
     LIVE_APPROVAL_URL = "https://openapi.koreainvestment.com:9443/oauth2/Approval"
@@ -55,14 +57,19 @@ class KISWebSocketMarketClient:
     LIVE_WS_URL = "ws://ops.koreainvestment.com:21000"
     ORDERBOOK_TR_ID = "H0STASP0"
     TRADE_TR_ID = "H0STCNT0"
-    MAX_ACTIVE_TICKERS = 5
+    MAX_ACTIVE_TICKERS = 20
     APPROVAL_KEY_TTL_SECONDS = 3600
+    SNAPSHOT_TTL_SECONDS = 120
+    ORDERBOOK_MIN_FIELDS = 45
+    TRADE_MIN_FIELDS = 30
 
     def __init__(self) -> None:
         self._orderbooks: dict[str, KISOrderBookSnapshot] = {}
         self._trades: dict[str, KISTradeSnapshot] = {}
         self._subscriptions: OrderedDict[str, float] = OrderedDict()
+        self._leases: dict[str, set[str]] = defaultdict(set)
         self._lock = threading.RLock()
+        self._send_lock = threading.RLock()
         self._approval_lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -72,58 +79,90 @@ class KISWebSocketMarketClient:
         self.last_error: str | None = None
         self.last_error_at: float | None = None
         self.connected = False
+        self.parse_error_count = 0
+        self.send_error_count = 0
+        self.last_parse_error: str | None = None
+
+    @staticmethod
+    def _normalize_ticker(ticker: str) -> str:
+        normalized = str(ticker or "").strip()
+        if not re.fullmatch(r"\d{6}", normalized):
+            raise ValueError("KIS domestic ticker must be exactly 6 digits")
+        return normalized
 
     def start(self) -> None:
-        if self._thread and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run_forever, daemon=True, name="kis-market-ws")
-        self._thread.start()
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                return
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._run_forever, daemon=True, name="kis-market-ws")
+            self._thread.start()
 
-    def stop(self) -> None:
+    def stop(self, join_timeout: float = 3.0) -> None:
         self._stop.set()
-        ws = self._ws
+        with self._lock:
+            ws = self._ws
+            thread = self._thread
         if ws is not None:
             try:
                 ws.close()
             except Exception:
                 pass
+        if thread and thread.is_alive() and thread is not threading.current_thread():
+            thread.join(timeout=join_timeout)
 
-    def subscribe(self, ticker: str) -> None:
-        normalized = str(ticker).zfill(6)
-        removed: list[str] = []
+    def acquire(self, owner_id: str, ticker: str) -> None:
+        normalized = self._normalize_ticker(ticker)
+        owner = str(owner_id or "anonymous")
         with self._lock:
-            first = normalized not in self._subscriptions
+            first = not self._leases[normalized]
+            self._leases[normalized].add(owner)
             self._subscriptions.pop(normalized, None)
             self._subscriptions[normalized] = time.time()
-            while len(self._subscriptions) > self.MAX_ACTIVE_TICKERS:
-                old, _ = self._subscriptions.popitem(last=False)
-                removed.append(old)
+            if len(self._subscriptions) > self.MAX_ACTIVE_TICKERS:
+                self._set_error_locked("KIS realtime active ticker limit reached")
         self.start()
-        if self.connected and self._ws is not None and self._approval_key:
-            if first:
-                self._send_subscription_messages(self._ws, self._approval_key, (normalized,), subscribe=True)
-            for old in removed:
-                self._send_subscription_messages(self._ws, self._approval_key, (old,), subscribe=False)
-                self._drop_snapshots(old)
+        if first:
+            self._send_for_current_connection((normalized,), subscribe=True)
+
+    def release(self, owner_id: str, ticker: str) -> None:
+        normalized = self._normalize_ticker(ticker)
+        owner = str(owner_id or "anonymous")
+        should_unsubscribe = False
+        with self._lock:
+            owners = self._leases.get(normalized)
+            if owners:
+                owners.discard(owner)
+                if not owners:
+                    self._leases.pop(normalized, None)
+                    self._subscriptions.pop(normalized, None)
+                    should_unsubscribe = True
+        if should_unsubscribe:
+            self._send_for_current_connection((normalized,), subscribe=False)
+            self._drop_snapshots(normalized)
+
+    def release_owner(self, owner_id: str) -> None:
+        owner = str(owner_id or "anonymous")
+        with self._lock:
+            tickers = tuple(t for t, owners in self._leases.items() if owner in owners)
+        for ticker in tickers:
+            self.release(owner, ticker)
+
+    def subscribe(self, ticker: str) -> None:
+        self.acquire("legacy", ticker)
 
     def unsubscribe(self, ticker: str) -> None:
-        normalized = str(ticker).zfill(6)
-        with self._lock:
-            existed = normalized in self._subscriptions
-            self._subscriptions.pop(normalized, None)
-        if existed and self.connected and self._ws is not None and self._approval_key:
-            self._send_subscription_messages(self._ws, self._approval_key, (normalized,), subscribe=False)
-        self._drop_snapshots(normalized)
+        self.release("legacy", ticker)
 
     def set_active_tickers(self, tickers: tuple[str, ...] | list[str]) -> None:
-        normalized = tuple(dict.fromkeys(str(t).zfill(6) for t in tickers))[-self.MAX_ACTIVE_TICKERS:]
-        current = set(self.subscribed_tickers())
-        desired = set(normalized)
-        for ticker in current - desired:
-            self.unsubscribe(ticker)
-        for ticker in normalized:
-            self.subscribe(ticker)
+        owner = "legacy-set"
+        desired = tuple(dict.fromkeys(self._normalize_ticker(t) for t in tickers))[-self.MAX_ACTIVE_TICKERS:]
+        with self._lock:
+            current = tuple(t for t, owners in self._leases.items() if owner in owners)
+        for ticker in set(current) - set(desired):
+            self.release(owner, ticker)
+        for ticker in desired:
+            self.acquire(owner, ticker)
 
     def subscribed_tickers(self) -> tuple[str, ...]:
         with self._lock:
@@ -136,68 +175,132 @@ class KISWebSocketMarketClient:
             return max(times) if times else None
 
     def health_snapshot(self) -> dict[str, object]:
-        latest = self.latest_received_at()
-        return {
-            "connected": self.connected,
-            "subscription_count": len(self.subscribed_tickers()),
-            "subscribed_tickers": self.subscribed_tickers(),
-            "latest_received_at": latest,
-            "last_error": self.last_error,
-            "last_error_at": self.last_error_at,
-        }
+        self._cleanup_snapshots()
+        with self._lock:
+            times = [item.received_at for item in self._orderbooks.values()]
+            times.extend(item.received_at for item in self._trades.values())
+            latest = max(times) if times else None
+            return {
+                "connected": self.connected,
+                "subscription_count": len(self._subscriptions),
+                "subscribed_tickers": tuple(self._subscriptions.keys()),
+                "lease_count": sum(len(v) for v in self._leases.values()),
+                "latest_received_at": latest,
+                "last_error": self.last_error,
+                "last_error_at": self.last_error_at,
+                "parse_error_count": self.parse_error_count,
+                "send_error_count": self.send_error_count,
+                "last_parse_error": self.last_parse_error,
+                "orderbook_snapshot_count": len(self._orderbooks),
+                "trade_snapshot_count": len(self._trades),
+            }
 
     def latest_orderbook(self, ticker: str) -> KISOrderBookSnapshot | None:
+        normalized = self._normalize_ticker(ticker)
         with self._lock:
-            return self._orderbooks.get(str(ticker).zfill(6))
+            item = self._orderbooks.get(normalized)
+            if item and time.time() - item.received_at <= self.SNAPSHOT_TTL_SECONDS:
+                return item
+        return None
 
     def latest_trade(self, ticker: str) -> KISTradeSnapshot | None:
+        normalized = self._normalize_ticker(ticker)
         with self._lock:
-            return self._trades.get(str(ticker).zfill(6))
+            item = self._trades.get(normalized)
+            if item and time.time() - item.received_at <= self.SNAPSHOT_TTL_SECONDS:
+                return item
+        return None
 
     def _drop_snapshots(self, ticker: str) -> None:
         with self._lock:
             self._orderbooks.pop(ticker, None)
             self._trades.pop(ticker, None)
 
+    def _cleanup_snapshots(self) -> None:
+        cutoff = time.time() - self.SNAPSHOT_TTL_SECONDS
+        with self._lock:
+            active = set(self._subscriptions)
+            for ticker, item in list(self._orderbooks.items()):
+                if ticker not in active or item.received_at < cutoff:
+                    self._orderbooks.pop(ticker, None)
+            for ticker, item in list(self._trades.items()):
+                if ticker not in active or item.received_at < cutoff:
+                    self._trades.pop(ticker, None)
+
     def _run_forever(self) -> None:
         retry = 1.0
         while not self._stop.is_set():
             try:
                 approval_key = self._request_approval_key()
-                self._approval_key = approval_key
-                self._ws = websocket.WebSocketApp(
-                    self._ws_url(),
-                    on_open=lambda ws: self._on_open(ws, approval_key),
-                    on_message=self._on_message,
-                    on_error=self._on_error,
-                    on_close=self._on_close,
-                )
-                self._ws.run_forever(ping_interval=30, ping_timeout=10)
+                with self._lock:
+                    self._approval_key = approval_key
+                    self._ws = websocket.WebSocketApp(
+                        self._ws_url(),
+                        on_open=lambda ws: self._on_open(ws, approval_key),
+                        on_message=self._on_message,
+                        on_error=self._on_error,
+                        on_close=self._on_close,
+                    )
+                    ws = self._ws
+                ws.run_forever(ping_interval=30, ping_timeout=10)
                 retry = 1.0
             except Exception as exc:
                 self._set_error(str(exc))
-                self.connected = False
-                time.sleep(retry)
-                retry = min(15.0, retry * 2)
+                with self._lock:
+                    self.connected = False
+                if self._stop.wait(retry + random.uniform(0, min(1.0, retry / 4))):
+                    break
+                retry = min(30.0, retry * 2)
 
     def _on_open(self, ws: websocket.WebSocketApp, approval_key: str) -> None:
-        self.connected = True
-        self.last_error = None
-        self.last_error_at = None
-        self._send_subscription_messages(ws, approval_key, self.subscribed_tickers(), subscribe=True)
+        with self._lock:
+            self.connected = True
+            self.last_error = None
+            self.last_error_at = None
+            tickers = tuple(self._subscriptions.keys())
+        self._send_subscription_messages(ws, approval_key, tickers, subscribe=True)
 
     def _on_error(self, _ws: websocket.WebSocketApp, error: object) -> None:
         self._set_error(str(error))
-        self.connected = False
+        with self._lock:
+            self.connected = False
 
     def _on_close(self, _ws: websocket.WebSocketApp, _code: int | None, message: str | None) -> None:
-        self.connected = False
+        with self._lock:
+            self.connected = False
         if message:
             self._set_error(message)
 
-    def _set_error(self, message: str) -> None:
+    def _set_error_locked(self, message: str) -> None:
         self.last_error = message
         self.last_error_at = time.time()
+
+    def _set_error(self, message: str) -> None:
+        with self._lock:
+            self._set_error_locked(message)
+
+    def _record_parse_error(self, message: str) -> None:
+        with self._lock:
+            self.parse_error_count += 1
+            self.last_parse_error = message
+
+    def _send_for_current_connection(self, tickers: tuple[str, ...], *, subscribe: bool) -> None:
+        with self._lock:
+            connected = self.connected
+            ws = self._ws
+            approval_key = self._approval_key
+        if connected and ws is not None and approval_key:
+            self._send_subscription_messages(ws, approval_key, tickers, subscribe=subscribe)
+
+    def _safe_send(self, ws: websocket.WebSocketApp, message: str) -> None:
+        try:
+            with self._send_lock:
+                ws.send(message)
+        except Exception as exc:
+            with self._lock:
+                self.send_error_count += 1
+                self._set_error_locked(f"WebSocket send failed: {exc}")
+            raise
 
     def _send_subscription_messages(
         self,
@@ -219,7 +322,7 @@ class KISWebSocketMarketClient:
                     },
                     "body": {"input": {"tr_id": tr_id, "tr_key": ticker}},
                 }
-                ws.send(json.dumps(payload))
+                self._safe_send(ws, json.dumps(payload))
                 time.sleep(0.05)
 
     def _on_message(self, ws: websocket.WebSocketApp, message: str) -> None:
@@ -229,25 +332,37 @@ class KISWebSocketMarketClient:
             try:
                 payload = json.loads(message)
             except json.JSONDecodeError:
+                self._record_parse_error("invalid JSON control frame")
                 return
             header = payload.get("header") or {}
             if str(header.get("tr_id")) == "PINGPONG":
                 try:
-                    ws.send(message)
+                    self._safe_send(ws, message)
                 except Exception:
                     pass
                 return
             body = payload.get("body") or {}
             rt_cd = str(body.get("rt_cd") or payload.get("rt_cd") or "")
             if rt_cd and rt_cd != "0":
-                self._set_error(str(body.get("msg1") or payload.get("msg1") or "KIS realtime subscription error"))
+                message_text = str(body.get("msg1") or payload.get("msg1") or "KIS realtime subscription error")
+                self._set_error(message_text)
+                if "approval" in message_text.lower() or "key" in message_text.lower():
+                    with self._approval_lock:
+                        self._approval_key = None
+                        self._approval_key_obtained_at = 0.0
+                    try:
+                        ws.close()
+                    except Exception:
+                        pass
             elif rt_cd == "0":
-                self.last_error = None
-                self.last_error_at = None
+                with self._lock:
+                    self.last_error = None
+                    self.last_error_at = None
             return
 
         parts = message.split("|", 3)
         if len(parts) != 4:
+            self._record_parse_error("invalid realtime frame")
             return
         tr_id = parts[1]
         if tr_id == self.ORDERBOOK_TR_ID:
@@ -255,57 +370,82 @@ class KISWebSocketMarketClient:
             if snapshot is not None:
                 with self._lock:
                     self._orderbooks[snapshot.ticker] = snapshot
-                self.last_error = None
-                self.last_error_at = None
+                    self.last_error = None
+                    self.last_error_at = None
         elif tr_id == self.TRADE_TR_ID:
             snapshot = self._parse_trade(parts[3])
             if snapshot is not None:
                 with self._lock:
                     self._trades[snapshot.ticker] = snapshot
-                self.last_error = None
-                self.last_error_at = None
+                    self.last_error = None
+                    self.last_error_at = None
 
     @staticmethod
     def _number(fields: list[str], index: int) -> float:
-        try:
-            return float(str(fields[index]).replace(",", ""))
-        except (TypeError, ValueError, IndexError):
-            return 0.0
+        return float(str(fields[index]).replace(",", ""))
 
     def _parse_orderbook(self, payload: str) -> KISOrderBookSnapshot | None:
         fields = payload.split("^")
-        if len(fields) < 45:
+        if len(fields) < self.ORDERBOOK_MIN_FIELDS:
+            self._record_parse_error("orderbook field count too small")
             return None
-        ticker = str(fields[0]).zfill(6)
-        asks = tuple(OrderBookLevel(self._number(fields, 3 + i), int(self._number(fields, 23 + i))) for i in range(10))
-        bids = tuple(OrderBookLevel(self._number(fields, 13 + i), int(self._number(fields, 33 + i))) for i in range(10))
-        return KISOrderBookSnapshot(
-            ticker=ticker,
-            received_at=time.time(),
-            asks=asks,
-            bids=bids,
-            total_ask_quantity=int(self._number(fields, 43)),
-            total_bid_quantity=int(self._number(fields, 44)),
-        )
+        try:
+            ticker = self._normalize_ticker(fields[0])
+            asks = tuple(OrderBookLevel(self._number(fields, 3 + i), int(self._number(fields, 23 + i))) for i in range(10))
+            bids = tuple(OrderBookLevel(self._number(fields, 13 + i), int(self._number(fields, 33 + i))) for i in range(10))
+            total_ask = int(self._number(fields, 43))
+            total_bid = int(self._number(fields, 44))
+        except (ValueError, IndexError) as exc:
+            self._record_parse_error(f"orderbook parse failed: {exc}")
+            return None
+        if not asks or not bids or any(level.price <= 0 or level.quantity < 0 for level in asks + bids):
+            self._record_parse_error("orderbook contains invalid price or quantity")
+            return None
+        if total_ask < 0 or total_bid < 0:
+            self._record_parse_error("orderbook contains invalid totals")
+            return None
+        return KISOrderBookSnapshot(ticker, time.time(), asks, bids, total_ask, total_bid)
 
     def _parse_trade(self, payload: str) -> KISTradeSnapshot | None:
         fields = payload.split("^")
-        if len(fields) < 30:
+        if len(fields) < self.TRADE_MIN_FIELDS:
+            self._record_parse_error("trade field count too small")
             return None
-        ticker = str(fields[0]).zfill(6)
+        try:
+            ticker = self._normalize_ticker(fields[0])
+            trade_time = str(fields[1])
+            price = self._number(fields, 2)
+            change = self._number(fields, 4)
+            change_rate = self._number(fields, 5)
+            open_price = self._number(fields, 7)
+            high = self._number(fields, 8)
+            low = self._number(fields, 9)
+            volume = int(self._number(fields, 12))
+            accumulated_volume = int(self._number(fields, 13))
+            trade_strength = self._number(fields, 18)
+        except (ValueError, IndexError) as exc:
+            self._record_parse_error(f"trade parse failed: {exc}")
+            return None
+        if not re.fullmatch(r"\d{6}", trade_time):
+            self._record_parse_error("trade time must be HHMMSS")
+            return None
+        hh, mm, ss = int(trade_time[:2]), int(trade_time[2:4]), int(trade_time[4:])
+        if hh > 23 or mm > 59 or ss > 59 or price <= 0 or volume < 0 or accumulated_volume < 0 or abs(change_rate) > 40:
+            self._record_parse_error("trade contains out-of-range values")
+            return None
         return KISTradeSnapshot(
             ticker=ticker,
             received_at=time.time(),
-            trade_time=str(fields[1]),
-            price=self._number(fields, 2),
-            change=self._number(fields, 4),
-            change_rate=self._number(fields, 5),
-            open=self._number(fields, 7),
-            high=self._number(fields, 8),
-            low=self._number(fields, 9),
-            volume=int(self._number(fields, 12)),
-            accumulated_volume=int(self._number(fields, 13)),
-            trade_strength=self._number(fields, 18),
+            trade_time=trade_time,
+            price=price,
+            change=change,
+            change_rate=change_rate,
+            volume=volume,
+            accumulated_volume=accumulated_volume,
+            trade_strength=trade_strength,
+            open=open_price,
+            high=high,
+            low=low,
         )
 
     def _request_approval_key(self) -> str:
@@ -326,7 +466,7 @@ class KISWebSocketMarketClient:
             payload = response.json()
             key = payload.get("approval_key")
             if not key:
-                raise BrokerError(f"KIS approval response missing approval_key: {payload}")
+                raise BrokerError("KIS approval response missing approval_key")
             self._approval_key = str(key)
             self._approval_key_obtained_at = now
             return self._approval_key
@@ -355,9 +495,10 @@ class KISWebSocketOrderBookClient:
         *,
         on_snapshot: Callable[[KISOrderBookSnapshot], None] | None = None,
     ) -> None:
-        self.ticker = str(ticker).zfill(6)
+        self.ticker = KISWebSocketMarketClient._normalize_ticker(ticker)
         self.on_snapshot = on_snapshot
         self._client = shared_market_client()
+        self._owner_id = f"facade:{id(self)}"
 
     @property
     def latest(self) -> KISOrderBookSnapshot | None:
@@ -367,7 +508,7 @@ class KISWebSocketOrderBookClient:
         return snapshot
 
     def start(self) -> None:
-        self._client.subscribe(self.ticker)
+        self._client.acquire(self._owner_id, self.ticker)
 
     def stop(self) -> None:
-        self._client.unsubscribe(self.ticker)
+        self._client.release(self._owner_id, self.ticker)

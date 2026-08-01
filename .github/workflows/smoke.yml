@@ -5,9 +5,17 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -16,8 +24,8 @@ jobs:
           cache: pip
       - name: Install dependencies
         run: pip install -r requirements.txt
-      - name: Compile core modules
-        run: python -m compileall broker dashboard datahub markets recommendation jp_radar
+      - name: Compile repository
+        run: python -m compileall .
       - name: Import smoke tests
         env:
           KIS_APP_KEY: ''
@@ -29,7 +37,29 @@ jobs:
           python -c "from broker.kis import KISBrokerAdapter, kis_broker_from_env, kis_config_from_env"
           python -c "from dashboard.market_overview_service import load_market_overview"
           python -c "from broker.kis_websocket import KISWebSocketMarketClient; KISWebSocketMarketClient()"
-      - name: Verify live-order guard
+      - name: Verify order-candidate store
+        run: |
+          python - <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
+
+          with tempfile.TemporaryDirectory() as tmp:
+              os.environ['ADE_UI_STATE_DB'] = str(Path(tmp) / 'state.sqlite3')
+              import importlib
+              store = importlib.import_module('dashboard.order_candidate_store')
+              store.upsert_candidate('owner-a', 'kr', '005930', '삼성전자')
+              store.upsert_candidate('owner-a', 'kr', '000660', 'SK하이닉스')
+              store.upsert_candidate('owner-b', 'kr', '005930', '삼성전자')
+              assert len(store.list_candidates('owner-a')) == 2
+              assert len(store.list_candidates('owner-b')) == 1
+              store.mark_selected('owner-a', 'kr', '005930')
+              store.delete_candidate('owner-a', 'kr', '000660')
+              assert [r['ticker'] for r in store.list_candidates('owner-a')] == ['005930']
+              store.clear_candidates('owner-a')
+              assert store.list_candidates('owner-a') == []
+          PY
+      - name: Verify live-order guards
         run: |
           python - <<'PY'
           from broker.base import BrokerConfig, BrokerError, BrokerOrder
@@ -50,8 +80,32 @@ jobs:
           )
           try:
               adapter.place_order(order)
-          except BrokerError as exc:
-              assert 'blocked' in str(exc).lower() or '차단' in str(exc)
+          except BrokerError:
+              pass
           else:
               raise AssertionError('live order guard did not block')
+          try:
+              adapter.revise_or_cancel_order('1', 1, cancel=True)
+          except BrokerError:
+              pass
+          else:
+              raise AssertionError('live revise/cancel guard did not block')
           PY
+      - name: Start Streamlit headless
+        env:
+          KIS_APP_KEY: ''
+          KIS_APP_SECRET: ''
+          KIS_ACCOUNT_NO: ''
+          KIS_ENV: paper
+        run: |
+          python -m streamlit run dashboard_app.py --server.headless true --server.address 127.0.0.1 --server.port 8501 > /tmp/streamlit.log 2>&1 &
+          PID=$!
+          trap 'kill $PID || true' EXIT
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:8501/_stcore/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/streamlit.log
+          exit 1

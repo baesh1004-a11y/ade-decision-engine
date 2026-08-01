@@ -237,13 +237,40 @@ def _load_sector_strength_from_db(path: Path, limit: int) -> tuple[list[dict[str
         return [], str(exc)
 
 
-def _latest_business_date() -> str:
+def _candidate_business_dates() -> list[str]:
     seoul_now = datetime.now(ZoneInfo("Asia/Seoul"))
+    dates: list[str] = []
     for offset in range(0, 10):
         candidate = seoul_now.date() - pd.Timedelta(days=offset)
         if candidate.weekday() < 5:
-            return candidate.strftime("%Y%m%d")
-    return seoul_now.strftime("%Y%m%d")
+            dates.append(candidate.strftime("%Y%m%d"))
+    return dates
+
+
+def _pick_numeric(row: pd.Series, *names: str) -> float:
+    for name in names:
+        if name in row.index:
+            value = row.get(name)
+            if value not in (None, "") and pd.notna(value):
+                return float(value)
+    return 0.0
+
+
+def _load_index_frame(business_date: str, market: str) -> pd.DataFrame:
+    last_error: Exception | None = None
+    for caller in (
+        lambda: pykrx_stock.get_index_ohlcv_by_ticker(business_date, market=market),
+        lambda: pykrx_stock.get_index_ohlcv_by_ticker(business_date, market),
+    ):
+        try:
+            frame = caller()
+            if frame is not None and not frame.empty:
+                return frame
+        except Exception as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
+    return pd.DataFrame()
 
 
 def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], str | None]:
@@ -253,42 +280,54 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
         return _SECTOR_CACHE[1][:limit], _SECTOR_CACHE[2]
     if pykrx_stock is None:
         return [], "pykrx를 불러오지 못했습니다."
-    business_date = _latest_business_date()
+
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
-    for market in ("KOSPI", "KOSDAQ"):
-        try:
-            tickers = pykrx_stock.get_index_ticker_list(business_date, market=market)
-            for ticker in tickers:
-                try:
-                    name = pykrx_stock.get_index_ticker_name(ticker)
-                    ohlcv = pykrx_stock.get_index_ohlcv_by_date(business_date, business_date, ticker)
-                    if ohlcv is None or ohlcv.empty:
-                        continue
-                    row = ohlcv.iloc[-1]
-                    close = float(row.get("종가", 0) or 0)
-                    change_rate = float(row.get("등락률", 0) or 0)
-                    volume = float(row.get("거래량", 0) or 0)
-                    turnover = float(row.get("거래대금", 0) or 0)
+    used_date = ""
+    for business_date in _candidate_business_dates():
+        date_rows: list[dict[str, Any]] = []
+        date_errors: list[str] = []
+        for market in ("KOSPI", "KOSDAQ"):
+            try:
+                frame = _load_index_frame(business_date, market)
+                for ticker, series in frame.iterrows():
+                    ticker_text = str(ticker)
+                    name = str(pykrx_stock.get_index_ticker_name(ticker_text) or ticker_text)
+                    close = _pick_numeric(series, "종가", "현재가")
+                    change_rate = _pick_numeric(series, "등락률")
+                    volume = _pick_numeric(series, "거래량")
+                    turnover = _pick_numeric(series, "거래대금")
                     if close <= 0:
                         continue
                     strength = max(0.0, min(100.0, 50.0 + change_rate * 8.0))
-                    rows.append({
-                        "sector": f"{market} · {name}",
-                        "change_rate": round(change_rate, 2),
-                        "breadth": None,
-                        "relative_strength": round(strength, 1),
-                        "turnover": int(turnover),
-                        "volume": int(volume),
-                        "source": "pykrx 업종지수",
-                        "as_of": business_date,
-                    })
-                except Exception:
-                    continue
-        except Exception as exc:
-            errors.append(f"{market}: {exc}")
+                    date_rows.append(
+                        {
+                            "sector": f"{market} · {name}",
+                            "change_rate": round(change_rate, 2),
+                            "breadth": None,
+                            "relative_strength": round(strength, 1),
+                            "turnover": int(turnover),
+                            "volume": int(volume),
+                            "source": "pykrx 업종지수",
+                            "as_of": business_date,
+                        }
+                    )
+            except Exception as exc:
+                date_errors.append(f"{market}: {exc}")
+        if date_rows:
+            rows = date_rows
+            errors = date_errors
+            used_date = business_date
+            break
+        errors.extend(f"{business_date} {message}" for message in date_errors)
+
     rows.sort(key=lambda item: (float(item.get("relative_strength") or 0), float(item.get("turnover") or 0)), reverse=True)
-    warning = " | ".join(errors) if errors else None
+    warning_parts = []
+    if used_date:
+        warning_parts.append(f"기준일 {used_date}")
+    if errors:
+        warning_parts.append(" | ".join(errors[-4:]))
+    warning = " · ".join(warning_parts) if warning_parts else None
     _SECTOR_CACHE = (now, rows, warning)
     return rows[:limit], warning
 

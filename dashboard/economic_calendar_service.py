@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import re
 import time
+import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, time as dt_time, timedelta, timezone
+from html import unescape
 from zoneinfo import ZoneInfo
 
 
@@ -29,8 +32,28 @@ class EconomicEvent:
         }
 
 
-_CACHE: tuple[float, list[EconomicEvent]] | None = None
+_CACHE: tuple[float, list[EconomicEvent], str | None] | None = None
 _CACHE_TTL_SECONDS = 6 * 60 * 60
+_HTTP_TIMEOUT_SECONDS = 15
+_USER_AGENT = "ADE-Decision-Engine/1.0"
+
+_FOMC_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
+_BLS_ICS_URL = "https://www.bls.gov/schedule/news_release/bls.ics"
+_BEA_URL = "https://www.bea.gov/news/schedule/"
+_BOK_URL = "https://www.bok.or.kr/portal/singl/crncyPolicyDrcMtg/listYear.do?menuNo=200755&mtgSe=A&pYear={year}"
+
+
+def _fetch_text(url: str) -> str:
+    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+    with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
+        charset = response.headers.get_content_charset() or "utf-8"
+        return response.read().decode(charset, errors="replace")
+
+
+def _clean_html(value: str) -> str:
+    value = re.sub(r"<script.*?</script>|<style.*?</style>", " ", value, flags=re.I | re.S)
+    value = re.sub(r"<[^>]+>", " ", value)
+    return re.sub(r"\s+", " ", unescape(value)).strip()
 
 
 def _nth_weekday(year: int, month: int, weekday: int, nth: int) -> date:
@@ -65,17 +88,7 @@ def _us_holidays(year: int) -> list[EconomicEvent]:
         (_nth_weekday(year, 11, 3, 4), "Thanksgiving Day"),
     ]
     for event_date, title in fixed + moving:
-        rows.append(
-            EconomicEvent(
-                datetime.combine(event_date, dt_time(0, 0), ny),
-                "미국",
-                "휴장",
-                title,
-                "높음",
-                "NYSE/Nasdaq 일정 규칙",
-                "정확한 연도별 예외는 거래소 공지로 재확인",
-            )
-        )
+        rows.append(EconomicEvent(datetime.combine(event_date, dt_time(0, 0), ny), "미국", "휴장", title, "높음", "NYSE/Nasdaq 일정 규칙"))
     return rows
 
 
@@ -91,54 +104,123 @@ def _kr_holidays(year: int) -> list[EconomicEvent]:
         (date(year, 10, 9), "한글날"),
         (date(year, 12, 25), "성탄절"),
     ]
-    return [
-        EconomicEvent(
-            datetime.combine(event_date, dt_time(0, 0), seoul),
-            "한국",
-            "휴장",
-            title,
-            "높음",
-            "KRX 공휴일 기본 규칙",
-            "설·추석·대체공휴일은 별도 공급원 연결 전 참고용",
-        )
-        for event_date, title in fixed
-    ]
+    return [EconomicEvent(datetime.combine(event_date, dt_time(0, 0), seoul), "한국", "휴장", title, "높음", "KRX 공휴일 기본 규칙", "설·추석·대체공휴일은 거래소 공지로 재확인") for event_date, title in fixed]
 
 
 def _quarterly_expiry(year: int) -> list[EconomicEvent]:
     seoul = ZoneInfo("Asia/Seoul")
     rows: list[EconomicEvent] = []
     for month in (3, 6, 9, 12):
-        kr_day = _nth_weekday(year, month, 3, 2)
-        us_day = _nth_weekday(year, month, 4, 3)
-        rows.append(
-            EconomicEvent(
-                datetime.combine(kr_day, dt_time(15, 20), seoul),
-                "한국",
-                "파생상품",
-                "선물·옵션 동시만기",
-                "높음",
-                "KRX 정기 만기 규칙",
-            )
-        )
-        rows.append(
-            EconomicEvent(
-                datetime.combine(us_day, dt_time(16, 0), ZoneInfo("America/New_York")),
-                "미국",
-                "파생상품",
-                "분기 선물·옵션 만기",
-                "높음",
-                "미국 분기 만기 규칙",
-            )
-        )
+        rows.append(EconomicEvent(datetime.combine(_nth_weekday(year, month, 3, 2), dt_time(15, 20), seoul), "한국", "파생상품", "선물·옵션 동시만기", "높음", "KRX 정기 만기 규칙"))
+        rows.append(EconomicEvent(datetime.combine(_nth_weekday(year, month, 4, 3), dt_time(16, 0), ZoneInfo("America/New_York")), "미국", "파생상품", "분기 선물·옵션 만기", "높음", "미국 분기 만기 규칙"))
     return rows
+
+
+def _load_fomc_events() -> list[EconomicEvent]:
+    text = _clean_html(_fetch_text(_FOMC_URL))
+    rows: list[EconomicEvent] = []
+    eastern = ZoneInfo("America/New_York")
+    for year_text, block in re.findall(r"(20\d{2}) FOMC Meetings(.*?)(?=20\d{2} FOMC Meetings|Future Year:|$)", text, flags=re.S):
+        year = int(year_text)
+        month_map = {name: index for index, name in enumerate(("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"), start=1)}
+        for month_name, days in re.findall(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:-(\d{1,2}))?\*?", block):
+            month = month_map[month_name]
+            end_day = int(days[1] or days[0]) if isinstance(days, tuple) else int(days)
+            rows.append(EconomicEvent(datetime(year, month, end_day, 14, 0, tzinfo=eastern), "미국", "통화정책", "FOMC 금리결정", "매우 높음", "Federal Reserve", "정례회의 마지막 날 14:00 ET 기준"))
+    return rows
+
+
+def _unfold_ics(text: str) -> list[str]:
+    lines: list[str] = []
+    for raw in text.replace("\r\n", "\n").split("\n"):
+        if raw.startswith((" ", "\t")) and lines:
+            lines[-1] += raw[1:]
+        else:
+            lines.append(raw)
+    return lines
+
+
+def _load_bls_events() -> list[EconomicEvent]:
+    lines = _unfold_ics(_fetch_text(_BLS_ICS_URL))
+    rows: list[EconomicEvent] = []
+    current: dict[str, str] = {}
+    for line in lines:
+        if line == "BEGIN:VEVENT":
+            current = {}
+        elif line == "END:VEVENT":
+            summary = current.get("SUMMARY", "")
+            dt_raw = current.get("DTSTART", "")
+            if not summary or not dt_raw:
+                continue
+            title_map = {
+                "Consumer Price Index": ("물가", "미국 CPI 발표"),
+                "Producer Price Index": ("물가", "미국 PPI 발표"),
+                "Employment Situation": ("고용", "미국 고용보고서"),
+            }
+            matched = next(((key, value) for key, value in title_map.items() if key.lower() in summary.lower()), None)
+            if not matched:
+                continue
+            value = re.sub(r"[^0-9TZ]", "", dt_raw)
+            parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc) if value.endswith("Z") else datetime.strptime(value[:15], "%Y%m%dT%H%M%S").replace(tzinfo=ZoneInfo("America/New_York"))
+            category, title = matched[1]
+            rows.append(EconomicEvent(parsed, "미국", category, title, "매우 높음", "U.S. Bureau of Labor Statistics", summary))
+        elif ":" in line:
+            key, value = line.split(":", 1)
+            current[key.split(";", 1)[0]] = value.replace("\\,", ",").replace("\\n", " ")
+    return rows
+
+
+def _load_bea_events() -> list[EconomicEvent]:
+    text = _clean_html(_fetch_text(_BEA_URL))
+    eastern = ZoneInfo("America/New_York")
+    rows: list[EconomicEvent] = []
+    pattern = re.compile(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})\s+(\d{1,2}:\d{2})\s+(AM|PM).*?(GDP \([^)]*Estimate\)[^|]{0,120}|GDP \([^)]*\)[^|]{0,120}|Personal Income and Outlays[^|]{0,120})", re.I)
+    month_map = {name: index for index, name in enumerate(("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"), start=1)}
+    year = datetime.now(timezone.utc).year
+    for month_name, day, clock, meridiem, title in pattern.findall(text):
+        hour, minute = map(int, clock.split(":"))
+        if meridiem.upper() == "PM" and hour != 12:
+            hour += 12
+        if meridiem.upper() == "AM" and hour == 12:
+            hour = 0
+        clean_title = re.sub(r"\s+", " ", title).strip()
+        category = "성장" if clean_title.startswith("GDP") else "소득·소비"
+        rows.append(EconomicEvent(datetime(year, month_map[month_name.title()], int(day), hour, minute, tzinfo=eastern), "미국", category, clean_title, "높음", "U.S. Bureau of Economic Analysis"))
+    return rows
+
+
+def _load_bok_events(year: int) -> list[EconomicEvent]:
+    text = _clean_html(_fetch_text(_BOK_URL.format(year=year)))
+    seoul = ZoneInfo("Asia/Seoul")
+    rows: list[EconomicEvent] = []
+    for month, day in re.findall(r"(\d{2})월\s*(\d{2})일", text):
+        rows.append(EconomicEvent(datetime(year, int(month), int(day), 10, 0, tzinfo=seoul), "한국", "통화정책", "한국은행 기준금리 결정", "매우 높음", "한국은행", "통화정책방향 결정회의"))
+    unique: dict[tuple[datetime, str], EconomicEvent] = {(row.when, row.title): row for row in rows}
+    return list(unique.values())
+
+
+def _load_official_events(years: set[int]) -> tuple[list[EconomicEvent], list[str]]:
+    events: list[EconomicEvent] = []
+    errors: list[str] = []
+    loaders = (("Fed", _load_fomc_events), ("BLS", _load_bls_events), ("BEA", _load_bea_events))
+    for name, loader in loaders:
+        try:
+            events.extend(loader())
+        except Exception as exc:
+            errors.append(f"{name}: {exc}")
+    for year in sorted(years):
+        try:
+            events.extend(_load_bok_events(year))
+        except Exception as exc:
+            errors.append(f"BOK {year}: {exc}")
+    return events, errors
 
 
 def load_economic_calendar(*, days_ahead: int = 90, refresh: bool = False) -> tuple[list[dict[str, str]], str | None]:
     global _CACHE
     now = datetime.now(timezone.utc)
     if not refresh and _CACHE and time.time() - _CACHE[0] <= _CACHE_TTL_SECONDS:
-        events = _CACHE[1]
+        events, warning = _CACHE[1], _CACHE[2]
     else:
         years = {now.year, (now + timedelta(days=days_ahead)).year}
         events: list[EconomicEvent] = []
@@ -146,13 +228,17 @@ def load_economic_calendar(*, days_ahead: int = 90, refresh: bool = False) -> tu
             events.extend(_us_holidays(year))
             events.extend(_kr_holidays(year))
             events.extend(_quarterly_expiry(year))
+        official, errors = _load_official_events(years)
+        events.extend(official)
         events.sort(key=lambda item: item.when)
-        _CACHE = (time.time(), events)
+        warning = "일부 공식 일정 조회 실패: " + " | ".join(errors) if errors else None
+        _CACHE = (time.time(), events, warning)
 
     end = now + timedelta(days=days_ahead)
     selected = [event for event in events if now - timedelta(days=1) <= event.when.astimezone(timezone.utc) <= end]
-    warning = (
-        "현재는 규칙 기반 휴장·만기 일정만 제공합니다. FOMC·CPI·고용·한국은행 금통위는 "
-        "공식 일정 공급원 연결 전까지 표시하지 않습니다."
-    )
-    return [event.to_dict() for event in selected], warning
+    deduped: dict[tuple[str, str, str], EconomicEvent] = {}
+    for event in selected:
+        key = (event.when.astimezone(timezone.utc).isoformat(), event.country, event.title)
+        deduped[key] = event
+    ordered = sorted(deduped.values(), key=lambda item: item.when)
+    return [event.to_dict() for event in ordered], warning

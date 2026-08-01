@@ -4,6 +4,7 @@ import json
 import re
 import sqlite3
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,7 @@ CUSTOM_CSS = """<style>[data-testid="stSidebar"],[data-testid="stSidebarNav"],se
 LIVE_REFRESH_SECONDS = 5
 LIVE_PRICE_MAX_AGE_SECONDS = 15
 LIVE_SESSION_TICKER_LIMIT = 5
+ORDER_DUPLICATE_WINDOW_SECONDS = 8
 
 
 def _apply_zero_base_theme() -> None:
@@ -76,6 +78,11 @@ def _init_state() -> None:
         "ade_order_signature": None,
         "ade_order_context": None,
         "ade_live_ticker_lru": [],
+        "ade_order_submit_state": "idle",
+        "ade_order_flash": None,
+        "ade_last_submitted_signature": None,
+        "ade_last_submitted_at": 0.0,
+        "ade_last_client_request_id": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -201,6 +208,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
 
 
 def _render_orders() -> None:
+    _render_order_flash()
     previous_market = st.session_state.ade_market
     market = _market_selector("ade_order_market")
     if previous_market != market:
@@ -315,6 +323,21 @@ def _order_quantity_key(ticker: str, side: str, order_type: str) -> str:
 def _reset_order_confirmation() -> None:
     st.session_state.ade_order_confirmation = False
     st.session_state.ade_order_signature = None
+    for key in [key for key in st.session_state.keys() if str(key).startswith("ade_order_confirm_")]:
+        st.session_state.pop(key, None)
+
+
+def _render_order_flash() -> None:
+    flash = st.session_state.pop("ade_order_flash", None)
+    if not flash:
+        return
+    message = str(flash.get("message") or "")
+    if flash.get("level") == "success":
+        st.success(message)
+    elif flash.get("level") == "warning":
+        st.warning(message)
+    else:
+        st.error(message)
 
 
 def _touch_live_ticker(ticker: str) -> None:
@@ -406,6 +429,39 @@ def _render_live_market_fragment(ticker: str, fallback_price: float) -> None:
     _fragment_body()
 
 
+def _preflight_order(
+    *,
+    ticker: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    price: float,
+    holding: dict[str, Any] | None,
+) -> tuple[bool, str, int]:
+    if not kis_paper_enabled():
+        return False, "실계좌 주문은 차단되어 있습니다. KIS 모의투자 설정을 확인하세요.", 0
+    if not _normalize_kr_ticker(ticker):
+        return False, "국내 종목코드가 유효하지 않습니다.", 0
+    if quantity <= 0:
+        return False, "주문수량은 1주 이상이어야 합니다.", 0
+    if order_type == "LIMIT" and price <= 0:
+        return False, "지정가 주문가격은 0보다 커야 합니다.", 0
+    if side == "매수":
+        latest, error = load_orderable(ticker, price, order_type, refresh=True)
+        if error:
+            return False, f"최신 주문가능수량 확인 실패: {error}", 0
+        latest_available = int((latest or {}).get("orderable_quantity") or 0)
+    else:
+        _, positions, error = _kis_data(True)
+        if error and not positions:
+            return False, f"최신 보유수량 확인 실패: {error}", 0
+        latest_holding = next((p for p in positions if str(p.get("ticker")) == ticker), holding)
+        latest_available = int((latest_holding or {}).get("quantity") or 0)
+    if quantity > latest_available:
+        return False, f"최신 주문가능수량은 {latest_available:,}주입니다.", latest_available
+    return True, "", latest_available
+
+
 def _render_order_ticket(market: str, ticker: str) -> None:
     if st.button("← 주문목록으로 돌아가기"):
         st.session_state.ade_order_ticker = None
@@ -465,11 +521,17 @@ def _render_order_ticket(market: str, ticker: str) -> None:
             st.session_state.ade_order_context = context
             _reset_order_confirmation()
         live_default = best_ask if side == "매수" else best_bid
-        price_key = _order_price_key(ticker, side, order_type)
-        if price_key not in st.session_state:
-            st.session_state[price_key] = float(live_default or default_price)
-        price = st.number_input("가격", min_value=0.0, step=100.0, disabled=order_type == "MARKET", key=price_key)
-        reference = price if order_type == "LIMIT" else float(mid or default_price)
+        if order_type == "LIMIT":
+            price_key = _order_price_key(ticker, side, order_type)
+            if price_key not in st.session_state:
+                st.session_state[price_key] = float(live_default or default_price)
+            price = st.number_input("가격", min_value=0.0, step=100.0, key=price_key)
+            reference = float(price)
+        else:
+            price = 0.0
+            reference = float(mid or default_price)
+            st.metric("예상 기준가", f"₩{reference:,.0f}")
+            st.caption("시장가는 실제 체결가가 예상 기준가와 다를 수 있습니다.")
         orderable, orderable_error = load_orderable(ticker, reference, order_type) if side == "매수" and market == "kr" else (None, None)
         max_sell = int((holding or {}).get("quantity") or 0)
         available = int((orderable or {}).get("orderable_quantity") or 0) if side == "매수" else max_sell
@@ -486,23 +548,66 @@ def _render_order_ticket(market: str, ticker: str) -> None:
         c2.metric("예상금액", f"₩{reference * quantity:,.0f}")
         if orderable:
             st.caption(f"KIS 주문가능현금 ₩{float(orderable.get('orderable_cash') or 0):,.0f}")
-        signature = (ticker, side, order_type, round(float(price), 4), int(quantity))
+        signature = (ticker, side, order_type, round(float(price), 4) if order_type == "LIMIT" else None, int(quantity))
         if st.session_state.ade_order_signature is not None and st.session_state.ade_order_signature != signature:
-            st.session_state.ade_order_confirmation = False
+            _reset_order_confirmation()
         st.session_state.ade_order_signature = signature
-        st.session_state.ade_order_confirmation = st.checkbox("주문 내용을 확인했습니다.", value=st.session_state.ade_order_confirmation, key=f"ade_order_confirm_{ticker}_{side}_{order_type}")
-        can_submit = market == "kr" and kis_paper_enabled() and quantity > 0 and st.session_state.ade_order_confirmation and quantity <= available
+        confirm_key = f"ade_order_confirm_{ticker}_{side}_{order_type}"
+        confirmed = st.checkbox("주문 내용을 확인했습니다.", key=confirm_key)
+        st.session_state.ade_order_confirmation = bool(confirmed)
+        submitting = st.session_state.ade_order_submit_state == "submitting"
+        recent_duplicate = (
+            st.session_state.ade_last_submitted_signature == signature
+            and time.time() - float(st.session_state.ade_last_submitted_at or 0) < ORDER_DUPLICATE_WINDOW_SECONDS
+        )
+        can_submit = market == "kr" and kis_paper_enabled() and quantity > 0 and confirmed and quantity <= available and not submitting and not recent_duplicate
+        if recent_duplicate:
+            st.caption("동일 주문의 연속 전송을 잠시 차단했습니다.")
         if st.button(f"{side} 주문 전송", type="primary", use_container_width=True, disabled=not can_submit):
+            request_id = uuid.uuid4().hex
+            st.session_state.ade_order_submit_state = "submitting"
+            st.session_state.ade_last_client_request_id = request_id
             try:
-                result = submit_paper_order(ticker=ticker, side="BUY" if side == "매수" else "SELL", quantity=int(quantity), order_type=order_type, limit_price=float(price) if order_type == "LIMIT" else None)
+                ok, preflight_error, latest_available = _preflight_order(
+                    ticker=ticker,
+                    side=side,
+                    quantity=int(quantity),
+                    order_type=order_type,
+                    price=float(reference if order_type == "MARKET" else price),
+                    holding=holding,
+                )
+                if not ok:
+                    st.session_state.ade_order_submit_state = "failed"
+                    st.session_state.ade_order_flash = {"level": "error", "message": preflight_error}
+                    st.rerun()
+                result = submit_paper_order(
+                    ticker=ticker,
+                    side="BUY" if side == "매수" else "SELL",
+                    quantity=int(quantity),
+                    order_type=order_type,
+                    limit_price=float(price) if order_type == "LIMIT" else None,
+                )
                 if result.accepted:
-                    st.success(f"접수 완료 · 주문번호 {result.order_id or '-'} · {result.message}")
+                    st.session_state.ade_order_submit_state = "accepted"
+                    st.session_state.ade_last_submitted_signature = signature
+                    st.session_state.ade_last_submitted_at = time.time()
+                    st.session_state.ade_order_flash = {
+                        "level": "success",
+                        "message": f"접수 완료 · 주문번호 {result.order_id or '-'} · 요청ID {request_id[:8]} · {result.message}",
+                    }
                     _reset_order_confirmation()
                     _kis_data(True)
-                else:
-                    st.error(result.message)
+                    st.rerun()
+                st.session_state.ade_order_submit_state = "failed"
+                st.session_state.ade_order_flash = {"level": "error", "message": result.message}
+                st.rerun()
             except Exception as exc:
-                st.error(str(exc))
+                st.session_state.ade_order_submit_state = "failed"
+                st.session_state.ade_order_flash = {"level": "error", "message": str(exc)}
+                st.rerun()
+            finally:
+                if st.session_state.ade_order_submit_state == "submitting":
+                    st.session_state.ade_order_submit_state = "idle"
         health = market_client.health_snapshot()
         for msg in [error, quote_error, orderable_error, health.get("last_error")]:
             if msg:

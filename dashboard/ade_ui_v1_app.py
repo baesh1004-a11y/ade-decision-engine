@@ -22,6 +22,7 @@ from dashboard.kis_zero_base_bridge import (
     load_kis_snapshot,
     load_orderable,
     load_pending_orders,
+    refresh_order_views,
     revise_paper_order,
     submit_paper_order,
 )
@@ -343,6 +344,7 @@ def _render_pending_orders() -> None:
             if c3.button("정정", key=f"rev_{row.get('order_id')}", use_container_width=True):
                 try:
                     revise_paper_order(str(row.get("order_id")), int(new_qty), float(new_price), organization_no=organization_no)
+                    refresh_order_views()
                     st.success("정정 요청 완료")
                     st.rerun()
                 except Exception as exc:
@@ -350,6 +352,7 @@ def _render_pending_orders() -> None:
             if st.button("전체 취소", key=f"can_{row.get('order_id')}", use_container_width=True):
                 try:
                     cancel_paper_order(str(row.get("order_id")), int(row.get("remaining_quantity") or 0), organization_no=organization_no)
+                    refresh_order_views()
                     st.success("취소 요청 완료")
                     st.rerun()
                 except Exception as exc:
@@ -452,7 +455,6 @@ def _load_live_prices(ticker: str, fallback_price: float) -> tuple[float, float,
 
 def _render_live_orderbook(ticker: str, fallback_price: float) -> tuple[float, float, float, float | None]:
     client = shared_market_client()
-    client.subscribe(ticker)
     snapshot = client.latest_orderbook(ticker)
     trade = client.latest_trade(ticker)
     received_times = [item.received_at for item in (snapshot, trade) if item is not None]
@@ -667,6 +669,7 @@ def _render_order_ticket(market: str, ticker: str) -> None:
                         "message": f"접수 완료 · 주문번호 {result.order_id or '-'} · 요청ID {request_id[:8]} · {result.message}",
                     }
                     _reset_order_confirmation()
+                    refresh_order_views()
                     _kis_data(True)
                     st.rerun()
                 st.session_state.ade_order_submit_state = "failed"
@@ -764,11 +767,8 @@ def _render_status_bar() -> None:
         ws_text = "실시간 대기"
         ws_class = ""
     candidate_health = store_health()
-    candidate_text = (
-        f"후보DB 정상·v{candidate_health.get('schema_version')}"
-        if candidate_health.get("status") == "정상"
-        else "후보DB 오류"
-    )
+    schema_version = candidate_health.get("schema_version")
+    candidate_text = f"후보DB 정상 v{schema_version}" if candidate_health.get("status") == "정상" else "후보DB 오류"
     candidate_class = "ade-ok" if candidate_health.get("status") == "정상" else ""
     st.markdown(f'<div class="ade-statusbar"><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span>Yahoo 연결</span><span class="{candidate_class}">{candidate_text}</span><span>추천·Replay·STO 규칙 유지</span></div>', unsafe_allow_html=True)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -9,6 +10,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from broker.kis_websocket import KISWebSocketOrderBookClient
 from dashboard import recommendation_workbench_v2_app as recommendation_base
 from dashboard.charts import CHART_CONFIG, build_pattern_compare_chart, build_trading_chart
 from dashboard.design_system import apply_design_system
@@ -29,6 +31,7 @@ from recommendation.run_context import load_latest_context
 ORDER_CANDIDATES_PATH = Path("output/ade_order_candidates.json")
 THEME_PATH = Path(__file__).with_name("ade_zero_base_theme.css")
 CUSTOM_CSS = """<style>[data-testid="stSidebar"],[data-testid="stSidebarNav"],section[data-testid="stSidebar"],div[data-testid="stSidebarNav"],[data-testid="collapsedControl"],button[kind="headerNoPadding"]{display:none!important}</style>"""
+_WS_CLIENTS: dict[str, KISWebSocketOrderBookClient] = {}
 
 
 def _apply_zero_base_theme() -> None:
@@ -48,7 +51,7 @@ def run() -> None:
 
 
 def _init_state() -> None:
-    defaults={"ade_primary_page":"상황종합판","ade_overview_tab":"시장","ade_market":"kr","ade_recommendation_detail":None,"ade_order_ticker":None,"ade_jp_ticker":None,"ade_order_confirmation":False}
+    defaults={"ade_primary_page":"상황종합판","ade_overview_tab":"시장","ade_market":"kr","ade_recommendation_detail":None,"ade_order_ticker":None,"ade_jp_ticker":None,"ade_order_confirmation":False,"ade_live_orderbook":True}
     for key,value in defaults.items(): st.session_state.setdefault(key,value)
 
 
@@ -129,7 +132,7 @@ def _render_recommendation_row(row: dict[str,Any],market: str) -> None:
         if st.button(f"{symbol}\n\n{ticker}",key=f"open_detail_{market}_{ticker}",use_container_width=True): st.session_state.ade_recommendation_detail=ticker; st.rerun()
     score=row.get("score") or row.get("final_similarity") or row.get("weekly_similarity"); cols[2].metric("추천점수",f"{float(score or 0):.1f}")
     if cols[3].button("JP Radar",key=f"jp_{market}_{ticker}",use_container_width=True): st.session_state.ade_primary_page="JP Radar"; st.session_state.ade_jp_ticker=ticker; st.session_state.ade_market=market; st.rerun()
-    if cols[4].button("주문",key=f"order_{market}_{ticker}",type="primary",use_container_width=True): _add_order_candidate(market,ticker,symbol); st.session_state.ade_primary_page="주문"; st.session_state.ade_order_ticker=ticker; st.rerun()
+    if cols[4].button("주문",key=f"order_{market}_{ticker}",type="primary",use_container_width=True): _add_order_candidate(market,ticker,symbol); st.session_state.ade_primary_page="주문"; st.session_state.ade_order_ticker=ticker; st.session_state.ade_market=market; st.rerun()
     st.divider()
 
 
@@ -169,48 +172,77 @@ def _render_orders() -> None:
         if st.button(label,key=f"holding_{market}_{row.get('ticker')}",use_container_width=True): st.session_state.ade_order_ticker=str(row.get('ticker')); st.rerun()
 
 
+def _get_orderbook_client(ticker: str) -> KISWebSocketOrderBookClient:
+    normalized=str(ticker).zfill(6)
+    client=_WS_CLIENTS.get(normalized)
+    if client is None:
+        client=KISWebSocketOrderBookClient(normalized)
+        client.start()
+        _WS_CLIENTS[normalized]=client
+    return client
+
+
+def _render_live_orderbook(ticker: str, fallback_price: float) -> tuple[float,float,float]:
+    client=_get_orderbook_client(ticker)
+    snapshot=client.latest
+    if snapshot is None:
+        st.info("KIS 실시간 호가 연결 중입니다. 첫 호가 수신 전까지 계좌 현재가를 사용합니다.")
+        return fallback_price,fallback_price,fallback_price
+    rows=[]
+    for level in reversed(snapshot.asks):
+        rows.extend([f'<div class="ask">매도</div>',f'<div class="mid">{level.price:,.0f}</div>',f'<div>{level.quantity:,}</div>'])
+    rows.extend(['<div class="head">구분</div>','<div class="head">가격</div>','<div class="head">잔량</div>'])
+    for level in snapshot.bids:
+        rows.extend([f'<div class="bid">매수</div>',f'<div class="mid">{level.price:,.0f}</div>',f'<div>{level.quantity:,}</div>'])
+    st.markdown('<div class="ade-orderbook">'+''.join(rows)+'</div>',unsafe_allow_html=True)
+    best_ask=snapshot.asks[0].price if snapshot.asks else fallback_price
+    best_bid=snapshot.bids[0].price if snapshot.bids else fallback_price
+    midpoint=(best_ask+best_bid)/2 if best_ask and best_bid else fallback_price
+    st.caption(f"실시간 호가 · 매도총잔량 {snapshot.total_ask_quantity:,} · 매수총잔량 {snapshot.total_bid_quantity:,} · 수신 {time.strftime('%H:%M:%S',time.localtime(snapshot.received_at))}")
+    return best_ask,best_bid,midpoint
+
+
 def _render_order_ticket(market: str,ticker: str) -> None:
     if st.button("← 주문목록으로 돌아가기"): st.session_state.ade_order_ticker=None; st.session_state.ade_order_confirmation=False; st.rerun()
     account,positions,error=_kis_data(refresh=False) if market=="kr" else (None,[],None)
     holding=next((p for p in positions if str(p.get("ticker"))==str(ticker)),None)
     st.markdown(f"## {holding.get('name') if holding else ticker} 주문")
+    default_price=float(holding.get("current_price") or 0) if holding else 0.0
     if account:
-        c1,c2,c3=st.columns(3); c1.metric("주문가능 현금",f"₩{float(account.get('cash') or 0):,.0f}"); c2.metric("보유수량",f"{int(holding.get('quantity') or 0) if holding else 0}주"); c3.metric("현재가",f"₩{float(holding.get('current_price') or 0):,.0f}" if holding else "-")
+        c1,c2,c3=st.columns(3); c1.metric("주문가능 현금",f"₩{float(account.get('cash') or 0):,.0f}"); c2.metric("보유수량",f"{int(holding.get('quantity') or 0) if holding else 0}주"); c3.metric("현재가",f"₩{default_price:,.0f}" if default_price else "-")
     left,right=st.columns([1.2,1])
     with left:
-        st.info("KIS 모의투자 계좌와 잔고는 연결되었습니다. 호가는 현재 계좌 스냅샷의 현재가를 기준으로 표시합니다.")
+        live_enabled=st.toggle("KIS 실시간 10호가",value=st.session_state.ade_live_orderbook,key="ade_live_orderbook_toggle",disabled=market!="kr" or not kis_configured())
+        st.session_state.ade_live_orderbook=live_enabled
+        if market=="kr" and live_enabled and kis_configured(): best_ask,best_bid,midpoint=_render_live_orderbook(ticker,default_price)
+        else:
+            best_ask=best_bid=midpoint=default_price
+            st.info("실시간 호가가 꺼져 있어 계좌 스냅샷 현재가를 사용합니다.")
+        if live_enabled and market=="kr":
+            st.caption("호가 새로고침은 Streamlit 재실행 주기에 반영됩니다.")
     with right:
         side=st.radio("주문 구분",["매수","매도"],horizontal=True)
         st.radio("거래",["현금"],horizontal=True,disabled=True)
         st.selectbox("시장",["KIS 모의투자"],disabled=True)
         order_type_label=st.selectbox("주문유형",["지정가","시장가"])
         order_type="LIMIT" if order_type_label=="지정가" else "MARKET"
-        default_price=float(holding.get("current_price") or 0) if holding else 0.0
-        price=st.number_input("가격",min_value=0.0,value=default_price,step=100.0,disabled=order_type=="MARKET")
+        live_default=best_ask if side=="매수" else best_bid
+        price=st.number_input("가격",min_value=0.0,value=float(live_default or default_price),step=100.0,disabled=order_type=="MARKET")
         max_sell=int(holding.get("quantity") or 0) if holding and side=="매도" else 0
         quantity=st.number_input("수량",min_value=0,max_value=max_sell if side=="매도" and max_sell>0 else None,value=1 if side=="매수" else min(1,max_sell),step=1)
-        reference_price=price if order_type=="LIMIT" else default_price
+        reference_price=price if order_type=="LIMIT" else float(midpoint or default_price)
         available=int(float(account.get("cash") or 0)//reference_price) if account and reference_price>0 and side=="매수" else max_sell
         st.metric("주문가능수량",f"{available:,}주"); st.metric("예상 주문금액",f"₩{reference_price*quantity:,.0f}")
         st.session_state.ade_order_confirmation=st.checkbox("주문 내용을 확인했으며 KIS 모의투자 계좌로 전송합니다.",value=st.session_state.ade_order_confirmation)
         can_submit=(market=="kr" and kis_paper_enabled() and quantity>0 and st.session_state.ade_order_confirmation and (side=="매수" or quantity<=max_sell) and (order_type=="MARKET" or price>0))
         if st.button(f"{side} 주문 전송",type="primary",use_container_width=True,disabled=not can_submit):
             try:
-                result=submit_paper_order(
-                    ticker=ticker,
-                    side="BUY" if side=="매수" else "SELL",
-                    quantity=int(quantity),
-                    order_type=order_type,
-                    limit_price=float(price) if order_type=="LIMIT" else None,
-                )
+                result=submit_paper_order(ticker=ticker,side="BUY" if side=="매수" else "SELL",quantity=int(quantity),order_type=order_type,limit_price=float(price) if order_type=="LIMIT" else None)
                 if result.accepted:
                     st.success(f"KIS 모의주문 접수 완료 · 주문번호 {result.order_id or '-'} · {result.message}")
-                    st.session_state.ade_order_confirmation=False
-                    _kis_data(refresh=True)
-                else:
-                    st.error(f"KIS 모의주문 거절 · {result.message}")
-            except Exception as exc:
-                st.error(f"KIS 모의주문 전송 실패: {exc}")
+                    st.session_state.ade_order_confirmation=False; _kis_data(refresh=True)
+                else: st.error(f"KIS 모의주문 거절 · {result.message}")
+            except Exception as exc: st.error(f"KIS 모의주문 전송 실패: {exc}")
         if market!="kr": st.warning("현재 실제 주문 연동은 국내 KIS 모의투자만 지원합니다.")
         elif not kis_paper_enabled(): st.warning("KIS_ENV=paper와 KIS 모의투자 키·계좌 설정을 확인하세요.")
     if error: st.caption(f"KIS 마지막 정상 스냅샷 사용: {error}")
@@ -254,12 +286,9 @@ def _load_order_candidates() -> list[dict[str,Any]]:
 
 
 def _render_status_bar() -> None:
-    if kis_paper_enabled():
-        kis_text="KIS 모의투자 연결"; kis_class="ade-ok"
-    elif kis_configured():
-        kis_text="KIS 설정 확인 필요"; kis_class=""
-    else:
-        kis_text="KIS 미설정"; kis_class=""
+    if kis_paper_enabled(): kis_text="KIS 모의투자 연결"; kis_class="ade-ok"
+    elif kis_configured(): kis_text="KIS 설정 확인 필요"; kis_class=""
+    else: kis_text="KIS 미설정"; kis_class=""
     st.markdown(f'<div class="ade-statusbar"><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span>Yahoo 연결</span><span>추천·Replay·STO 규칙 유지</span></div>',unsafe_allow_html=True)
 
 

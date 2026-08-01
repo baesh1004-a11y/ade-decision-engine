@@ -50,7 +50,7 @@ def kis_configuration_status() -> dict[str, Any]:
     product = product_primary or product_alias or "01"
     warning = None
     if account_no and account_alias and account_no.replace("-", "") != account_alias.replace("-", ""):
-        warning = "KIS_ACCOUNT_NO와 KIS_ACCOUNT 값이 다릅니다. KIS_ACCOUNT_NO를 우선 사용합니다."
+        warning = "KIS_ACCOUNT_NO와 KIS_ACCOUNT 값이 다릅니다. 호환 규칙으로 해석합니다."
 
     missing = []
     if not app_key:
@@ -269,6 +269,19 @@ def load_kis_snapshot(
         if refresh
         else read_kis_snapshot(db_path, max_age_seconds=max_age_seconds)
     )
+
+
+def load_kis_index(index_code: str, *, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:
+    if not kis_configured():
+        return None, "KIS 환경변수가 설정되지 않았습니다."
+    normalized = str(index_code).strip()
+    key = f"index:{normalized}"
+    if refresh:
+        _invalidate(key)
+    try:
+        return _cached(key, 30.0, lambda: _broker().get_index_quote(normalized)), None
+    except Exception as exc:
+        return None, str(exc)
 
 
 def load_kis_quote(ticker: str, *, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:

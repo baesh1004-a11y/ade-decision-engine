@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import os
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any
+from threading import RLock
+from typing import Any, Callable, TypeVar
 
 from broker.base import BrokerOrder, OrderResult
 from broker.kis import KISBrokerAdapter, kis_broker_from_env, kis_config_from_env
@@ -11,6 +13,9 @@ from broker.kis_account_sync import KISAccountSync
 
 
 _REQUIRED_ENV = ("KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT")
+_T = TypeVar("_T")
+_CACHE_LOCK = RLock()
+_CACHE: dict[str, tuple[float, Any]] = {}
 
 
 def kis_configured() -> bool:
@@ -28,6 +33,28 @@ def kis_paper_enabled() -> bool:
 
 def _broker() -> KISBrokerAdapter:
     return kis_broker_from_env()
+
+
+def _cached(key: str, ttl_seconds: float, loader: Callable[[], _T]) -> _T:
+    now = time.monotonic()
+    with _CACHE_LOCK:
+        cached = _CACHE.get(key)
+        if cached and now - cached[0] <= ttl_seconds:
+            return cached[1]
+    value = loader()
+    with _CACHE_LOCK:
+        _CACHE[key] = (now, value)
+    return value
+
+
+def _invalidate(prefix: str | None = None) -> None:
+    with _CACHE_LOCK:
+        if prefix is None:
+            _CACHE.clear()
+            return
+        for key in list(_CACHE):
+            if key.startswith(prefix):
+                _CACHE.pop(key, None)
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -56,6 +83,8 @@ def load_kis_snapshot(
             try:
                 snapshot, positions = sync.sync()
                 account = snapshot.to_dict()
+                _invalidate("orderable:")
+                _invalidate("orders:")
             except Exception as exc:
                 error = str(exc)
                 account = sync.latest_account()
@@ -67,52 +96,103 @@ def load_kis_snapshot(
         sync.close()
 
 
-def load_kis_quote(ticker: str) -> tuple[dict[str, Any] | None, str | None]:
+def load_kis_quote(ticker: str, *, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:
     if not kis_configured():
         return None, "KIS 환경변수가 설정되지 않았습니다."
+    key = f"quote:{str(ticker).zfill(6)}"
+    if refresh:
+        _invalidate(key)
     try:
-        return _broker().get_quote(ticker), None
+        return _cached(key, 5.0, lambda: _broker().get_quote(ticker)), None
     except Exception as exc:
         return None, str(exc)
 
 
-def load_orderable(ticker: str, price: float, order_type: str) -> tuple[dict[str, Any] | None, str | None]:
+def load_orderable(
+    ticker: str,
+    price: float,
+    order_type: str,
+    *,
+    refresh: bool = False,
+) -> tuple[dict[str, Any] | None, str | None]:
     if not kis_paper_enabled():
         return None, "KIS 모의투자 환경이 아닙니다."
+    normalized_price = 0 if order_type.upper() == "MARKET" else int(price)
+    key = f"orderable:{str(ticker).zfill(6)}:{order_type.upper()}:{normalized_price}"
+    if refresh:
+        _invalidate(key)
     try:
-        return _broker().get_orderable(ticker, price, order_type), None
+        return _cached(key, 3.0, lambda: _broker().get_orderable(ticker, price, order_type)), None
     except Exception as exc:
         return None, str(exc)
 
 
-def load_daily_orders(executed_only: bool = False) -> tuple[list[dict[str, Any]], str | None]:
+def load_daily_orders(
+    executed_only: bool = False,
+    *,
+    refresh: bool = False,
+) -> tuple[list[dict[str, Any]], str | None]:
     if not kis_configured():
         return [], "KIS 환경변수가 설정되지 않았습니다."
+    key = f"orders:daily:{int(executed_only)}"
+    if refresh:
+        _invalidate(key)
     try:
-        return _broker().get_daily_orders(executed_only=executed_only), None
+        return _cached(key, 5.0, lambda: _broker().get_daily_orders(executed_only=executed_only)), None
     except Exception as exc:
         return [], str(exc)
 
 
-def load_pending_orders() -> tuple[list[dict[str, Any]], str | None]:
+def load_pending_orders(*, refresh: bool = False) -> tuple[list[dict[str, Any]], str | None]:
     if not kis_configured():
         return [], "KIS 환경변수가 설정되지 않았습니다."
+    key = "orders:pending"
+    if refresh:
+        _invalidate(key)
     try:
-        return _broker().get_pending_orders(), None
+        return _cached(key, 3.0, lambda: _broker().get_pending_orders()), None
     except Exception as exc:
         return [], str(exc)
 
 
-def revise_paper_order(order_id: str, quantity: int, price: float) -> dict[str, Any]:
+def revise_paper_order(
+    order_id: str,
+    quantity: int,
+    price: float,
+    *,
+    organization_no: str = "",
+) -> dict[str, Any]:
     if not kis_paper_enabled():
         raise RuntimeError("KIS 모의투자 환경이 아니거나 설정이 완전하지 않습니다.")
-    return _broker().revise_or_cancel_order(order_id, quantity, price=price, cancel=False)
+    result = _broker().revise_or_cancel_order(
+        order_id,
+        quantity,
+        price=price,
+        cancel=False,
+        organization_no=organization_no,
+    )
+    _invalidate("orders:")
+    _invalidate("orderable:")
+    return result
 
 
-def cancel_paper_order(order_id: str, quantity: int) -> dict[str, Any]:
+def cancel_paper_order(
+    order_id: str,
+    quantity: int,
+    *,
+    organization_no: str = "",
+) -> dict[str, Any]:
     if not kis_paper_enabled():
         raise RuntimeError("KIS 모의투자 환경이 아니거나 설정이 완전하지 않습니다.")
-    return _broker().revise_or_cancel_order(order_id, quantity, cancel=True)
+    result = _broker().revise_or_cancel_order(
+        order_id,
+        quantity,
+        cancel=True,
+        organization_no=organization_no,
+    )
+    _invalidate("orders:")
+    _invalidate("orderable:")
+    return result
 
 
 def submit_paper_order(
@@ -136,4 +216,7 @@ def submit_paper_order(
         limit_price=float(limit_price) if normalized_type == "LIMIT" and limit_price is not None else None,
         dry_run=False,
     )
-    return _broker().place_order(order)
+    result = _broker().place_order(order)
+    _invalidate("orders:")
+    _invalidate("orderable:")
+    return result

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+from datahub.paths import market_db_path, us_market_db_path
+
 
 @dataclass(frozen=True)
 class MarketProfile:
@@ -20,7 +22,7 @@ PROFILES: dict[str, MarketProfile] = {
     "kr": MarketProfile(
         code="kr",
         name="한국장",
-        db_path=Path("datahub/market.db"),
+        db_path=market_db_path(),
         price_source="fdr",
         timezone="Asia/Seoul",
         currency="KRW",
@@ -30,7 +32,7 @@ PROFILES: dict[str, MarketProfile] = {
     "us": MarketProfile(
         code="us",
         name="미국장",
-        db_path=Path("datahub/us_market.db"),
+        db_path=us_market_db_path(),
         price_source="yfinance",
         timezone="America/New_York",
         currency="USD",

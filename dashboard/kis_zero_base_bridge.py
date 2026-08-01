@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import os
 import time
-from datetime import datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, TypeVar
@@ -23,7 +22,8 @@ _BROKER_FINGERPRINT: tuple[str, str, str, str] | None = None
 
 
 def kis_configured() -> bool:
-    return all(os.getenv(key, "").strip() for key in _REQUIRED_ENV)
+    account = os.getenv("KIS_ACCOUNT", "").strip() or os.getenv("KIS_ACCOUNT_NO", "").strip()
+    return bool(os.getenv("KIS_APP_KEY", "").strip() and os.getenv("KIS_APP_SECRET", "").strip() and account)
 
 
 def kis_paper_enabled() -> bool:
@@ -77,13 +77,46 @@ def _invalidate(prefix: str | None = None) -> None:
                 _CACHE.pop(key, None)
 
 
-def _parse_time(value: Any) -> datetime | None:
-    if not value:
-        return None
+def _snapshot_cache_key(db_path: str | Path) -> str:
+    return f"snapshot:{Path(db_path).resolve()}"
+
+
+def read_kis_snapshot(
+    db_path: str | Path,
+    *,
+    refresh_cache: bool = False,
+    cache_seconds: float = 15.0,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    key = _snapshot_cache_key(db_path)
+    if refresh_cache:
+        _invalidate(key)
     try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
+        account, positions = _cached(
+            key,
+            cache_seconds,
+            lambda: KISAccountSync(db_path).latest_snapshot(),
+        )
+        error = None if kis_configured() else "KIS 환경변수가 설정되지 않았습니다."
+        return account, positions, error
+    except Exception as exc:
+        return None, [], str(exc)
+
+
+def refresh_kis_snapshot(
+    db_path: str | Path,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    if not kis_configured():
+        return read_kis_snapshot(db_path, refresh_cache=True)
+    try:
+        snapshot, positions = KISAccountSync(db_path).sync(broker=_broker())
+        account = snapshot.to_dict()
+        _invalidate(_snapshot_cache_key(db_path))
+        _invalidate("orderable:")
+        _invalidate("orders:")
+        return account, positions, None
+    except Exception as exc:
+        account, positions, _ = read_kis_snapshot(db_path, refresh_cache=True)
+        return account, positions, str(exc)
 
 
 def load_kis_snapshot(
@@ -92,28 +125,8 @@ def load_kis_snapshot(
     refresh: bool = False,
     max_age_seconds: int = 60,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
-    sync = KISAccountSync(db_path)
-    error: str | None = None
-    try:
-        account = sync.latest_account()
-        positions = sync.latest_positions()
-        captured_at = _parse_time(account.get("captured_at") if account else None)
-        stale = captured_at is None or datetime.now() - captured_at > timedelta(seconds=max_age_seconds)
-        if kis_configured() and (refresh or stale):
-            try:
-                snapshot, positions = sync.sync()
-                account = snapshot.to_dict()
-                _invalidate("orderable:")
-                _invalidate("orders:")
-            except Exception as exc:
-                error = str(exc)
-                account = sync.latest_account()
-                positions = sync.latest_positions()
-        elif not kis_configured():
-            error = "KIS 환경변수가 설정되지 않았습니다."
-        return account, positions, error
-    finally:
-        sync.close()
+    del max_age_seconds
+    return refresh_kis_snapshot(db_path) if refresh else read_kis_snapshot(db_path)
 
 
 def load_kis_quote(ticker: str, *, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:

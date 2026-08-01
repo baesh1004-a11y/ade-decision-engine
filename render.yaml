@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install -r requirements.txt
-    startCommand: python -m datahub.db_sync & python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
+    startCommand: python -m datahub.db_sync && exec python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
@@ -19,11 +19,9 @@ services:
         sync: false
       - key: KIS_APP_SECRET
         sync: false
-      - key: KIS_ACCOUNT
-        sync: false
       - key: KIS_ACCOUNT_NO
         sync: false
-      - key: KIS_PRODUCT_CODE
+      - key: KIS_ACCOUNT_PRODUCT_CODE
         value: "01"
       - key: KIS_BASE_URL
         value: https://openapivts.koreainvestment.com:29443

@@ -28,6 +28,7 @@ from dashboard.kis_zero_base_bridge import (
     revise_paper_order,
     submit_paper_order,
 )
+from dashboard.market_price_fallback import load_external_daily_bars
 from dashboard.news_disclosure_service import load_security_news
 from dashboard.order_candidate_store import (
     OrderCandidateStoreError,
@@ -306,12 +307,12 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
     return [str(row[1]) for row in rows]
 
 
-def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: str, configured_source: str) -> tuple[pd.DataFrame, str]:
+def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: str, configured_source: str) -> tuple[pd.DataFrame, str, str | None]:
     direct = recommendation_base._current_bars(conn, market, ticker, configured_source)
     if not direct.empty:
-        return direct, f"DB:{configured_source or '자동'}"
+        return direct, f"DB:{configured_source or '자동'}", None
 
-    candidate_tables = [configured_source, "ohlcv", "daily_prices", "price_daily", "prices"]
+    candidate_tables = [configured_source, "ohlcv", "daily_prices", "price_daily", "prices", "price_bars"]
     existing = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     for table in [name for name in candidate_tables if name and name in existing]:
         columns = _table_columns(conn, table)
@@ -321,7 +322,7 @@ def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: 
             continue
         variants = [ticker]
         if market == "kr" and ticker.isdigit():
-            variants.extend([ticker.zfill(6), ticker.lstrip("0") or "0"])
+            variants.extend([ticker.zfill(6), ticker.lstrip("0") or "0", f"{ticker.zfill(6)}.KS", f"{ticker.zfill(6)}.KQ"])
         placeholders = ",".join("?" for _ in variants)
         try:
             rows = conn.execute(
@@ -333,8 +334,12 @@ def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: 
         frame = pd.DataFrame([dict(row) for row in rows])
         if not frame.empty:
             frame = frame.rename(columns={date_col: "date"}).sort_values("date")
-            return frame, f"DB:{table}"
-    return pd.DataFrame(), "DB 데이터 없음"
+            return frame, f"DB:{table}", None
+
+    external, source, warning = load_external_daily_bars(market, ticker)
+    if not external.empty:
+        return external, f"외부:{source}", warning
+    return pd.DataFrame(), source, warning
 
 
 def _pattern_from_replay(conn: sqlite3.Connection, payload: dict[str, Any]):
@@ -375,7 +380,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     with sqlite3.connect(str(profile.db_path), timeout=5) as conn:
         conn.row_factory = sqlite3.Row
         pattern = _pattern_from_replay(conn, payload)
-        current, current_source = _load_current_bars_resilient(conn, market, normalize_ticker(ticker, market), profile.price_source)
+        current, current_source, current_warning = _load_current_bars_resilient(conn, market, normalize_ticker(ticker, market), profile.price_source)
         historical = recommendation_base._pattern_bars(conn, pattern)
         table_counts = {
             "surge_patterns": conn.execute("SELECT COUNT(*) FROM surge_patterns").fetchone()[0] if recommendation_base._table_exists(conn, "surge_patterns") else 0,
@@ -412,6 +417,8 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
 
     st.markdown(f"## {symbol}")
     st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end} · 가격소스 {current_source}")
+    if current_warning:
+        st.caption(f"가격 보조 조회: {current_warning}")
 
     kpis = st.columns(6)
     kpis[0].metric("추천점수", f"{weekly:.1f}")
@@ -427,6 +434,8 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         st.dataframe(
             pd.DataFrame([
                 {"진단": "현재 가격 행", "값": 0},
+                {"진단": "가격 조회 소스", "값": current_source},
+                {"진단": "가격 보조 조회", "값": current_warning or "오류 정보 없음"},
                 {"진단": "Replay 저장 건수", "값": replay_count},
                 {"진단": "선택 과거 패턴", "값": "있음" if pattern is not None else "없음"},
                 {"진단": "과거 패턴 봉", "값": len(historical)},
@@ -528,7 +537,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
 
         st.markdown("#### 데이터 가용성")
         availability = [
-            {"데이터": "현재 가격·거래량", "상태": f"{len(current)}행" if not current.empty else "없음"},
+            {"데이터": "현재 가격·거래량", "상태": f"{len(current)}행 · {current_source}" if not current.empty else "없음"},
             {"데이터": "과거 패턴", "상태": f"{len(historical)}행" if not historical.empty and pattern is not None else "없음"},
             {"데이터": "환경 조언", "상태": "있음" if validation is not None else "없음"},
             {"데이터": "뉴스", "상태": f"{news_count}건" if news_count else "없음"},

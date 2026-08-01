@@ -5,6 +5,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from broker.base import BrokerOrder, OrderResult
+from broker.kis import kis_broker_from_env, kis_config_from_env
 from broker.kis_account_sync import KISAccountSync
 
 
@@ -13,6 +15,15 @@ _REQUIRED_ENV = ("KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT")
 
 def kis_configured() -> bool:
     return all(os.getenv(key, "").strip() for key in _REQUIRED_ENV)
+
+
+def kis_paper_enabled() -> bool:
+    if not kis_configured():
+        return False
+    try:
+        return not kis_config_from_env().is_live
+    except Exception:
+        return False
 
 
 def _parse_time(value: Any) -> datetime | None:
@@ -30,11 +41,7 @@ def load_kis_snapshot(
     refresh: bool = False,
     max_age_seconds: int = 60,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
-    """Return the latest KIS snapshot and refresh it when configured and stale.
-
-    The function never blocks the UI on a failed broker request when a prior valid
-    snapshot exists. The caller receives the last valid data plus an error message.
-    """
+    """Return the latest KIS snapshot and refresh it when configured and stale."""
     sync = KISAccountSync(db_path)
     error: str | None = None
     try:
@@ -47,7 +54,7 @@ def load_kis_snapshot(
             try:
                 snapshot, positions = sync.sync()
                 account = snapshot.to_dict()
-            except Exception as exc:  # Last valid snapshot remains usable.
+            except Exception as exc:
                 error = str(exc)
                 account = sync.latest_account()
                 positions = sync.latest_positions()
@@ -57,3 +64,33 @@ def load_kis_snapshot(
         return account, positions, error
     finally:
         sync.close()
+
+
+def submit_paper_order(
+    *,
+    ticker: str,
+    side: str,
+    quantity: int,
+    order_type: str,
+    limit_price: float | None,
+) -> OrderResult:
+    """Submit one domestic KIS paper order.
+
+    Live accounts remain blocked by the broker adapter. The caller must still
+    require an explicit user confirmation before invoking this function.
+    """
+    if not kis_paper_enabled():
+        raise RuntimeError("KIS 모의투자 환경이 아니거나 설정이 완전하지 않습니다.")
+
+    normalized_side = side.upper()
+    normalized_type = order_type.upper()
+    order = BrokerOrder(
+        market="kr",
+        ticker=str(ticker).strip(),
+        side=normalized_side,
+        quantity=int(quantity),
+        order_type=normalized_type,
+        limit_price=float(limit_price) if normalized_type == "LIMIT" and limit_price is not None else None,
+        dry_run=False,
+    )
+    return kis_broker_from_env().place_order(order)

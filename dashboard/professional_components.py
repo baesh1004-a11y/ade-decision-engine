@@ -5,6 +5,8 @@ from typing import Any, Iterable
 
 import streamlit as st
 
+from dashboard.ui_workspace import UIWorkspace
+
 
 def _text(value: Any) -> str:
     return html.escape(str(value if value is not None else "-"))
@@ -28,6 +30,35 @@ def render_page_header(
           </div>
           <div class="ade-pro-badges">{badge_html}</div>
         </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_workspace_intro() -> None:
+    st.markdown(
+        """
+        <section class="ade-workspace-intro">
+          <div class="ade-pro-eyebrow">ADE UI ENGINE</div>
+          <h1>전문가 워크스페이스 선택</h1>
+          <p>기능과 주문 안전장치는 동일하게 유지되며, 정보 배치와 시각 체계만 워크스페이스별로 달라집니다.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_workspace_card(workspace: UIWorkspace, *, selected: bool) -> None:
+    strengths = "".join(f'<span>{_text(item)}</span>' for item in workspace.strengths)
+    selected_class = " selected" if selected else ""
+    st.markdown(
+        f"""
+        <article class="ade-workspace-card{selected_class}">
+          <div class="ade-workspace-number">{_text(workspace.short_name)}</div>
+          <h3>{_text(workspace.name)}</h3>
+          <p>{_text(workspace.description)}</p>
+          <div class="ade-workspace-strengths">{strengths}</div>
+        </article>
         """,
         unsafe_allow_html=True,
     )

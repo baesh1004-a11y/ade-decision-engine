@@ -22,21 +22,18 @@ _BROKER_FINGERPRINT: tuple[str, str, str, str] | None = None
 
 
 def _resolve_env(primary: str, *aliases: str, default: str = "") -> str:
-    values = [(name, os.getenv(name, "").strip()) for name in (primary, *aliases)]
-    configured = [(name, value) for name, value in values if value]
-    distinct = {value for _name, value in configured}
-    if len(distinct) > 1:
-        names = ", ".join(name for name, _value in configured)
-        raise RuntimeError(f"충돌하는 KIS 환경변수 값: {names}")
-    return configured[0][1] if configured else default
+    primary_value = os.getenv(primary, "").strip()
+    if primary_value:
+        return primary_value
+    for alias in aliases:
+        alias_value = os.getenv(alias, "").strip()
+        if alias_value:
+            return alias_value
+    return default
 
 
 def kis_configured() -> bool:
-    try:
-        account = _resolve_env("KIS_ACCOUNT_NO", "KIS_ACCOUNT")
-        _resolve_env("KIS_ACCOUNT_PRODUCT_CODE", "KIS_PRODUCT_CODE", default="01")
-    except RuntimeError:
-        return False
+    account = _resolve_env("KIS_ACCOUNT_NO", "KIS_ACCOUNT")
     return bool(os.getenv("KIS_APP_KEY", "").strip() and os.getenv("KIS_APP_SECRET", "").strip() and account)
 
 
@@ -49,14 +46,11 @@ def kis_configuration_status() -> dict[str, Any]:
     product_primary = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "").strip()
     product_alias = os.getenv("KIS_PRODUCT_CODE", "").strip()
 
-    conflict = None
-    try:
-        account = _resolve_env("KIS_ACCOUNT_NO", "KIS_ACCOUNT")
-        product = _resolve_env("KIS_ACCOUNT_PRODUCT_CODE", "KIS_PRODUCT_CODE", default="01")
-    except RuntimeError as exc:
-        account = account_no or account_alias
-        product = product_primary or product_alias or "01"
-        conflict = str(exc)
+    account = account_no or account_alias
+    product = product_primary or product_alias or "01"
+    warning = None
+    if account_no and account_alias and account_no.replace("-", "") != account_alias.replace("-", ""):
+        warning = "KIS_ACCOUNT_NO와 KIS_ACCOUNT 값이 다릅니다. KIS_ACCOUNT_NO를 우선 사용합니다."
 
     missing = []
     if not app_key:
@@ -68,7 +62,7 @@ def kis_configuration_status() -> dict[str, Any]:
 
     account_source = "KIS_ACCOUNT_NO" if account_no else ("KIS_ACCOUNT" if account_alias else "미설정")
     product_source = "KIS_ACCOUNT_PRODUCT_CODE" if product_primary else ("KIS_PRODUCT_CODE" if product_alias else "기본값")
-    configured = not missing and conflict is None
+    configured = not missing
     paper = configured and env in {"paper", "virtual", "mock", "demo"}
 
     return {
@@ -79,7 +73,7 @@ def kis_configuration_status() -> dict[str, Any]:
         "product_source": product_source,
         "product_code": product,
         "missing": missing,
-        "conflict": conflict,
+        "warning": warning,
         "app_key_present": bool(app_key),
         "app_secret_present": bool(app_secret),
         "account_present": bool(account),
@@ -97,7 +91,7 @@ def probe_kis_connection(db_path: str | Path) -> dict[str, Any]:
         "error": None,
     }
     if not status["configured"]:
-        result["error"] = status["conflict"] or ("누락: " + ", ".join(status["missing"]))
+        result["error"] = "누락: " + ", ".join(status["missing"])
         return result
     try:
         snapshot, positions = KISAccountSync(db_path).sync(broker=_broker())
@@ -214,10 +208,10 @@ def read_kis_snapshot(
     cache_seconds: float = 15.0,
     max_age_seconds: int = 60,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    del max_age_seconds
     if not kis_configured():
         status = kis_configuration_status()
-        detail = status.get("conflict") or ("누락: " + ", ".join(status.get("missing") or []))
-        return None, [], f"KIS 설정 확인 필요 · {detail}"
+        return None, [], "KIS 설정 확인 필요 · 누락: " + ", ".join(status.get("missing") or [])
     key = _snapshot_cache_key(db_path)
     if refresh_cache:
         _invalidate(key)
@@ -226,11 +220,12 @@ def read_kis_snapshot(
         if account is None:
             return None, [], "저장된 KIS 계좌 스냅샷이 없습니다. 새로고침이 필요합니다."
         age = _snapshot_age_seconds(account)
+        warning = None
         if age is None:
-            return None, [], "KIS 계좌 스냅샷 시각을 확인할 수 없습니다."
-        if age > max_age_seconds:
-            return None, [], f"KIS 계좌 데이터가 오래되었습니다. 마지막 수신 후 {int(age)}초 경과"
-        return account, positions, None
+            warning = "KIS 계좌 스냅샷 시각을 확인할 수 없습니다."
+        elif age > 60:
+            warning = f"최근 저장된 KIS 계좌 데이터입니다. 마지막 수신 후 {int(age)}초 경과"
+        return account, positions, warning
     except Exception as exc:
         return None, [], str(exc)
 
@@ -242,8 +237,7 @@ def refresh_kis_snapshot(
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
     if not kis_configured():
         status = kis_configuration_status()
-        detail = status.get("conflict") or ("누락: " + ", ".join(status.get("missing") or []))
-        return None, [], f"KIS 설정 확인 필요 · {detail}"
+        return None, [], "KIS 설정 확인 필요 · 누락: " + ", ".join(status.get("missing") or [])
     try:
         snapshot, positions = KISAccountSync(db_path).sync(broker=_broker())
         account = snapshot.to_dict()
@@ -257,7 +251,10 @@ def refresh_kis_snapshot(
             max_age_seconds=max_age_seconds,
         )
         if account is not None:
-            return account, positions, f"KIS 실시간 갱신 실패 · 최근 정상값 사용: {exc}"
+            warning = f"KIS 실시간 갱신 실패 · 최근 저장값 사용: {exc}"
+            if cached_error:
+                warning += f" · {cached_error}"
+            return account, positions, warning
         return None, [], f"KIS 계좌 조회 실패: {exc}" + (f" · {cached_error}" if cached_error else "")
 
 

@@ -298,6 +298,68 @@ def _payload_text(payload: dict[str, Any], *keys: str) -> str | None:
     return None
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    try:
+        rows = conn.execute(f'PRAGMA table_info("{table}")').fetchall()
+    except sqlite3.Error:
+        return []
+    return [str(row[1]) for row in rows]
+
+
+def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: str, configured_source: str) -> tuple[pd.DataFrame, str]:
+    direct = recommendation_base._current_bars(conn, market, ticker, configured_source)
+    if not direct.empty:
+        return direct, f"DB:{configured_source or '자동'}"
+
+    candidate_tables = [configured_source, "ohlcv", "daily_prices", "price_daily", "prices"]
+    existing = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    for table in [name for name in candidate_tables if name and name in existing]:
+        columns = _table_columns(conn, table)
+        ticker_col = next((name for name in ("ticker", "symbol", "code") if name in columns), None)
+        date_col = next((name for name in ("date", "trade_date", "datetime", "timestamp") if name in columns), None)
+        if not ticker_col or not date_col:
+            continue
+        variants = [ticker]
+        if market == "kr" and ticker.isdigit():
+            variants.extend([ticker.zfill(6), ticker.lstrip("0") or "0"])
+        placeholders = ",".join("?" for _ in variants)
+        try:
+            rows = conn.execute(
+                f'SELECT * FROM "{table}" WHERE CAST("{ticker_col}" AS TEXT) IN ({placeholders}) ORDER BY "{date_col}" DESC LIMIT 180',
+                tuple(dict.fromkeys(variants)),
+            ).fetchall()
+        except sqlite3.Error:
+            continue
+        frame = pd.DataFrame([dict(row) for row in rows])
+        if not frame.empty:
+            frame = frame.rename(columns={date_col: "date"}).sort_values("date")
+            return frame, f"DB:{table}"
+    return pd.DataFrame(), "DB 데이터 없음"
+
+
+def _pattern_from_replay(conn: sqlite3.Connection, payload: dict[str, Any]):
+    selected = recommendation_base._selected_pattern(conn, payload)
+    if selected is not None:
+        return selected
+    matches = payload.get("replay_matches") or []
+    if not isinstance(matches, list):
+        return None
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        event_id = str(match.get("event_id") or match.get("pattern_id") or "").strip()
+        if not event_id:
+            continue
+        for column in ("pattern_id", "source_event_id"):
+            try:
+                row = conn.execute(f"SELECT * FROM surge_patterns WHERE {column}=? ORDER BY surge_start_date DESC LIMIT 1", (event_id,)).fetchone()
+            except sqlite3.Error:
+                row = None
+            if row is not None:
+                return row
+    return None
+
+
 def _render_recommendation_detail(market: str, ticker: str) -> None:
     if st.button("← 추천종목으로 돌아가기"):
         st.session_state.ade_recommendation_detail = None
@@ -312,19 +374,25 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     validation = context.validations.get(normalize_ticker(ticker, market)) if context else None
     with sqlite3.connect(str(profile.db_path), timeout=5) as conn:
         conn.row_factory = sqlite3.Row
-        pattern = recommendation_base._selected_pattern(conn, payload)
-        current = recommendation_base._current_bars(conn, market, normalize_ticker(ticker, market), profile.price_source)
+        pattern = _pattern_from_replay(conn, payload)
+        current, current_source = _load_current_bars_resilient(conn, market, normalize_ticker(ticker, market), profile.price_source)
         historical = recommendation_base._pattern_bars(conn, pattern)
+        table_counts = {
+            "surge_patterns": conn.execute("SELECT COUNT(*) FROM surge_patterns").fetchone()[0] if recommendation_base._table_exists(conn, "surge_patterns") else 0,
+            "surge_pattern_bars": conn.execute("SELECT COUNT(*) FROM surge_pattern_bars").fetchone()[0] if recommendation_base._table_exists(conn, "surge_pattern_bars") else 0,
+        }
 
     symbol = str(selected.get("symbol") or selected.get("name") or ticker)
     weekly = float(selected.get("weekly_similarity") or selected.get("score") or selected.get("final_similarity") or 0)
     sto = float(selected.get("sto_similarity") or 0)
     run_id = context.run_id if context else "-"
     finished_at = str(context.finished_at or "-")[:19] if context else "-"
-    replay_count = len(payload.get("replay_matches") or [])
+    replay_matches = payload.get("replay_matches") or []
+    replay_count = len(replay_matches) if isinstance(replay_matches, list) else 0
     current_end = "-"
-    if not current.empty and "Date" in current.columns:
-        current_end = str(pd.to_datetime(current["Date"].iloc[-1]))[:19]
+    date_column = next((name for name in ("Date", "date", "trade_date") if name in current.columns), None)
+    if not current.empty and date_column:
+        current_end = str(pd.to_datetime(current[date_column].iloc[-1], errors="coerce"))[:19]
 
     news_rows, news_warning = load_security_news(ticker, symbol, limit=16)
     news_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "뉴스")
@@ -343,7 +411,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     summary = _payload_text(payload, "ai_summary", "summary", "reason", "recommendation_reason")
 
     st.markdown(f"## {symbol}")
-    st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end}")
+    st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end} · 가격소스 {current_source}")
 
     kpis = st.columns(6)
     kpis[0].metric("추천점수", f"{weekly:.1f}")
@@ -354,31 +422,41 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     kpis[5].metric("위험점수", f"{risk_score:.1f}" if risk_score is not None else "미측정")
 
     st.markdown("### 1. 가격·거래량과 종합 판단")
-    main_left, main_right = st.columns([1.55, 1], gap="large")
-    with main_left:
-        if current.empty:
-            st.warning("현재 가격 데이터가 부족하여 메인 차트를 표시할 수 없습니다.")
-        else:
-            st.plotly_chart(build_trading_chart(current, symbol), use_container_width=True, config=CHART_CONFIG)
-    with main_right:
-        st.markdown("#### AI 종합판단")
-        if summary:
-            st.write(summary)
-        else:
-            st.info("AI 요약 데이터가 아직 저장되지 않았습니다. 저장된 추천·패턴·뉴스 데이터를 기준으로 확인 중입니다.")
+    if current.empty:
+        st.warning("현재 가격·거래량 원본을 찾지 못했습니다. 아래 진단정보로 누락 위치를 확인하세요.")
         st.dataframe(
-            pd.DataFrame(
-                [
+            pd.DataFrame([
+                {"진단": "현재 가격 행", "값": 0},
+                {"진단": "Replay 저장 건수", "값": replay_count},
+                {"진단": "선택 과거 패턴", "값": "있음" if pattern is not None else "없음"},
+                {"진단": "과거 패턴 봉", "값": len(historical)},
+                {"진단": "전체 surge_patterns", "값": table_counts["surge_patterns"]},
+                {"진단": "전체 surge_pattern_bars", "값": table_counts["surge_pattern_bars"]},
+            ]),
+            hide_index=True,
+            use_container_width=True,
+        )
+    else:
+        main_left, main_right = st.columns([1.55, 1], gap="large")
+        with main_left:
+            st.plotly_chart(build_trading_chart(current, symbol), use_container_width=True, config=CHART_CONFIG)
+        with main_right:
+            st.markdown("#### AI 종합판단")
+            if summary:
+                st.write(summary)
+            else:
+                st.info("AI 요약 데이터가 아직 저장되지 않았습니다. 저장된 추천·패턴·뉴스 데이터를 기준으로 확인 중입니다.")
+            st.dataframe(
+                pd.DataFrame([
                     {"항목": "목표가", "값": f"{target:,.0f}" if target is not None else "미산출"},
                     {"항목": "손절가", "값": f"{stop:,.0f}" if stop is not None else "미산출"},
                     {"항목": "신뢰도", "값": f"{confidence:.1f}" if confidence is not None else "미산출"},
                     {"항목": "뉴스", "값": f"{news_count}건"},
                     {"항목": "공시", "값": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
-                ]
-            ),
-            hide_index=True,
-            use_container_width=True,
-        )
+                ]),
+                hide_index=True,
+                use_container_width=True,
+            )
 
     st.markdown("### 2. STO 구조와 Replay 패턴 비교")
     if pattern is not None and not historical.empty and not current.empty:
@@ -392,10 +470,32 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
             stored_similarity=sto,
         )
     else:
-        st.info("STO 구조 비교에 필요한 현재 가격 또는 과거 유사사례 데이터가 부족합니다.")
+        reasons = []
+        if current.empty:
+            reasons.append("현재 가격 0행")
+        if pattern is None:
+            reasons.append("선택 과거 패턴 없음")
+        if historical.empty:
+            reasons.append("과거 패턴 봉 0행")
+        st.info("STO/Replay 차트 대기 · " + " · ".join(reasons))
+        if isinstance(replay_matches, list) and replay_matches:
+            preview_rows = []
+            for index, match in enumerate(replay_matches[:10], start=1):
+                if not isinstance(match, dict):
+                    continue
+                preview_rows.append({
+                    "순위": index,
+                    "종목": match.get("name") or match.get("ticker") or "-",
+                    "사례ID": match.get("event_id") or match.get("pattern_id") or "-",
+                    "유사도": match.get("similarity") or match.get("score") or "-",
+                    "기준일": match.get("date") or match.get("event_date") or "-",
+                    "이후수익률": match.get("return") or match.get("forward_return") or "-",
+                })
+            if preview_rows:
+                st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
 
+    st.markdown("### 3. 원본 패턴 검증")
     if not current.empty and pattern is not None and not historical.empty:
-        st.markdown("### 3. 원본 패턴 검증")
         compare_left, compare_right = st.columns([1, 1], gap="large")
         with compare_left:
             st.markdown("#### 현재 종목 원본 차트")
@@ -408,6 +508,8 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
                 use_container_width=True,
                 config=CHART_CONFIG,
             )
+    else:
+        st.caption("원본 비교 차트는 현재 가격과 과거 패턴 봉이 모두 준비되면 자동 표시됩니다.")
 
     st.markdown("### 4. 근거·리스크·시장 환경")
     left, right = st.columns([1.15, 1], gap="large")
@@ -426,8 +528,8 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
 
         st.markdown("#### 데이터 가용성")
         availability = [
-            {"데이터": "현재 가격·거래량", "상태": "있음" if not current.empty else "없음"},
-            {"데이터": "과거 패턴", "상태": "있음" if not historical.empty and pattern is not None else "없음"},
+            {"데이터": "현재 가격·거래량", "상태": f"{len(current)}행" if not current.empty else "없음"},
+            {"데이터": "과거 패턴", "상태": f"{len(historical)}행" if not historical.empty and pattern is not None else "없음"},
             {"데이터": "환경 조언", "상태": "있음" if validation is not None else "없음"},
             {"데이터": "뉴스", "상태": f"{news_count}건" if news_count else "없음"},
             {"데이터": "공시", "상태": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
@@ -564,7 +666,10 @@ def _render_candidate_controls(market: str) -> None:
 
 
 def _action_is_recent(signature: tuple[Any, ...]) -> bool:
-    return st.session_state.ade_last_order_action_signature == signature and time.time() - float(st.session_state.ade_last_order_action_at or 0) < ORDER_ACTION_DUPLICATE_WINDOW_SECONDS
+    return (
+        st.session_state.ade_last_order_action_signature == signature
+        and time.time() - float(st.session_state.ade_last_order_action_at or 0) < ORDER_ACTION_DUPLICATE_WINDOW_SECONDS
+    )
 
 
 def _render_pending_orders() -> None:

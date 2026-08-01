@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Any
 
@@ -33,6 +34,7 @@ class KISBrokerAdapter:
         self._last_request_at = 0.0
         self._last_balance_payload: dict[str, Any] | None = None
         self._last_balance_at = 0.0
+        self._request_lock = threading.RLock()
 
     def get_cash(self) -> float:
         payload = self._request_domestic_balance()
@@ -210,30 +212,31 @@ class KISBrokerAdapter:
         )
 
     def _request_domestic_balance(self) -> dict[str, Any]:
-        now = time.time()
-        if self._last_balance_payload is not None and now - self._last_balance_at < self.BALANCE_CACHE_SECONDS:
-            return self._last_balance_payload
-        params = {
-            "CANO": self.config.account_no,
-            "ACNT_PRDT_CD": self.config.account_product_code,
-            "AFHR_FLPR_YN": "N",
-            "OFL_YN": "",
-            "INQR_DVSN": "02",
-            "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N",
-            "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
-        }
-        payload = self._get(
-            "/uapi/domestic-stock/v1/trading/inquire-balance",
-            tr_id="VTTC8434R" if not self.config.is_live else "TTTC8434R",
-            params=params,
-        )
-        self._last_balance_payload = payload
-        self._last_balance_at = time.time()
-        return payload
+        with self._request_lock:
+            now = time.time()
+            if self._last_balance_payload is not None and now - self._last_balance_at < self.BALANCE_CACHE_SECONDS:
+                return self._last_balance_payload
+            params = {
+                "CANO": self.config.account_no,
+                "ACNT_PRDT_CD": self.config.account_product_code,
+                "AFHR_FLPR_YN": "N",
+                "OFL_YN": "",
+                "INQR_DVSN": "02",
+                "UNPR_DVSN": "01",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "PRCS_DVSN": "01",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            }
+            payload = self._get(
+                "/uapi/domestic-stock/v1/trading/inquire-balance",
+                tr_id="VTTC8434R" if not self.config.is_live else "TTTC8434R",
+                params=params,
+            )
+            self._last_balance_payload = payload
+            self._last_balance_at = time.time()
+            return payload
 
     @staticmethod
     def _normalize_daily_order(row: dict[str, Any]) -> dict[str, Any]:
@@ -282,21 +285,22 @@ class KISBrokerAdapter:
         return headers
 
     def _token(self) -> str:
-        if self._access_token and time.time() < self._access_token_expires_at - 60:
+        with self._request_lock:
+            if self._access_token and time.time() < self._access_token_expires_at - 60:
+                return self._access_token
+            response = self._send_with_retry(
+                "POST",
+                "/oauth2/tokenP",
+                json={"grant_type": "client_credentials", "appkey": self.config.app_key, "appsecret": self.config.app_secret},
+                include_auth_headers=False,
+            )
+            payload = response.json()
+            token = payload.get("access_token")
+            if not token:
+                raise BrokerError(f"KIS token response did not include access_token: {payload}")
+            self._access_token = str(token)
+            self._access_token_expires_at = time.time() + int(payload.get("expires_in", 86400))
             return self._access_token
-        response = self._send_with_retry(
-            "POST",
-            "/oauth2/tokenP",
-            json={"grant_type": "client_credentials", "appkey": self.config.app_key, "appsecret": self.config.app_secret},
-            include_auth_headers=False,
-        )
-        payload = response.json()
-        token = payload.get("access_token")
-        if not token:
-            raise BrokerError(f"KIS token response did not include access_token: {payload}")
-        self._access_token = str(token)
-        self._access_token_expires_at = time.time() + int(payload.get("expires_in", 86400))
-        return self._access_token
 
     def _get(self, path: str, tr_id: str, params: dict[str, Any]) -> dict[str, Any]:
         response = self._send_with_retry("GET", path, headers=self._headers(tr_id), params=params)
@@ -320,26 +324,27 @@ class KISBrokerAdapter:
         json: dict[str, Any] | None = None,
         include_auth_headers: bool = True,
     ) -> requests.Response:
-        url = f"{self.base_url}{path}"
-        last_response: requests.Response | None = None
-        for attempt in range(self.MAX_RETRIES + 1):
-            self._throttle()
-            response = self.session.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                json=json,
-                timeout=self.config.timeout_seconds,
-            )
-            last_response = response
-            if not self._is_retryable_response(response):
-                self._raise_for_response(response)
-                return response
-            time.sleep(min(4.0, 0.8 * (2 ** attempt)))
-        assert last_response is not None
-        self._raise_for_response(last_response)
-        return last_response
+        with self._request_lock:
+            url = f"{self.base_url}{path}"
+            last_response: requests.Response | None = None
+            for attempt in range(self.MAX_RETRIES + 1):
+                self._throttle()
+                response = self.session.request(
+                    method,
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=json,
+                    timeout=self.config.timeout_seconds,
+                )
+                last_response = response
+                if not self._is_retryable_response(response):
+                    self._raise_for_response(response)
+                    return response
+                time.sleep(min(4.0, 0.8 * (2 ** attempt)))
+            assert last_response is not None
+            self._raise_for_response(last_response)
+            return last_response
 
     def _throttle(self) -> None:
         elapsed = time.time() - self._last_request_at
@@ -381,34 +386,23 @@ def load_kis_env() -> None:
         load_dotenv()
 
 
-def kis_config_from_env(prefix: str = "KIS") -> BrokerConfig:
+def kis_config_from_env() -> BrokerConfig:
     load_kis_env()
-    app_key = os.getenv(f"{prefix}_APP_KEY")
-    app_secret = os.getenv(f"{prefix}_APP_SECRET")
-    account_no = os.getenv(f"{prefix}_ACCOUNT") or os.getenv(f"{prefix}_ACCOUNT_NO")
-    product_code = os.getenv(f"{prefix}_PRODUCT_CODE") or os.getenv(f"{prefix}_ACCOUNT_PRODUCT_CODE") or "01"
-    environment = os.getenv(f"{prefix}_ENV", "paper")
-    base_url = os.getenv(f"{prefix}_BASE_URL")
-    timeout_seconds = int(os.getenv(f"{prefix}_TIMEOUT_SECONDS", "10"))
-    missing = []
-    if not app_key:
-        missing.append(f"{prefix}_APP_KEY")
-    if not app_secret:
-        missing.append(f"{prefix}_APP_SECRET")
-    if not account_no:
-        missing.append(f"{prefix}_ACCOUNT or {prefix}_ACCOUNT_NO")
-    if missing:
-        raise BrokerError("Missing KIS environment variables: " + ", ".join(missing))
+    app_key = os.getenv("KIS_APP_KEY", "").strip()
+    app_secret = os.getenv("KIS_APP_SECRET", "").strip()
+    account = os.getenv("KIS_ACCOUNT", "").strip() or os.getenv("KIS_ACCOUNT_NO", "").strip()
+    product_code = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "01").strip() or "01"
+    environment = os.getenv("KIS_ENV", "paper").strip().lower()
+    if not app_key or not app_secret or not account:
+        raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and KIS_ACCOUNT are required")
     return BrokerConfig(
         app_key=app_key,
         app_secret=app_secret,
-        account_no=account_no,
+        account_no=account,
         account_product_code=product_code,
-        environment=environment,
-        base_url=base_url,
-        timeout_seconds=timeout_seconds,
+        is_live=environment == "live",
     )
 
 
-def kis_broker_from_env(prefix: str = "KIS", session: requests.Session | None = None) -> KISBrokerAdapter:
-    return KISBrokerAdapter(config=kis_config_from_env(prefix=prefix), session=session)
+def kis_broker_from_env() -> KISBrokerAdapter:
+    return KISBrokerAdapter(kis_config_from_env())

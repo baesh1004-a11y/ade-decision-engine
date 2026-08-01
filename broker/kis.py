@@ -8,7 +8,7 @@ import requests
 
 from broker.base import BrokerConfig, BrokerError, BrokerOrder, BrokerPosition, OrderResult
 
-try:  # python-dotenv is optional for tests and production secret managers.
+try:
     from dotenv import load_dotenv
 except Exception:  # pragma: no cover
     load_dotenv = None
@@ -17,19 +17,13 @@ except Exception:  # pragma: no cover
 class KISBrokerAdapter:
     """Korea Investment Securities REST broker adapter.
 
-    Scope v1:
-    - OAuth token issuance
-    - domestic stock cash/position normalization skeleton
-    - guarded paper/live order entry interface
-    - KIS API rate-limit guard and retry handling
-
-    Secrets must be injected from environment variables or a secret manager.
-    Never hard-code APP_KEY, APP_SECRET, account number, or token in GitHub.
+    Supports domestic paper-trading account, quotes, orderable cash/quantity,
+    pending/executed orders, order placement, and order revise/cancel. Live orders
+    remain intentionally blocked.
     """
 
     PAPER_BASE_URL = "https://openapivts.koreainvestment.com:29443"
     LIVE_BASE_URL = "https://openapi.koreainvestment.com:9443"
-
     MIN_REQUEST_INTERVAL_SECONDS = 0.75
     MAX_RETRIES = 3
     BALANCE_CACHE_SECONDS = 2.0
@@ -47,11 +41,10 @@ class KISBrokerAdapter:
 
     def get_cash(self) -> float:
         payload = self._request_domestic_balance()
-        # KIS response fields differ by product and endpoint version. Keep parsing defensive.
         output2 = payload.get("output2") or []
         if isinstance(output2, list) and output2:
             row = output2[0]
-            for key in ("dnca_tot_amt", "ord_psbl_cash", "nass_amt"):
+            for key in ("ord_psbl_cash", "dnca_tot_amt", "nass_amt"):
                 if key in row:
                     return self._to_float(row[key])
         return 0.0
@@ -62,100 +55,177 @@ class KISBrokerAdapter:
         positions: list[BrokerPosition] = []
         if not isinstance(rows, list):
             return positions
-
         for row in rows:
             quantity = int(self._to_float(row.get("hldg_qty", 0)))
             if quantity <= 0:
                 continue
-            positions.append(
-                BrokerPosition(
-                    market="kr",
-                    ticker=str(row.get("pdno", "")),
-                    name=str(row.get("prdt_name", "")),
-                    quantity=quantity,
-                    average_price=self._to_float(row.get("pchs_avg_pric", 0)),
-                    current_price=self._to_float(row.get("prpr", 0)),
-                    evaluation_amount=self._to_float(row.get("evlu_amt", 0)),
-                    pnl=self._to_float(row.get("evlu_pfls_amt", 0)),
-                    pnl_rate=self._to_float(row.get("evlu_pfls_rt", 0)),
-                )
-            )
+            positions.append(BrokerPosition(
+                market="kr",
+                ticker=str(row.get("pdno", "")),
+                name=str(row.get("prdt_name", "")),
+                quantity=quantity,
+                average_price=self._to_float(row.get("pchs_avg_pric", 0)),
+                current_price=self._to_float(row.get("prpr", 0)),
+                evaluation_amount=self._to_float(row.get("evlu_amt", 0)),
+                pnl=self._to_float(row.get("evlu_pfls_amt", 0)),
+                pnl_rate=self._to_float(row.get("evlu_pfls_rt", 0)),
+            ))
         return positions
+
+    def get_quote(self, ticker: str) -> dict[str, Any]:
+        payload = self._get(
+            "/uapi/domestic-stock/v1/quotations/inquire-price",
+            tr_id="FHKST01010100",
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": str(ticker).zfill(6)},
+        )
+        row = payload.get("output") or {}
+        return {
+            "ticker": str(ticker).zfill(6),
+            "price": self._to_float(row.get("stck_prpr")),
+            "change": self._to_float(row.get("prdy_vrss")),
+            "change_rate": self._to_float(row.get("prdy_ctrt")),
+            "open": self._to_float(row.get("stck_oprc")),
+            "high": self._to_float(row.get("stck_hgpr")),
+            "low": self._to_float(row.get("stck_lwpr")),
+            "volume": int(self._to_float(row.get("acml_vol"))),
+            "turnover": self._to_float(row.get("acml_tr_pbmn")),
+            "upper_limit": self._to_float(row.get("stck_mxpr")),
+            "lower_limit": self._to_float(row.get("stck_llam")),
+            "market_cap": self._to_float(row.get("hts_avls")),
+            "per": self._to_float(row.get("per")),
+            "pbr": self._to_float(row.get("pbr")),
+            "raw": row,
+        }
+
+    def get_orderable(self, ticker: str, price: float, order_type: str = "LIMIT") -> dict[str, Any]:
+        ord_dvsn = "01" if order_type == "MARKET" else "00"
+        params = {
+            "CANO": self.config.account_no,
+            "ACNT_PRDT_CD": self.config.account_product_code,
+            "PDNO": str(ticker).zfill(6),
+            "ORD_UNPR": "0" if order_type == "MARKET" else str(int(price)),
+            "ORD_DVSN": ord_dvsn,
+            "CMA_EVLU_AMT_ICLD_YN": "N",
+            "OVRS_ICLD_YN": "N",
+        }
+        payload = self._get(
+            "/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+            tr_id="VTTC8908R" if not self.config.is_live else "TTTC8908R",
+            params=params,
+        )
+        row = payload.get("output") or {}
+        return {
+            "orderable_cash": self._to_float(row.get("ord_psbl_cash")),
+            "orderable_quantity": int(self._to_float(row.get("max_buy_qty"))),
+            "cash_orderable_quantity": int(self._to_float(row.get("nrcvb_buy_qty"))),
+            "raw": row,
+        }
+
+    def get_daily_orders(self, executed_only: bool = False) -> list[dict[str, Any]]:
+        params = {
+            "CANO": self.config.account_no,
+            "ACNT_PRDT_CD": self.config.account_product_code,
+            "INQR_STRT_DT": time.strftime("%Y%m%d"),
+            "INQR_END_DT": time.strftime("%Y%m%d"),
+            "SLL_BUY_DVSN_CD": "00",
+            "INQR_DVSN": "00",
+            "PDNO": "",
+            "CCLD_DVSN": "01" if executed_only else "00",
+            "ORD_GNO_BRNO": "",
+            "ODNO": "",
+            "INQR_DVSN_3": "00",
+            "INQR_DVSN_1": "",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+        payload = self._get(
+            "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
+            tr_id="VTTC8001R" if not self.config.is_live else "TTTC8001R",
+            params=params,
+        )
+        rows = payload.get("output1") or []
+        return [dict(row) for row in rows] if isinstance(rows, list) else []
+
+    def get_pending_orders(self) -> list[dict[str, Any]]:
+        rows = self.get_daily_orders(executed_only=False)
+        pending: list[dict[str, Any]] = []
+        for row in rows:
+            remain = int(self._to_float(row.get("rmn_qty")))
+            if remain <= 0:
+                continue
+            pending.append({
+                "order_id": str(row.get("odno") or row.get("ODNO") or ""),
+                "ticker": str(row.get("pdno") or ""),
+                "name": str(row.get("prdt_name") or ""),
+                "side": str(row.get("sll_buy_dvsn_cd_name") or ""),
+                "order_quantity": int(self._to_float(row.get("ord_qty"))),
+                "executed_quantity": int(self._to_float(row.get("tot_ccld_qty"))),
+                "remaining_quantity": remain,
+                "order_price": self._to_float(row.get("ord_unpr")),
+                "order_time": str(row.get("ord_tmd") or ""),
+                "raw": row,
+            })
+        return pending
 
     def place_order(self, order: BrokerOrder) -> OrderResult:
         order.validate()
         if order.market != "kr":
-            raise BrokerError("KISBrokerAdapter v1 supports Korean domestic stocks first")
+            raise BrokerError("KISBrokerAdapter supports Korean domestic stocks first")
         if order.dry_run:
-            return OrderResult(
-                accepted=True,
-                broker="kis",
-                market=order.market,
-                ticker=order.ticker,
-                side=order.side,
-                quantity=order.quantity,
-                message="dry_run accepted; no order was sent to KIS",
-                raw={"dry_run": True},
-            )
+            return OrderResult(True, "kis", order.market, order.ticker, order.side, order.quantity,
+                               message="dry_run accepted; no order was sent to KIS", raw={"dry_run": True})
         if self.config.is_live:
-            raise BrokerError("Live KIS orders are intentionally blocked in v1. Use paper trading first.")
-
+            raise BrokerError("Live KIS orders are intentionally blocked. Use paper trading.")
         tr_id = "VTTC0802U" if order.side == "BUY" else "VTTC0801U"
         ord_dvsn = "01" if order.order_type == "MARKET" else "00"
         price = "0" if order.order_type == "MARKET" else str(int(order.limit_price or 0))
+        body = {"CANO": self.config.account_no, "ACNT_PRDT_CD": self.config.account_product_code,
+                "PDNO": str(order.ticker).zfill(6), "ORD_DVSN": ord_dvsn,
+                "ORD_QTY": str(order.quantity), "ORD_UNPR": price}
+        payload = self._post("/uapi/domestic-stock/v1/trading/order-cash", tr_id=tr_id, json=body)
+        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+        return OrderResult(payload.get("rt_cd") == "0", "kis", order.market, order.ticker, order.side,
+                           order.quantity, str(output.get("ODNO")) if output else None,
+                           str(payload.get("msg1", "")), payload)
+
+    def revise_or_cancel_order(self, order_id: str, quantity: int, *, price: float = 0,
+                               cancel: bool = False, total_quantity: bool = True) -> dict[str, Any]:
+        if self.config.is_live:
+            raise BrokerError("Live KIS order revisions are intentionally blocked.")
         body = {
             "CANO": self.config.account_no,
             "ACNT_PRDT_CD": self.config.account_product_code,
-            "PDNO": order.ticker,
-            "ORD_DVSN": ord_dvsn,
-            "ORD_QTY": str(order.quantity),
-            "ORD_UNPR": price,
+            "KRX_FWDG_ORD_ORGNO": "",
+            "ORGN_ODNO": str(order_id),
+            "ORD_DVSN": "00",
+            "RVSE_CNCL_DVSN_CD": "02" if cancel else "01",
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": "0" if cancel else str(int(price)),
+            "QTY_ALL_ORD_YN": "Y" if total_quantity else "N",
         }
-        payload = self._post("/uapi/domestic-stock/v1/trading/order-cash", tr_id=tr_id, json=body)
-        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
-        return OrderResult(
-            accepted=payload.get("rt_cd") == "0",
-            broker="kis",
-            market=order.market,
-            ticker=order.ticker,
-            side=order.side,
-            quantity=order.quantity,
-            order_id=str(output.get("ODNO")) if output else None,
-            message=str(payload.get("msg1", "")),
-            raw=payload,
+        return self._post(
+            "/uapi/domestic-stock/v1/trading/order-rvsecncl",
+            tr_id="VTTC0803U",
+            json=body,
         )
 
     def _request_domestic_balance(self) -> dict[str, Any]:
         now = time.time()
         if self._last_balance_payload is not None and now - self._last_balance_at < self.BALANCE_CACHE_SECONDS:
             return self._last_balance_payload
-
-        params = {
-            "CANO": self.config.account_no,
-            "ACNT_PRDT_CD": self.config.account_product_code,
-            "AFHR_FLPR_YN": "N",
-            "OFL_YN": "",
-            "INQR_DVSN": "02",
-            "UNPR_DVSN": "01",
-            "FUND_STTL_ICLD_YN": "N",
-            "FNCG_AMT_AUTO_RDPT_YN": "N",
-            "PRCS_DVSN": "01",
-            "CTX_AREA_FK100": "",
-            "CTX_AREA_NK100": "",
-        }
-        tr_id = "VTTC8434R" if not self.config.is_live else "TTTC8434R"
-        payload = self._get("/uapi/domestic-stock/v1/trading/inquire-balance", tr_id=tr_id, params=params)
+        params = {"CANO": self.config.account_no, "ACNT_PRDT_CD": self.config.account_product_code,
+                  "AFHR_FLPR_YN": "N", "OFL_YN": "", "INQR_DVSN": "02", "UNPR_DVSN": "01",
+                  "FUND_STTL_ICLD_YN": "N", "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "01",
+                  "CTX_AREA_FK100": "", "CTX_AREA_NK100": ""}
+        payload = self._get("/uapi/domestic-stock/v1/trading/inquire-balance",
+                            tr_id="VTTC8434R" if not self.config.is_live else "TTTC8434R", params=params)
         self._last_balance_payload = payload
         self._last_balance_at = time.time()
         return payload
 
     def _headers(self, tr_id: str | None = None) -> dict[str, str]:
-        headers = {
-            "authorization": f"Bearer {self._token()}",
-            "appkey": self.config.app_key,
-            "appsecret": self.config.app_secret,
-            "content-type": "application/json; charset=utf-8",
-        }
+        headers = {"authorization": f"Bearer {self._token()}", "appkey": self.config.app_key,
+                   "appsecret": self.config.app_secret, "content-type": "application/json; charset=utf-8"}
         if tr_id:
             headers["tr_id"] = tr_id
         return headers
@@ -163,83 +233,40 @@ class KISBrokerAdapter:
     def _token(self) -> str:
         if self._access_token and time.time() < self._access_token_expires_at - 60:
             return self._access_token
-        body = {
-            "grant_type": "client_credentials",
-            "appkey": self.config.app_key,
-            "appsecret": self.config.app_secret,
-        }
-        response = self._send_with_retry(
-            "POST",
-            "/oauth2/tokenP",
-            json=body,
-            include_auth_headers=False,
-        )
+        response = self._send_with_retry("POST", "/oauth2/tokenP",
+                                         json={"grant_type": "client_credentials", "appkey": self.config.app_key,
+                                               "appsecret": self.config.app_secret},
+                                         include_auth_headers=False)
         payload = response.json()
         token = payload.get("access_token")
         if not token:
             raise BrokerError(f"KIS token response did not include access_token: {payload}")
         self._access_token = str(token)
-        expires_in = int(payload.get("expires_in", 24 * 60 * 60))
-        self._access_token_expires_at = time.time() + expires_in
+        self._access_token_expires_at = time.time() + int(payload.get("expires_in", 86400))
         return self._access_token
 
     def _get(self, path: str, tr_id: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = self._send_with_retry(
-            "GET",
-            path,
-            headers=self._headers(tr_id),
-            params=params,
-        )
-        payload = response.json()
-        self._raise_for_kis_error(payload)
-        return payload
+        response = self._send_with_retry("GET", path, headers=self._headers(tr_id), params=params)
+        payload = response.json(); self._raise_for_kis_error(payload); return payload
 
     def _post(self, path: str, tr_id: str, json: dict[str, Any]) -> dict[str, Any]:
-        response = self._send_with_retry(
-            "POST",
-            path,
-            headers=self._headers(tr_id),
-            json=json,
-        )
-        payload = response.json()
-        self._raise_for_kis_error(payload)
-        return payload
+        response = self._send_with_retry("POST", path, headers=self._headers(tr_id), json=json)
+        payload = response.json(); self._raise_for_kis_error(payload); return payload
 
-    def _send_with_retry(
-        self,
-        method: str,
-        path: str,
-        *,
-        headers: dict[str, str] | None = None,
-        params: dict[str, Any] | None = None,
-        json: dict[str, Any] | None = None,
-        include_auth_headers: bool = True,
-    ) -> requests.Response:
-        url = f"{self.base_url}{path}"
-        last_response: requests.Response | None = None
-
+    def _send_with_retry(self, method: str, path: str, *, headers: dict[str, str] | None = None,
+                         params: dict[str, Any] | None = None, json: dict[str, Any] | None = None,
+                         include_auth_headers: bool = True) -> requests.Response:
+        url = f"{self.base_url}{path}"; last_response: requests.Response | None = None
         for attempt in range(self.MAX_RETRIES + 1):
             self._throttle()
-            response = self.session.request(
-                method,
-                url,
-                headers=headers,
-                params=params,
-                json=json,
-                timeout=self.config.timeout_seconds,
-            )
+            response = self.session.request(method, url, headers=headers, params=params, json=json,
+                                            timeout=self.config.timeout_seconds)
             last_response = response
-
             if not self._is_retryable_response(response):
-                self._raise_for_response(response)
-                return response
-
-            wait_seconds = min(4.0, 0.8 * (2**attempt))
-            time.sleep(wait_seconds)
-
+                self._raise_for_response(response); return response
+            time.sleep(min(4.0, 0.8 * (2 ** attempt)))
         assert last_response is not None
-        self._raise_for_response(last_response)
-        return last_response
+        self._raise_for_response(last_response); return last_response
 
     def _throttle(self) -> None:
         elapsed = time.time() - self._last_request_at
@@ -253,10 +280,7 @@ class KISBrokerAdapter:
                 payload = response.json()
             except ValueError:
                 return response.status_code in {429, 502, 503, 504}
-            if payload.get("msg_cd") in self.RATE_LIMIT_CODES:
-                return True
-            if "초당 거래건수" in str(payload.get("msg1", "")):
-                return True
+            return payload.get("msg_cd") in self.RATE_LIMIT_CODES or "초당 거래건수" in str(payload.get("msg1", ""))
         return False
 
     @staticmethod
@@ -280,32 +304,11 @@ class KISBrokerAdapter:
 
 
 def load_kis_env() -> None:
-    """Load .env when python-dotenv is available.
-
-    The function is intentionally safe when python-dotenv is not installed so
-    production deployments can rely on native environment variables or secret
-    managers without importing dotenv.
-    """
-
     if load_dotenv is not None:
         load_dotenv()
 
 
 def kis_config_from_env(prefix: str = "KIS") -> BrokerConfig:
-    """Build BrokerConfig from environment variables.
-
-    Required variables:
-    - KIS_APP_KEY
-    - KIS_APP_SECRET
-    - KIS_ACCOUNT or KIS_ACCOUNT_NO
-    - KIS_PRODUCT_CODE or KIS_ACCOUNT_PRODUCT_CODE
-
-    Optional variables:
-    - KIS_ENV=paper|live
-    - KIS_BASE_URL
-    - KIS_TIMEOUT_SECONDS
-    """
-
     load_kis_env()
     app_key = os.getenv(f"{prefix}_APP_KEY")
     app_secret = os.getenv(f"{prefix}_APP_SECRET")
@@ -314,29 +317,16 @@ def kis_config_from_env(prefix: str = "KIS") -> BrokerConfig:
     environment = os.getenv(f"{prefix}_ENV", "paper")
     base_url = os.getenv(f"{prefix}_BASE_URL")
     timeout_seconds = int(os.getenv(f"{prefix}_TIMEOUT_SECONDS", "10"))
-
     missing = []
-    if not app_key:
-        missing.append(f"{prefix}_APP_KEY")
-    if not app_secret:
-        missing.append(f"{prefix}_APP_SECRET")
-    if not account_no:
-        missing.append(f"{prefix}_ACCOUNT or {prefix}_ACCOUNT_NO")
+    if not app_key: missing.append(f"{prefix}_APP_KEY")
+    if not app_secret: missing.append(f"{prefix}_APP_SECRET")
+    if not account_no: missing.append(f"{prefix}_ACCOUNT or {prefix}_ACCOUNT_NO")
     if missing:
         raise BrokerError("Missing KIS environment variables: " + ", ".join(missing))
-
-    return BrokerConfig(
-        app_key=app_key,
-        app_secret=app_secret,
-        account_no=account_no,
-        account_product_code=product_code,
-        environment=environment,
-        base_url=base_url,
-        timeout_seconds=timeout_seconds,
-    )
+    return BrokerConfig(app_key=app_key, app_secret=app_secret, account_no=account_no,
+                        account_product_code=product_code, environment=environment,
+                        base_url=base_url, timeout_seconds=timeout_seconds)
 
 
 def kis_broker_from_env(prefix: str = "KIS", session: requests.Session | None = None) -> KISBrokerAdapter:
-    """Create a KISBrokerAdapter from .env or process environment."""
-
     return KISBrokerAdapter(config=kis_config_from_env(prefix=prefix), session=session)

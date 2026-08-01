@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -27,7 +29,9 @@ from dashboard.order_candidate_store import (
     OrderCandidateStoreError,
     clear_candidates,
     delete_candidate,
+    import_legacy_candidates,
     list_candidates,
+    list_legacy_candidates,
     mark_selected,
     store_health,
     upsert_candidate,
@@ -38,7 +42,7 @@ from markets.profiles import get_market_profile
 from markets.symbol_display import build_name_map, normalize_ticker
 from recommendation.run_context import load_latest_context
 
-THEME_PATH = __import__("pathlib").Path(__file__).with_name("ade_zero_base_theme.css")
+THEME_PATH = Path(__file__).with_name("ade_zero_base_theme.css")
 CUSTOM_CSS = """<style>[data-testid="stSidebar"],[data-testid="stSidebarNav"],section[data-testid="stSidebar"],div[data-testid="stSidebarNav"],[data-testid="collapsedControl"],button[kind="headerNoPadding"]{display:none!important}</style>"""
 LIVE_REFRESH_SECONDS = 5
 LIVE_PRICE_MAX_AGE_SECONDS = 15
@@ -89,6 +93,8 @@ def _init_state() -> None:
         "ade_last_submitted_at": 0.0,
         "ade_last_client_request_id": None,
         "ade_owner_id": uuid.uuid4().hex,
+        "ade_candidate_delete_target": None,
+        "ade_candidate_clear_market": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -233,36 +239,7 @@ def _render_orders() -> None:
     account, positions, error = _kis_data(refresh=st.button("KIS 계좌 새로고침", key="kis_orders_refresh") if market == "kr" else False) if market == "kr" else (None, [], None)
     tabs = st.tabs(["주문후보", "보유종목", "미체결", "당일 체결"])
     with tabs[0]:
-        query = st.text_input("종목 검색", placeholder="국내 종목코드 6자리")
-        normalized_query = _normalize_kr_ticker(query) if market == "kr" else query.strip().upper()
-        if query and not normalized_query:
-            st.caption("국내 주문은 6자리 숫자 종목코드를 입력하세요.")
-        if normalized_query and st.button("주문후보에 추가", type="primary"):
-            try:
-                _add_order_candidate(market, normalized_query, normalized_query)
-                st.rerun()
-            except OrderCandidateStoreError as exc:
-                st.error(str(exc))
-        try:
-            rows = _load_order_candidates(market)
-        except OrderCandidateStoreError as exc:
-            st.error(str(exc))
-            rows = []
-        if rows:
-            if st.button("현재 시장 후보 전체 삭제", key=f"clear_candidates_{market}"):
-                clear_candidates(_owner_id(), market)
-                st.rerun()
-        for row in rows:
-            c1, c2 = st.columns([5, 1])
-            ticker = str(row["ticker"])
-            if c1.button(f"{row['symbol']} · {ticker}", key=f"candidate_{market}_{ticker}", use_container_width=True):
-                mark_selected(_owner_id(), market, ticker)
-                st.session_state.ade_order_ticker = ticker
-                _reset_order_confirmation()
-                st.rerun()
-            if c2.button("삭제", key=f"delete_candidate_{market}_{ticker}", use_container_width=True):
-                delete_candidate(_owner_id(), market, ticker)
-                st.rerun()
+        _render_candidate_controls(market)
     with tabs[1]:
         if not positions:
             st.info("보유종목이 없습니다.")
@@ -279,6 +256,72 @@ def _render_orders() -> None:
         st.caption(f"KIS 주문가능 현금 ₩{float(account.get('cash') or 0):,.0f}")
     if error:
         st.caption(error)
+
+
+def _render_candidate_controls(market: str) -> None:
+    query = st.text_input("종목 검색", placeholder="국내 종목코드 6자리")
+    normalized_query = _normalize_kr_ticker(query) if market == "kr" else query.strip().upper()
+    if query and not normalized_query:
+        st.caption("국내 주문은 6자리 숫자 종목코드를 입력하세요.")
+    if normalized_query and st.button("주문후보에 추가", type="primary"):
+        try:
+            _add_order_candidate(market, normalized_query, normalized_query)
+            st.rerun()
+        except OrderCandidateStoreError as exc:
+            st.error(str(exc))
+
+    try:
+        legacy_rows = list_legacy_candidates(market)
+    except OrderCandidateStoreError as exc:
+        st.error(str(exc))
+        legacy_rows = []
+    if legacy_rows:
+        if st.button(f"기존 JSON 후보 {len(legacy_rows)}개 가져오기", key=f"import_legacy_{market}"):
+            try:
+                imported = import_legacy_candidates(_owner_id(), market)
+                st.session_state.ade_order_flash = {"level": "success", "message": f"기존 주문후보 {imported}개를 가져왔습니다."}
+                st.rerun()
+            except OrderCandidateStoreError as exc:
+                st.error(str(exc))
+
+    try:
+        rows = _load_order_candidates(market)
+    except OrderCandidateStoreError as exc:
+        st.error(str(exc))
+        rows = []
+
+    if rows:
+        if st.session_state.ade_candidate_clear_market == market:
+            st.warning(f"{market.upper()} 시장 주문후보 {len(rows)}개를 모두 삭제합니다.")
+            c1, c2 = st.columns(2)
+            if c1.button("전체 삭제 확정", key=f"confirm_clear_candidates_{market}", type="primary", use_container_width=True):
+                clear_candidates(_owner_id(), market)
+                st.session_state.ade_candidate_clear_market = None
+                st.rerun()
+            if c2.button("취소", key=f"cancel_clear_candidates_{market}", use_container_width=True):
+                st.session_state.ade_candidate_clear_market = None
+                st.rerun()
+        elif st.button("현재 시장 후보 전체 삭제", key=f"clear_candidates_{market}"):
+            st.session_state.ade_candidate_clear_market = market
+            st.rerun()
+
+    for row in rows:
+        c1, c2 = st.columns([5, 1])
+        ticker = str(row["ticker"])
+        target = (market, ticker)
+        if c1.button(f"{row['symbol']} · {ticker}", key=f"candidate_{market}_{ticker}", use_container_width=True):
+            mark_selected(_owner_id(), market, ticker)
+            st.session_state.ade_order_ticker = ticker
+            _reset_order_confirmation()
+            st.rerun()
+        if st.session_state.ade_candidate_delete_target == target:
+            if c2.button("확정", key=f"confirm_delete_candidate_{market}_{ticker}", type="primary", use_container_width=True):
+                delete_candidate(_owner_id(), market, ticker)
+                st.session_state.ade_candidate_delete_target = None
+                st.rerun()
+        elif c2.button("삭제", key=f"delete_candidate_{market}_{ticker}", use_container_width=True):
+            st.session_state.ade_candidate_delete_target = target
+            st.rerun()
 
 
 def _render_pending_orders() -> None:
@@ -721,7 +764,11 @@ def _render_status_bar() -> None:
         ws_text = "실시간 대기"
         ws_class = ""
     candidate_health = store_health()
-    candidate_text = "후보DB 정상" if candidate_health.get("status") == "정상" else "후보DB 오류"
+    candidate_text = (
+        f"후보DB 정상·v{candidate_health.get('schema_version')}"
+        if candidate_health.get("status") == "정상"
+        else "후보DB 오류"
+    )
     candidate_class = "ade-ok" if candidate_health.get("status") == "정상" else ""
     st.markdown(f'<div class="ade-statusbar"><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span>Yahoo 연결</span><span class="{candidate_class}">{candidate_text}</span><span>추천·Replay·STO 규칙 유지</span></div>', unsafe_allow_html=True)
 
@@ -731,7 +778,6 @@ def _safe_json(value: Any) -> dict[str, Any]:
         return value
     if isinstance(value, str):
         try:
-            import json
             parsed = json.loads(value)
             return parsed if isinstance(parsed, dict) else {}
         except Exception:

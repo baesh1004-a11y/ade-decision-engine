@@ -4,6 +4,7 @@ import json
 import os
 import threading
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Callable
 
@@ -46,11 +47,7 @@ class KISTradeSnapshot:
 
 
 class KISWebSocketMarketClient:
-    """Shared KIS domestic market-data WebSocket client.
-
-    One process-level connection subscribes to multiple tickers for both orderbook
-    and trade streams. It keeps only the latest immutable snapshots in memory.
-    """
+    """Shared KIS domestic market-data WebSocket client with bounded subscriptions."""
 
     PAPER_APPROVAL_URL = "https://openapivts.koreainvestment.com:29443/oauth2/Approval"
     LIVE_APPROVAL_URL = "https://openapi.koreainvestment.com:9443/oauth2/Approval"
@@ -58,17 +55,22 @@ class KISWebSocketMarketClient:
     LIVE_WS_URL = "ws://ops.koreainvestment.com:21000"
     ORDERBOOK_TR_ID = "H0STASP0"
     TRADE_TR_ID = "H0STCNT0"
+    MAX_ACTIVE_TICKERS = 5
+    APPROVAL_KEY_TTL_SECONDS = 3600
 
     def __init__(self) -> None:
         self._orderbooks: dict[str, KISOrderBookSnapshot] = {}
         self._trades: dict[str, KISTradeSnapshot] = {}
-        self._subscriptions: set[str] = set()
+        self._subscriptions: OrderedDict[str, float] = OrderedDict()
         self._lock = threading.RLock()
+        self._approval_lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._ws: websocket.WebSocketApp | None = None
         self._approval_key: str | None = None
+        self._approval_key_obtained_at = 0.0
         self.last_error: str | None = None
+        self.last_error_at: float | None = None
         self.connected = False
 
     def start(self) -> None:
@@ -89,12 +91,60 @@ class KISWebSocketMarketClient:
 
     def subscribe(self, ticker: str) -> None:
         normalized = str(ticker).zfill(6)
+        removed: list[str] = []
         with self._lock:
             first = normalized not in self._subscriptions
-            self._subscriptions.add(normalized)
+            self._subscriptions.pop(normalized, None)
+            self._subscriptions[normalized] = time.time()
+            while len(self._subscriptions) > self.MAX_ACTIVE_TICKERS:
+                old, _ = self._subscriptions.popitem(last=False)
+                removed.append(old)
         self.start()
-        if first and self.connected and self._ws is not None and self._approval_key:
-            self._send_subscriptions(self._ws, self._approval_key, (normalized,))
+        if self.connected and self._ws is not None and self._approval_key:
+            if first:
+                self._send_subscription_messages(self._ws, self._approval_key, (normalized,), subscribe=True)
+            for old in removed:
+                self._send_subscription_messages(self._ws, self._approval_key, (old,), subscribe=False)
+                self._drop_snapshots(old)
+
+    def unsubscribe(self, ticker: str) -> None:
+        normalized = str(ticker).zfill(6)
+        with self._lock:
+            existed = normalized in self._subscriptions
+            self._subscriptions.pop(normalized, None)
+        if existed and self.connected and self._ws is not None and self._approval_key:
+            self._send_subscription_messages(self._ws, self._approval_key, (normalized,), subscribe=False)
+        self._drop_snapshots(normalized)
+
+    def set_active_tickers(self, tickers: tuple[str, ...] | list[str]) -> None:
+        normalized = tuple(dict.fromkeys(str(t).zfill(6) for t in tickers))[-self.MAX_ACTIVE_TICKERS:]
+        current = set(self.subscribed_tickers())
+        desired = set(normalized)
+        for ticker in current - desired:
+            self.unsubscribe(ticker)
+        for ticker in normalized:
+            self.subscribe(ticker)
+
+    def subscribed_tickers(self) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(self._subscriptions.keys())
+
+    def latest_received_at(self) -> float | None:
+        with self._lock:
+            times = [item.received_at for item in self._orderbooks.values()]
+            times.extend(item.received_at for item in self._trades.values())
+            return max(times) if times else None
+
+    def health_snapshot(self) -> dict[str, object]:
+        latest = self.latest_received_at()
+        return {
+            "connected": self.connected,
+            "subscription_count": len(self.subscribed_tickers()),
+            "subscribed_tickers": self.subscribed_tickers(),
+            "latest_received_at": latest,
+            "last_error": self.last_error,
+            "last_error_at": self.last_error_at,
+        }
 
     def latest_orderbook(self, ticker: str) -> KISOrderBookSnapshot | None:
         with self._lock:
@@ -103,6 +153,11 @@ class KISWebSocketMarketClient:
     def latest_trade(self, ticker: str) -> KISTradeSnapshot | None:
         with self._lock:
             return self._trades.get(str(ticker).zfill(6))
+
+    def _drop_snapshots(self, ticker: str) -> None:
+        with self._lock:
+            self._orderbooks.pop(ticker, None)
+            self._trades.pop(ticker, None)
 
     def _run_forever(self) -> None:
         retry = 1.0
@@ -120,7 +175,7 @@ class KISWebSocketMarketClient:
                 self._ws.run_forever(ping_interval=30, ping_timeout=10)
                 retry = 1.0
             except Exception as exc:
-                self.last_error = str(exc)
+                self._set_error(str(exc))
                 self.connected = False
                 time.sleep(retry)
                 retry = min(15.0, retry * 2)
@@ -128,27 +183,38 @@ class KISWebSocketMarketClient:
     def _on_open(self, ws: websocket.WebSocketApp, approval_key: str) -> None:
         self.connected = True
         self.last_error = None
-        with self._lock:
-            tickers = tuple(sorted(self._subscriptions))
-        self._send_subscriptions(ws, approval_key, tickers)
+        self.last_error_at = None
+        self._send_subscription_messages(ws, approval_key, self.subscribed_tickers(), subscribe=True)
 
     def _on_error(self, _ws: websocket.WebSocketApp, error: object) -> None:
-        self.last_error = str(error)
+        self._set_error(str(error))
         self.connected = False
 
     def _on_close(self, _ws: websocket.WebSocketApp, _code: int | None, message: str | None) -> None:
         self.connected = False
         if message:
-            self.last_error = message
+            self._set_error(message)
 
-    def _send_subscriptions(self, ws: websocket.WebSocketApp, approval_key: str, tickers: tuple[str, ...]) -> None:
+    def _set_error(self, message: str) -> None:
+        self.last_error = message
+        self.last_error_at = time.time()
+
+    def _send_subscription_messages(
+        self,
+        ws: websocket.WebSocketApp,
+        approval_key: str,
+        tickers: tuple[str, ...],
+        *,
+        subscribe: bool,
+    ) -> None:
+        tr_type = "1" if subscribe else "2"
         for ticker in tickers:
             for tr_id in (self.ORDERBOOK_TR_ID, self.TRADE_TR_ID):
                 payload = {
                     "header": {
                         "approval_key": approval_key,
                         "custtype": "P",
-                        "tr_type": "1",
+                        "tr_type": tr_type,
                         "content-type": "utf-8",
                     },
                     "body": {"input": {"tr_id": tr_id, "tr_key": ticker}},
@@ -170,9 +236,14 @@ class KISWebSocketMarketClient:
                     ws.send(message)
                 except Exception:
                     pass
+                return
             body = payload.get("body") or {}
-            if isinstance(body, dict) and body.get("msg1"):
-                self.last_error = str(body.get("msg1"))
+            rt_cd = str(body.get("rt_cd") or payload.get("rt_cd") or "")
+            if rt_cd and rt_cd != "0":
+                self._set_error(str(body.get("msg1") or payload.get("msg1") or "KIS realtime subscription error"))
+            elif rt_cd == "0":
+                self.last_error = None
+                self.last_error_at = None
             return
 
         parts = message.split("|", 3)
@@ -184,11 +255,15 @@ class KISWebSocketMarketClient:
             if snapshot is not None:
                 with self._lock:
                     self._orderbooks[snapshot.ticker] = snapshot
+                self.last_error = None
+                self.last_error_at = None
         elif tr_id == self.TRADE_TR_ID:
             snapshot = self._parse_trade(parts[3])
             if snapshot is not None:
                 with self._lock:
                     self._trades[snapshot.ticker] = snapshot
+                self.last_error = None
+                self.last_error_at = None
 
     @staticmethod
     def _number(fields: list[str], index: int) -> float:
@@ -234,21 +309,27 @@ class KISWebSocketMarketClient:
         )
 
     def _request_approval_key(self) -> str:
-        app_key = os.getenv("KIS_APP_KEY", "").strip()
-        app_secret = os.getenv("KIS_APP_SECRET", "").strip()
-        if not app_key or not app_secret:
-            raise BrokerError("KIS WebSocket requires KIS_APP_KEY and KIS_APP_SECRET")
-        response = requests.post(
-            self.PAPER_APPROVAL_URL if self._is_paper() else self.LIVE_APPROVAL_URL,
-            json={"grant_type": "client_credentials", "appkey": app_key, "secretkey": app_secret},
-            timeout=15,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        key = payload.get("approval_key")
-        if not key:
-            raise BrokerError(f"KIS approval response missing approval_key: {payload}")
-        return str(key)
+        with self._approval_lock:
+            now = time.time()
+            if self._approval_key and now - self._approval_key_obtained_at < self.APPROVAL_KEY_TTL_SECONDS:
+                return self._approval_key
+            app_key = os.getenv("KIS_APP_KEY", "").strip()
+            app_secret = os.getenv("KIS_APP_SECRET", "").strip()
+            if not app_key or not app_secret:
+                raise BrokerError("KIS WebSocket requires KIS_APP_KEY and KIS_APP_SECRET")
+            response = requests.post(
+                self.PAPER_APPROVAL_URL if self._is_paper() else self.LIVE_APPROVAL_URL,
+                json={"grant_type": "client_credentials", "appkey": app_key, "secretkey": app_secret},
+                timeout=15,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            key = payload.get("approval_key")
+            if not key:
+                raise BrokerError(f"KIS approval response missing approval_key: {payload}")
+            self._approval_key = str(key)
+            self._approval_key_obtained_at = now
+            return self._approval_key
 
     @staticmethod
     def _is_paper() -> bool:
@@ -289,4 +370,4 @@ class KISWebSocketOrderBookClient:
         self._client.subscribe(self.ticker)
 
     def stop(self) -> None:
-        return
+        self._client.unsubscribe(self.ticker)

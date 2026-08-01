@@ -22,6 +22,7 @@ class KISBrokerAdapter:
     LIVE_BASE_URL = "https://openapi.koreainvestment.com:9443"
     MIN_REQUEST_INTERVAL_SECONDS = 0.75
     MAX_RETRIES = 3
+    MAX_ORDER_PAGES = 20
     BALANCE_CACHE_SECONDS = 2.0
     RATE_LIMIT_CODES = {"EGW00201"}
 
@@ -135,15 +136,31 @@ class KISBrokerAdapter:
             "CTX_AREA_FK100": "",
             "CTX_AREA_NK100": "",
         }
-        payload = self._get(
-            "/uapi/domestic-stock/v1/trading/inquire-daily-ccld",
-            tr_id="VTTC8001R" if not self.config.is_live else "TTTC8001R",
-            params=params,
-        )
-        rows = payload.get("output1") or []
-        if not isinstance(rows, list):
-            return []
-        return [self._normalize_daily_order(row) for row in rows]
+        path = "/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+        tr_id = "VTTC8001R" if not self.config.is_live else "TTTC8001R"
+        normalized: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for _ in range(self.MAX_ORDER_PAGES):
+            payload = self._get(path, tr_id=tr_id, params=params)
+            rows = payload.get("output1") or []
+            if not isinstance(rows, list):
+                raise BrokerError("KIS daily-order response output1 is not a list")
+            for raw in rows:
+                row = self._normalize_daily_order(raw)
+                dedupe_key = (str(row.get("order_id") or ""), str(row.get("ticker") or ""), str(row.get("order_time") or ""))
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                normalized.append(row)
+            next_fk = str(payload.get("ctx_area_fk100") or payload.get("CTX_AREA_FK100") or "").strip()
+            next_nk = str(payload.get("ctx_area_nk100") or payload.get("CTX_AREA_NK100") or "").strip()
+            if not next_fk and not next_nk:
+                break
+            if next_fk == params["CTX_AREA_FK100"] and next_nk == params["CTX_AREA_NK100"]:
+                break
+            params["CTX_AREA_FK100"] = next_fk
+            params["CTX_AREA_NK100"] = next_nk
+        return normalized
 
     def get_pending_orders(self) -> list[dict[str, Any]]:
         return [row for row in self.get_daily_orders(executed_only=False) if int(row.get("remaining_quantity") or 0) > 0]
@@ -205,11 +222,21 @@ class KISBrokerAdapter:
             "ORD_UNPR": "0" if cancel else str(int(price)),
             "QTY_ALL_ORD_YN": "Y" if total_quantity else "N",
         }
-        return self._post(
+        payload = self._post(
             "/uapi/domestic-stock/v1/trading/order-rvsecncl",
             tr_id="VTTC0803U",
             json=body,
         )
+        if str(payload.get("rt_cd") or "") != "0":
+            raise BrokerError(str(payload.get("msg1") or "KIS order revision/cancel rejected"))
+        output = payload.get("output") if isinstance(payload.get("output"), dict) else {}
+        return {
+            "accepted": True,
+            "action": "cancel" if cancel else "revise",
+            "order_id": str(output.get("ODNO") or output.get("odno") or order_id),
+            "message": str(payload.get("msg1") or ""),
+            "raw": payload,
+        }
 
     def _request_domestic_balance(self) -> dict[str, Any]:
         with self._request_lock:
@@ -258,6 +285,11 @@ class KISBrokerAdapter:
         remaining_quantity = int(number("rmn_qty", "RMN_QTY"))
         if remaining_quantity <= 0 and order_quantity >= executed_quantity:
             remaining_quantity = order_quantity - executed_quantity
+        executed_price = number("avg_prvs", "AVG_PRVS", "avg_pric", "AVG_PRIC", "avg_ccld_pric", "AVG_CCLD_PRIC")
+        if executed_price <= 0 and executed_quantity > 0:
+            total_executed_amount = number("tot_ccld_amt", "TOT_CCLD_AMT")
+            if total_executed_amount > 0:
+                executed_price = total_executed_amount / executed_quantity
         return {
             "order_id": str(pick("odno", "ODNO")),
             "organization_no": str(pick("ord_gno_brno", "ORD_GNO_BRNO", "krx_fwdg_ord_orgno", "KRX_FWDG_ORD_ORGNO")),
@@ -268,7 +300,7 @@ class KISBrokerAdapter:
             "executed_quantity": executed_quantity,
             "remaining_quantity": remaining_quantity,
             "order_price": number("ord_unpr", "ORD_UNPR"),
-            "executed_price": number("avg_prvs", "AVG_PRVS", "avg_pric", "AVG_PRIC", "tot_ccld_amt"),
+            "executed_price": executed_price,
             "order_time": str(pick("ord_tmd", "ORD_TMD")),
             "raw": dict(row),
         }
@@ -347,31 +379,37 @@ class KISBrokerAdapter:
             return last_response
 
     def _throttle(self) -> None:
-        elapsed = time.time() - self._last_request_at
+        elapsed = time.monotonic() - self._last_request_at
         if elapsed < self.MIN_REQUEST_INTERVAL_SECONDS:
             time.sleep(self.MIN_REQUEST_INTERVAL_SECONDS - elapsed)
-        self._last_request_at = time.time()
+        self._last_request_at = time.monotonic()
 
     def _is_retryable_response(self, response: requests.Response) -> bool:
-        if response.status_code in {429, 500, 502, 503, 504}:
+        if response.status_code == 429:
+            return True
+        if response.status_code >= 500:
             try:
                 payload = response.json()
-            except ValueError:
-                return response.status_code in {429, 502, 503, 504}
-            return payload.get("msg_cd") in self.RATE_LIMIT_CODES or "초당 거래건수" in str(payload.get("msg1", ""))
-        return False
+            except Exception:
+                return True
+            return str(payload.get("msg_cd")) in self.RATE_LIMIT_CODES or response.status_code >= 500
+        try:
+            payload = response.json()
+        except Exception:
+            return False
+        return str(payload.get("msg_cd")) in self.RATE_LIMIT_CODES
 
     @staticmethod
     def _raise_for_response(response: requests.Response) -> None:
         try:
             response.raise_for_status()
         except requests.HTTPError as exc:
-            raise BrokerError(f"KIS HTTP error: {response.status_code} {response.text}") from exc
+            raise BrokerError(f"KIS HTTP {response.status_code}: {response.text[:500]}") from exc
 
     @staticmethod
     def _raise_for_kis_error(payload: dict[str, Any]) -> None:
-        if payload.get("rt_cd") not in {None, "0"}:
-            raise BrokerError(f"KIS API error: {payload.get('msg_cd')} {payload.get('msg1')}")
+        if str(payload.get("rt_cd", "0")) != "0":
+            raise BrokerError(f"KIS {payload.get('msg_cd', '')}: {payload.get('msg1', '')}")
 
     @staticmethod
     def _to_float(value: Any) -> float:
@@ -381,26 +419,26 @@ class KISBrokerAdapter:
             return 0.0
 
 
-def load_kis_env() -> None:
-    if load_dotenv is not None:
-        load_dotenv()
-
-
 def kis_config_from_env() -> BrokerConfig:
-    load_kis_env()
+    if load_dotenv:
+        load_dotenv()
     app_key = os.getenv("KIS_APP_KEY", "").strip()
     app_secret = os.getenv("KIS_APP_SECRET", "").strip()
-    account = os.getenv("KIS_ACCOUNT", "").strip() or os.getenv("KIS_ACCOUNT_NO", "").strip()
-    product_code = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "01").strip() or "01"
+    account_no = (os.getenv("KIS_ACCOUNT", "").strip() or os.getenv("KIS_ACCOUNT_NO", "").strip()).replace("-", "")
+    product_code = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", os.getenv("KIS_PRODUCT_CODE", "01")).strip()
     environment = os.getenv("KIS_ENV", "paper").strip().lower()
-    if not app_key or not app_secret or not account:
+    is_live = environment == "live"
+    if not app_key or not app_secret or not account_no:
         raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and KIS_ACCOUNT are required")
     return BrokerConfig(
+        provider="kis",
         app_key=app_key,
         app_secret=app_secret,
-        account_no=account,
+        account_no=account_no,
         account_product_code=product_code,
-        is_live=environment == "live",
+        is_live=is_live,
+        base_url=os.getenv("KIS_BASE_URL", "").strip() or None,
+        timeout_seconds=float(os.getenv("KIS_TIMEOUT_SECONDS", "10")),
     )
 
 

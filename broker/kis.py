@@ -419,21 +419,38 @@ class KISBrokerAdapter:
             return 0.0
 
 
+def _normalize_account_parts(raw_account: str, raw_product: str) -> tuple[str, str]:
+    account_text = "".join(ch for ch in str(raw_account or "").strip() if ch.isdigit())
+    product_text = "".join(ch for ch in str(raw_product or "").strip() if ch.isdigit())
+    if len(account_text) == 10 and not product_text:
+        account_text, product_text = account_text[:8], account_text[8:]
+    elif len(account_text) == 10 and product_text == "01":
+        account_text = account_text[:8]
+    if len(account_text) != 8:
+        raise BrokerError("KIS account number must be exactly 8 digits (CANO)")
+    if not product_text:
+        product_text = "01"
+    if len(product_text) != 2:
+        raise BrokerError("KIS account product code must be exactly 2 digits (ACNT_PRDT_CD)")
+    return account_text, product_text
+
+
 def kis_config_from_env() -> BrokerConfig:
     if load_dotenv:
         load_dotenv()
     app_key = os.getenv("KIS_APP_KEY", "").strip()
     app_secret = os.getenv("KIS_APP_SECRET", "").strip()
-    account_no = (os.getenv("KIS_ACCOUNT_NO", "").strip() or os.getenv("KIS_ACCOUNT", "").strip()).replace("-", "")
-    product_code = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", os.getenv("KIS_PRODUCT_CODE", "01")).strip()
+    raw_account = os.getenv("KIS_ACCOUNT_NO", "").strip() or os.getenv("KIS_ACCOUNT", "").strip()
+    raw_product = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "").strip() or os.getenv("KIS_PRODUCT_CODE", "").strip()
     environment = os.getenv("KIS_ENV", "paper").strip().lower() or "paper"
-    if not app_key or not app_secret or not account_no:
+    if not app_key or not app_secret or not raw_account:
         raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and KIS_ACCOUNT_NO (or KIS_ACCOUNT) are required")
+    account_no, product_code = _normalize_account_parts(raw_account, raw_product)
     return BrokerConfig(
         app_key=app_key,
         app_secret=app_secret,
         account_no=account_no,
-        account_product_code=product_code or "01",
+        account_product_code=product_code,
         environment=environment,
         base_url=os.getenv("KIS_BASE_URL", "").strip() or None,
         timeout_seconds=int(float(os.getenv("KIS_TIMEOUT_SECONDS", "10"))),

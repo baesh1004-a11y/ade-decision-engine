@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, TypeVar
@@ -124,26 +125,54 @@ def _snapshot_cache_key(db_path: str | Path) -> str:
     return f"snapshot:{Path(db_path).resolve()}"
 
 
+def _snapshot_age_seconds(account: dict[str, Any] | None) -> float | None:
+    if not account:
+        return None
+    raw = account.get("captured_at")
+    if not raw:
+        return None
+    try:
+        captured = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        if captured.tzinfo is None:
+            captured = captured.replace(tzinfo=timezone.utc)
+        return max(0.0, time.time() - captured.timestamp())
+    except Exception:
+        return None
+
+
 def read_kis_snapshot(
     db_path: str | Path,
     *,
     refresh_cache: bool = False,
     cache_seconds: float = 15.0,
+    max_age_seconds: int = 60,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+    if not kis_configured():
+        return None, [], "KIS 환경변수가 설정되지 않았습니다."
     key = _snapshot_cache_key(db_path)
     if refresh_cache:
         _invalidate(key)
     try:
         account, positions = _cached(key, cache_seconds, lambda: KISAccountSync(db_path).latest_snapshot())
-        error = None if kis_configured() else "KIS 환경변수가 설정되지 않았습니다."
-        return account, positions, error
+        if account is None:
+            return None, [], "저장된 KIS 계좌 스냅샷이 없습니다. 새로고침이 필요합니다."
+        age = _snapshot_age_seconds(account)
+        if age is None:
+            return None, [], "KIS 계좌 스냅샷 시각을 확인할 수 없습니다."
+        if age > max_age_seconds:
+            return None, [], f"KIS 계좌 데이터가 오래되었습니다. 마지막 수신 후 {int(age)}초 경과"
+        return account, positions, None
     except Exception as exc:
         return None, [], str(exc)
 
 
-def refresh_kis_snapshot(db_path: str | Path) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
+def refresh_kis_snapshot(
+    db_path: str | Path,
+    *,
+    max_age_seconds: int = 60,
+) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
     if not kis_configured():
-        return read_kis_snapshot(db_path, refresh_cache=True)
+        return None, [], "KIS 환경변수가 설정되지 않았습니다."
     try:
         snapshot, positions = KISAccountSync(db_path).sync(broker=_broker())
         account = snapshot.to_dict()
@@ -151,8 +180,14 @@ def refresh_kis_snapshot(db_path: str | Path) -> tuple[dict[str, Any] | None, li
         invalidate_order_caches()
         return account, positions, None
     except Exception as exc:
-        account, positions, _ = read_kis_snapshot(db_path, refresh_cache=True)
-        return account, positions, str(exc)
+        account, positions, cached_error = read_kis_snapshot(
+            db_path,
+            refresh_cache=True,
+            max_age_seconds=max_age_seconds,
+        )
+        if account is not None:
+            return account, positions, f"KIS 실시간 갱신 실패 · 최근 정상값 사용: {exc}"
+        return None, [], f"KIS 계좌 조회 실패: {exc}" + (f" · {cached_error}" if cached_error else "")
 
 
 def load_kis_snapshot(
@@ -161,8 +196,11 @@ def load_kis_snapshot(
     refresh: bool = False,
     max_age_seconds: int = 60,
 ) -> tuple[dict[str, Any] | None, list[dict[str, Any]], str | None]:
-    del max_age_seconds
-    return refresh_kis_snapshot(db_path) if refresh else read_kis_snapshot(db_path)
+    return (
+        refresh_kis_snapshot(db_path, max_age_seconds=max_age_seconds)
+        if refresh
+        else read_kis_snapshot(db_path, max_age_seconds=max_age_seconds)
+    )
 
 
 def load_kis_quote(ticker: str, *, refresh: bool = False) -> tuple[dict[str, Any] | None, str | None]:

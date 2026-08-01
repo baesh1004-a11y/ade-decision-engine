@@ -95,6 +95,28 @@ class KISBrokerAdapter:
             "raw": row,
         }
 
+    def get_index_quote(self, index_code: str) -> dict[str, Any]:
+        normalized = str(index_code).strip()
+        payload = self._get(
+            "/uapi/domestic-stock/v1/quotations/inquire-index-price",
+            tr_id="FHPUP02100000",
+            params={"FID_COND_MRKT_DIV_CODE": "U", "FID_INPUT_ISCD": normalized},
+        )
+        row = payload.get("output") or {}
+        value = self._to_float(row.get("bstp_nmix_prpr"))
+        change = self._to_float(row.get("bstp_nmix_prdy_vrss"))
+        change_rate = self._to_float(row.get("bstp_nmix_prdy_ctrt"))
+        if value <= 0:
+            raise BrokerError(f"KIS index quote is empty for {normalized}")
+        return {
+            "code": normalized,
+            "value": value,
+            "change": change,
+            "change_rate": change_rate,
+            "updated_at": time.time(),
+            "raw": row,
+        }
+
     def get_orderable(self, ticker: str, price: float, order_type: str = "LIMIT") -> dict[str, Any]:
         ord_dvsn = "01" if order_type.upper() == "MARKET" else "00"
         params = {
@@ -435,32 +457,29 @@ def _normalize_account_parts(raw_account: str, raw_product: str) -> tuple[str, s
     return account_text, product_text
 
 
-def _resolve_account_env() -> tuple[str, str]:
-    account_value = os.getenv("KIS_ACCOUNT", "").strip()
-    account_no_value = os.getenv("KIS_ACCOUNT_NO", "").strip()
-    product_value = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "").strip() or os.getenv("KIS_PRODUCT_CODE", "").strip()
-
-    # Legacy Render layout: KIS_ACCOUNT is CANO and KIS_ACCOUNT_NO stores product code.
-    if len("".join(ch for ch in account_value if ch.isdigit())) == 8 and len("".join(ch for ch in account_no_value if ch.isdigit())) == 2 and not product_value:
-        return account_value, account_no_value
-
-    # Standard layout: KIS_ACCOUNT_NO is CANO and the product code is separate.
-    if len("".join(ch for ch in account_no_value if ch.isdigit())) in {8, 10}:
-        return account_no_value, product_value
-
-    # Fallback to legacy account alias.
-    return account_value or account_no_value, product_value
-
-
 def kis_config_from_env() -> BrokerConfig:
     if load_dotenv:
         load_dotenv()
     app_key = os.getenv("KIS_APP_KEY", "").strip()
     app_secret = os.getenv("KIS_APP_SECRET", "").strip()
-    raw_account, raw_product = _resolve_account_env()
+    account_primary = os.getenv("KIS_ACCOUNT_NO", "").strip()
+    account_legacy = os.getenv("KIS_ACCOUNT", "").strip()
+    product_primary = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "").strip()
+    product_alias = os.getenv("KIS_PRODUCT_CODE", "").strip()
+
+    # Legacy Render layout: KIS_ACCOUNT contains the 8-digit CANO and
+    # KIS_ACCOUNT_NO contains the 2-digit product code.
+    legacy_layout = len("".join(ch for ch in account_legacy if ch.isdigit())) == 8 and len("".join(ch for ch in account_primary if ch.isdigit())) == 2
+    if legacy_layout:
+        raw_account = account_legacy
+        raw_product = product_primary or product_alias or account_primary
+    else:
+        raw_account = account_primary or account_legacy
+        raw_product = product_primary or product_alias
+
     environment = os.getenv("KIS_ENV", "paper").strip().lower() or "paper"
     if not app_key or not app_secret or not raw_account:
-        raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and a valid KIS account are required")
+        raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and KIS_ACCOUNT_NO (or KIS_ACCOUNT) are required")
     account_no, product_code = _normalize_account_parts(raw_account, raw_product)
     return BrokerConfig(
         app_key=app_key,

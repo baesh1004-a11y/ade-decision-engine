@@ -38,6 +38,8 @@ from dashboard.order_candidate_store import (
     store_health,
     upsert_candidate,
 )
+from dashboard.professional_components import render_workspace_card, render_workspace_intro
+from dashboard.ui_workspace import DEFAULT_WORKSPACE_KEY, WORKSPACES, get_workspace
 from jp_radar.live_chart import make_live_radar_chart
 from jp_radar.stock_engine import JPStockRadarEngine
 from markets.profiles import get_market_profile
@@ -60,10 +62,28 @@ def _apply_zero_base_theme() -> None:
         st.markdown(f"<style>{THEME_PATH.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
 
 
+def _apply_workspace_theme() -> None:
+    workspace = get_workspace(st.session_state.get("ade_ui_workspace"))
+    st.markdown(f'<div id="ade-workspace-root" class="{workspace.theme_class}"></div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <style>
+        .stApp {{ --ade-workspace-name: '{workspace.short_name}'; }}
+        body:has(#ade-workspace-root.{workspace.theme_class}) .stApp {{}}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def run() -> None:
     st.set_page_config(page_title="ADE Decision Engine", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
     _apply_zero_base_theme()
     _init_state()
+    if not st.session_state.ade_ui_workspace_confirmed:
+        _render_workspace_selector()
+        return
+    _apply_workspace_theme()
     _render_top_navigation()
     page = st.session_state.ade_primary_page
     if page == "상황종합판":
@@ -106,15 +126,46 @@ def _init_state() -> None:
         "ade_owner_id": uuid.uuid4().hex,
         "ade_candidate_delete_target": None,
         "ade_candidate_clear_market": None,
+        "ade_ui_workspace": DEFAULT_WORKSPACE_KEY,
+        "ade_ui_workspace_confirmed": False,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
 
 
+def _render_workspace_selector() -> None:
+    render_workspace_intro()
+    selected = st.session_state.ade_ui_workspace
+    columns = st.columns(5)
+    for index, workspace in enumerate(WORKSPACES):
+        with columns[index]:
+            render_workspace_card(workspace, selected=selected == workspace.key)
+            if st.button(
+                "선택됨" if selected == workspace.key else "이 디자인 선택",
+                key=f"workspace_{workspace.key}",
+                type="primary" if selected == workspace.key else "secondary",
+                use_container_width=True,
+            ):
+                st.session_state.ade_ui_workspace = workspace.key
+                st.rerun()
+    st.divider()
+    workspace = get_workspace(selected)
+    st.markdown(f"**현재 선택:** {workspace.name}")
+    c1, c2 = st.columns([1, 1])
+    if c1.button("이 워크스페이스로 시작", type="primary", use_container_width=True):
+        st.session_state.ade_ui_workspace_confirmed = True
+        st.rerun()
+    if c2.button("추천 조합으로 시작", use_container_width=True):
+        st.session_state.ade_ui_workspace = "ai_copilot"
+        st.session_state.ade_ui_workspace_confirmed = True
+        st.rerun()
+
+
 def _render_top_navigation() -> None:
-    c1, c2, c3, c4, c5, c6 = st.columns([1.8, 1.1, 1.1, 1, .28, 1.15])
+    workspace = get_workspace(st.session_state.ade_ui_workspace)
+    c1, c2, c3, c4, c5, c6, c7 = st.columns([1.8, 1.1, 1.1, 1, .28, 1.15, 1.1])
     with c1:
-        st.markdown('<div class="ade-brand">ADE <span class="ade-subtle">Decision Engine</span></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="ade-brand">ADE <span class="ade-subtle">{workspace.short_name}</span></div>', unsafe_allow_html=True)
     for col, label in [(c2, "상황종합판"), (c3, "추천결과"), (c4, "주문")]:
         if col.button(label, type="primary" if st.session_state.ade_primary_page == label else "secondary", use_container_width=True):
             st.session_state.ade_primary_page = label
@@ -125,6 +176,11 @@ def _render_top_navigation() -> None:
     with c6:
         if st.button("JP Radar", type="primary" if st.session_state.ade_primary_page == "JP Radar" else "secondary", use_container_width=True):
             st.session_state.ade_primary_page = "JP Radar"
+            st.rerun()
+    with c7:
+        if st.button("UI 변경", use_container_width=True):
+            _release_live_lease()
+            st.session_state.ade_ui_workspace_confirmed = False
             st.rerun()
     st.markdown('<div class="ade-divider"></div>', unsafe_allow_html=True)
 
@@ -367,7 +423,7 @@ def _render_pending_orders() -> None:
                     st.session_state.ade_last_order_action_signature = revise_signature
                     st.session_state.ade_last_order_action_at = time.time()
                     st.session_state.ade_order_flash = {"level": "success", "message": f"정정 요청 완료 · 요청ID {correlation_id}"}
-                except Exception as exc:
+                except Exception:
                     LOGGER.exception("KIS revise failed correlation_id=%s", correlation_id)
                     st.session_state.ade_order_flash = {"level": "error", "message": f"정정 요청에 실패했습니다. 요청ID {correlation_id}"}
                 finally:
@@ -758,6 +814,7 @@ def _load_order_candidates(market: str | None = None) -> list[dict[str, Any]]:
 
 
 def _render_status_bar() -> None:
+    workspace = get_workspace(st.session_state.ade_ui_workspace)
     if kis_paper_enabled():
         kis_text, kis_class = "KIS 모의투자 설정", "ade-ok"
     elif kis_configured():
@@ -778,7 +835,7 @@ def _render_status_bar() -> None:
     schema_version = candidate_health.get("schema_version")
     candidate_text = f"후보DB 정상 v{schema_version}" if candidate_health.get("status") == "정상" else "후보DB 오류"
     candidate_class = "ade-ok" if candidate_health.get("status") == "정상" else ""
-    st.markdown(f'<div class="ade-statusbar"><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span>Yahoo 참고용</span><span class="{candidate_class}">{candidate_text}</span><span>추천·Replay·STO 규칙 유지</span></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="ade-statusbar"><span>{workspace.short_name}</span><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span>Yahoo 참고용</span><span class="{candidate_class}">{candidate_text}</span><span>추천·Replay·STO 규칙 유지</span></div>', unsafe_allow_html=True)
 
 
 def _safe_json(value: Any) -> dict[str, Any]:

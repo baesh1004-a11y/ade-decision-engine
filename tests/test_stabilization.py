@@ -44,3 +44,20 @@ def test_market_metric_uses_last_bar_timestamp() -> None:
     metric = _history_metric('TEST', 'TEST', history, 9999999999.0)
     assert metric.value == 101.0
     assert metric.updated_at == pytest.approx(index[-1].timestamp())
+
+
+def test_kis_config_matches_broker_config_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    from broker.kis import kis_config_from_env
+
+    monkeypatch.setenv('KIS_APP_KEY', 'key')
+    monkeypatch.setenv('KIS_APP_SECRET', 'secret')
+    monkeypatch.setenv('KIS_ACCOUNT_NO', '12345678')
+    monkeypatch.setenv('KIS_ACCOUNT_PRODUCT_CODE', '01')
+    monkeypatch.setenv('KIS_ENV', 'paper')
+    monkeypatch.delenv('KIS_ACCOUNT', raising=False)
+
+    config = kis_config_from_env()
+    assert config.account_no == '12345678'
+    assert config.account_product_code == '01'
+    assert config.environment == 'paper'
+    assert config.is_live is False

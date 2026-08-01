@@ -435,16 +435,32 @@ def _normalize_account_parts(raw_account: str, raw_product: str) -> tuple[str, s
     return account_text, product_text
 
 
+def _resolve_account_env() -> tuple[str, str]:
+    account_value = os.getenv("KIS_ACCOUNT", "").strip()
+    account_no_value = os.getenv("KIS_ACCOUNT_NO", "").strip()
+    product_value = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "").strip() or os.getenv("KIS_PRODUCT_CODE", "").strip()
+
+    # Legacy Render layout: KIS_ACCOUNT is CANO and KIS_ACCOUNT_NO stores product code.
+    if len("".join(ch for ch in account_value if ch.isdigit())) == 8 and len("".join(ch for ch in account_no_value if ch.isdigit())) == 2 and not product_value:
+        return account_value, account_no_value
+
+    # Standard layout: KIS_ACCOUNT_NO is CANO and the product code is separate.
+    if len("".join(ch for ch in account_no_value if ch.isdigit())) in {8, 10}:
+        return account_no_value, product_value
+
+    # Fallback to legacy account alias.
+    return account_value or account_no_value, product_value
+
+
 def kis_config_from_env() -> BrokerConfig:
     if load_dotenv:
         load_dotenv()
     app_key = os.getenv("KIS_APP_KEY", "").strip()
     app_secret = os.getenv("KIS_APP_SECRET", "").strip()
-    raw_account = os.getenv("KIS_ACCOUNT_NO", "").strip() or os.getenv("KIS_ACCOUNT", "").strip()
-    raw_product = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "").strip() or os.getenv("KIS_PRODUCT_CODE", "").strip()
+    raw_account, raw_product = _resolve_account_env()
     environment = os.getenv("KIS_ENV", "paper").strip().lower() or "paper"
     if not app_key or not app_secret or not raw_account:
-        raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and KIS_ACCOUNT_NO (or KIS_ACCOUNT) are required")
+        raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and a valid KIS account are required")
     account_no, product_code = _normalize_account_parts(raw_account, raw_product)
     return BrokerConfig(
         app_key=app_key,

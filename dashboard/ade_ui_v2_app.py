@@ -4,6 +4,7 @@ import time
 
 import streamlit as st
 
+from dashboard import ade_ui_v1_app as base_ui
 from dashboard.ade_ui_v1_app import *  # noqa: F401,F403
 from dashboard.market_overview_service import (
     database_health,
@@ -25,8 +26,7 @@ def _render_market_metrics() -> None:
             if item.error:
                 col.caption(item.error[:80])
             continue
-        precision = 2
-        value = f"{item.value:,.{precision}f}"
+        value = f"{item.value:,.2f}"
         delta = f"{item.change:+,.2f} · {item.change_rate:+.2f}%" if item.change is not None else None
         col.metric(item.label, value, delta)
         if item.updated_at:
@@ -44,6 +44,7 @@ def _render_market_overview() -> None:
         @fragment(run_every=f"{MARKET_REFRESH_SECONDS}s")
         def _fragment_body() -> None:
             _render_market_metrics()
+
         _fragment_body()
 
     st.markdown("#### 주요 이벤트")
@@ -87,6 +88,23 @@ def _render_market_overview() -> None:
         )
 
 
+def _render_overview_v2() -> None:
+    tabs = st.segmented_control(
+        "상황종합판 하위 메뉴",
+        options=["시장", "이벤트", "내 투자"],
+        default=st.session_state.ade_overview_tab,
+        key="ade_overview_segment",
+        label_visibility="collapsed",
+    )
+    st.session_state.ade_overview_tab = tabs or "시장"
+    if tabs == "시장":
+        _render_market_overview()
+    elif tabs == "이벤트":
+        base_ui._render_event_timeline()
+    else:
+        base_ui._render_portfolio_overview()
+
+
 def _render_status_bar() -> None:
     metrics, market_error = load_market_overview()
     market_state = market_health(metrics, market_error)
@@ -125,18 +143,25 @@ def _render_status_bar() -> None:
 
 def run() -> None:
     st.set_page_config(page_title="ADE Decision Engine", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
-    _apply_zero_base_theme()
-    _init_state()
-    _render_top_navigation()
+    base_ui._apply_zero_base_theme()
+    base_ui._init_state()
+    if not st.session_state.ade_ui_workspace_confirmed:
+        base_ui._render_workspace_selector()
+        return
+    base_ui._apply_workspace_theme()
+    base_ui._render_top_navigation()
     page = st.session_state.ade_primary_page
     if page == "상황종합판":
-        _render_overview()
+        base_ui._release_live_lease()
+        _render_overview_v2()
     elif page == "추천결과":
-        _render_recommendations()
+        base_ui._release_live_lease()
+        base_ui._render_recommendations()
     elif page == "주문":
-        _render_orders()
+        base_ui._render_orders()
     else:
-        _render_jp_radar()
+        base_ui._release_live_lease()
+        base_ui._render_jp_radar()
     _render_status_bar()
 
 

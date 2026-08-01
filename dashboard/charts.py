@@ -196,9 +196,11 @@ def build_trading_chart(data: pd.DataFrame, title: str, *, height: int = 620) ->
         newshape=dict(line_color="#E7EEF5", line_width=1.2),
     )
 
-    axis = _axis_style()
-    fig.update_xaxes(**axis, showgrid=False, rangeslider_visible=False)
-    fig.update_yaxes(**axis, side="right")
+    x_axis = _axis_style()
+    x_axis["showgrid"] = False
+    x_axis["rangeslider_visible"] = False
+    fig.update_xaxes(**x_axis)
+    fig.update_yaxes(**_axis_style(), side="right")
     fig.update_yaxes(range=[0, 100], row=3, col=1)
     fig.update_yaxes(title_text="거래량", row=2, col=1, title_font=dict(size=9, color=MUTED))
     fig.update_yaxes(title_text="STO", row=3, col=1, title_font=dict(size=9, color=MUTED))

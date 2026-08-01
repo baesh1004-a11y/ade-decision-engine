@@ -34,6 +34,7 @@ from recommendation.run_context import load_latest_context
 ORDER_CANDIDATES_PATH = Path("output/ade_order_candidates.json")
 THEME_PATH = Path(__file__).with_name("ade_zero_base_theme.css")
 CUSTOM_CSS = """<style>[data-testid="stSidebar"],[data-testid="stSidebarNav"],section[data-testid="stSidebar"],div[data-testid="stSidebarNav"],[data-testid="collapsedControl"],button[kind="headerNoPadding"]{display:none!important}</style>"""
+LIVE_REFRESH_SECONDS = 5
 
 
 def _apply_zero_base_theme() -> None:
@@ -324,6 +325,26 @@ def _render_live_orderbook(ticker: str, fallback_price: float) -> tuple[float, f
     return best_ask, best_bid, midpoint, latest_received
 
 
+def _render_live_market_fragment(ticker: str, fallback_price: float) -> tuple[float, float, float]:
+    fragment = getattr(st, "fragment", None)
+    if fragment is None:
+        best_ask, best_bid, midpoint, _ = _render_live_orderbook(ticker, fallback_price)
+        time.sleep(LIVE_REFRESH_SECONDS)
+        st.rerun()
+        return best_ask, best_bid, midpoint
+
+    @fragment(run_every=f"{LIVE_REFRESH_SECONDS}s")
+    def _fragment_body() -> tuple[float, float, float]:
+        best_ask, best_bid, midpoint, _ = _render_live_orderbook(ticker, fallback_price)
+        trade = shared_market_client().latest_trade(ticker)
+        if trade:
+            st.caption(f"최근 체결 {trade.trade_time} · 체결량 {trade.volume:,}주 · 수신 {time.strftime('%H:%M:%S', time.localtime(trade.received_at))}")
+        return best_ask, best_bid, midpoint
+
+    result = _fragment_body()
+    return result if result is not None else (fallback_price, fallback_price, fallback_price)
+
+
 def _render_order_ticket(market: str, ticker: str) -> None:
     if st.button("← 주문목록으로 돌아가기"):
         st.session_state.ade_order_ticker = None
@@ -365,14 +386,17 @@ def _render_order_ticket(market: str, ticker: str) -> None:
     with left:
         live = st.toggle("KIS 실시간 10호가·체결", value=st.session_state.ade_live_orderbook, key="ade_live_orderbook_toggle", disabled=market != "kr" or not kis_configured())
         st.session_state.ade_live_orderbook = live
-        best_ask, best_bid, mid, latest_received = _render_live_orderbook(ticker, default_price) if live and market == "kr" else (default_price, default_price, default_price, None)
-        refresh = st.toggle("1초 자동 갱신", value=st.session_state.ade_live_refresh, key="ade_live_refresh_toggle", disabled=not live)
+        refresh = st.toggle(f"{LIVE_REFRESH_SECONDS}초 자동 갱신", value=st.session_state.ade_live_refresh, key="ade_live_refresh_toggle", disabled=not live)
         st.session_state.ade_live_refresh = refresh
-        if trade:
-            st.caption(f"최근 체결 {trade.trade_time} · 체결량 {trade.volume:,}주 · 수신 {time.strftime('%H:%M:%S', time.localtime(trade.received_at))}")
-        if refresh and live:
-            time.sleep(1.0)
-            st.rerun()
+        if live and market == "kr":
+            if refresh:
+                best_ask, best_bid, mid = _render_live_market_fragment(ticker, default_price)
+            else:
+                best_ask, best_bid, mid, _ = _render_live_orderbook(ticker, default_price)
+                if trade:
+                    st.caption(f"최근 체결 {trade.trade_time} · 체결량 {trade.volume:,}주 · 수신 {time.strftime('%H:%M:%S', time.localtime(trade.received_at))}")
+        else:
+            best_ask = best_bid = mid = default_price
     with right:
         side = st.radio("주문 구분", ["매수", "매도"], horizontal=True)
         order_type_label = st.selectbox("주문유형", ["지정가", "시장가"])

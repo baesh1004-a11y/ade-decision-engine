@@ -15,7 +15,7 @@ concurrency:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -23,9 +23,11 @@ jobs:
           python-version: '3.12'
           cache: pip
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.lock.txt
       - name: Compile repository
         run: python -m compileall .
+      - name: Ruff checks
+        run: ruff check broker dashboard datahub markets recommendation jp_radar tests
       - name: Import smoke tests
         env:
           KIS_APP_KEY: ''
@@ -37,60 +39,13 @@ jobs:
           python -c "from broker.kis import KISBrokerAdapter, kis_broker_from_env, kis_config_from_env"
           python -c "from dashboard.market_overview_service import load_market_overview"
           python -c "from broker.kis_websocket import KISWebSocketMarketClient; KISWebSocketMarketClient()"
-      - name: Verify order-candidate store
-        run: |
-          python - <<'PY'
-          import os
-          import tempfile
-          from pathlib import Path
-
-          with tempfile.TemporaryDirectory() as tmp:
-              os.environ['ADE_UI_STATE_DB'] = str(Path(tmp) / 'state.sqlite3')
-              import importlib
-              store = importlib.import_module('dashboard.order_candidate_store')
-              store.upsert_candidate('owner-a', 'kr', '005930', '삼성전자')
-              store.upsert_candidate('owner-a', 'kr', '000660', 'SK하이닉스')
-              store.upsert_candidate('owner-b', 'kr', '005930', '삼성전자')
-              assert len(store.list_candidates('owner-a')) == 2
-              assert len(store.list_candidates('owner-b')) == 1
-              store.mark_selected('owner-a', 'kr', '005930')
-              store.delete_candidate('owner-a', 'kr', '000660')
-              assert [r['ticker'] for r in store.list_candidates('owner-a')] == ['005930']
-              store.clear_candidates('owner-a')
-              assert store.list_candidates('owner-a') == []
-          PY
-      - name: Verify live-order guards
-        run: |
-          python - <<'PY'
-          from broker.base import BrokerConfig, BrokerError, BrokerOrder
-          from broker.kis import KISBrokerAdapter
-
-          config = BrokerConfig(
-              broker='kis',
-              account_no='00000000',
-              account_product_code='01',
-              app_key='test',
-              app_secret='test',
-              is_live=True,
-          )
-          adapter = KISBrokerAdapter(config)
-          order = BrokerOrder(
-              market='kr', ticker='005930', side='BUY', quantity=1,
-              order_type='MARKET', limit_price=None, dry_run=False,
-          )
-          try:
-              adapter.place_order(order)
-          except BrokerError:
-              pass
-          else:
-              raise AssertionError('live order guard did not block')
-          try:
-              adapter.revise_or_cancel_order('1', 1, cancel=True)
-          except BrokerError:
-              pass
-          else:
-              raise AssertionError('live revise/cancel guard did not block')
-          PY
+      - name: Pytest stabilization suite
+        env:
+          KIS_APP_KEY: ''
+          KIS_APP_SECRET: ''
+          KIS_ACCOUNT_NO: ''
+          KIS_ENV: paper
+        run: pytest -q
       - name: Start Streamlit headless
         env:
           KIS_APP_KEY: ''
@@ -98,9 +53,10 @@ jobs:
           KIS_ACCOUNT_NO: ''
           KIS_ENV: paper
         run: |
-          python -m streamlit run dashboard_app.py --server.headless true --server.address 127.0.0.1 --server.port 8501 > /tmp/streamlit.log 2>&1 &
+          set -euo pipefail
+          timeout 45s python -m streamlit run dashboard_app.py --server.headless true --server.address 127.0.0.1 --server.port 8501 > /tmp/streamlit.log 2>&1 &
           PID=$!
-          trap 'kill $PID || true' EXIT
+          trap 'kill $PID 2>/dev/null || true; wait $PID 2>/dev/null || true' EXIT
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:8501/_stcore/health; then
               exit 0
@@ -109,3 +65,13 @@ jobs:
           done
           cat /tmp/streamlit.log
           exit 1
+      - name: Upload failure logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-failure-logs-${{ github.run_id }}
+          path: |
+            /tmp/streamlit.log
+            .pytest_cache
+          if-no-files-found: ignore
+          retention-days: 7

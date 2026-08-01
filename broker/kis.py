@@ -424,21 +424,19 @@ def kis_config_from_env() -> BrokerConfig:
         load_dotenv()
     app_key = os.getenv("KIS_APP_KEY", "").strip()
     app_secret = os.getenv("KIS_APP_SECRET", "").strip()
-    account_no = (os.getenv("KIS_ACCOUNT", "").strip() or os.getenv("KIS_ACCOUNT_NO", "").strip()).replace("-", "")
+    account_no = (os.getenv("KIS_ACCOUNT_NO", "").strip() or os.getenv("KIS_ACCOUNT", "").strip()).replace("-", "")
     product_code = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", os.getenv("KIS_PRODUCT_CODE", "01")).strip()
-    environment = os.getenv("KIS_ENV", "paper").strip().lower()
-    is_live = environment == "live"
+    environment = os.getenv("KIS_ENV", "paper").strip().lower() or "paper"
     if not app_key or not app_secret or not account_no:
-        raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and KIS_ACCOUNT are required")
+        raise BrokerError("KIS_APP_KEY, KIS_APP_SECRET, and KIS_ACCOUNT_NO (or KIS_ACCOUNT) are required")
     return BrokerConfig(
-        provider="kis",
         app_key=app_key,
         app_secret=app_secret,
         account_no=account_no,
-        account_product_code=product_code,
-        is_live=is_live,
+        account_product_code=product_code or "01",
+        environment=environment,
         base_url=os.getenv("KIS_BASE_URL", "").strip() or None,
-        timeout_seconds=float(os.getenv("KIS_TIMEOUT_SECONDS", "10")),
+        timeout_seconds=int(float(os.getenv("KIS_TIMEOUT_SECONDS", "10"))),
     )
 
 

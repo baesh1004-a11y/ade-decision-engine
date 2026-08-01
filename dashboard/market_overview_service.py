@@ -233,8 +233,8 @@ def _load_sector_strength_from_db(path: Path, limit: int) -> tuple[list[dict[str
                 return [], "섹터 강도 계산 테이블이 없습니다."
             rows = conn.execute("SELECT sector, change_rate, breadth, relative_strength FROM sector_strength ORDER BY relative_strength DESC LIMIT ?", (limit,)).fetchall()
             return [dict(row) | {"source": "SQLite"} for row in rows], None
-    except Exception as exc:
-        return [], str(exc)
+    except Exception:
+        return [], "저장된 섹터 강도 데이터를 읽지 못했습니다."
 
 
 def _candidate_business_dates() -> list[str]:
@@ -256,6 +256,15 @@ def _pick_numeric(row: pd.Series, *names: str) -> float:
     return 0.0
 
 
+def _normalize_index_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.copy()
+    if isinstance(normalized.columns, pd.MultiIndex):
+        normalized.columns = [str(item[-1]) for item in normalized.columns.to_flat_index()]
+    else:
+        normalized.columns = [str(item) for item in normalized.columns]
+    return normalized
+
+
 def _load_index_frame(business_date: str, market: str) -> pd.DataFrame:
     last_error: Exception | None = None
     for caller in (
@@ -265,12 +274,23 @@ def _load_index_frame(business_date: str, market: str) -> pd.DataFrame:
         try:
             frame = caller()
             if frame is not None and not frame.empty:
-                return frame
+                return _normalize_index_frame(frame)
         except Exception as exc:
             last_error = exc
     if last_error:
         raise last_error
     return pd.DataFrame()
+
+
+def _previous_index_close(business_date: str, ticker: str) -> float:
+    try:
+        history = pykrx_stock.get_index_ohlcv_by_date(business_date, business_date, ticker)
+        if history is None or history.empty:
+            return 0.0
+        history = _normalize_index_frame(history)
+        return _pick_numeric(history.iloc[-1], "종가", "현재가", "지수")
+    except Exception:
+        return 0.0
 
 
 def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], str | None]:
@@ -279,24 +299,26 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
     if _SECTOR_CACHE and now - _SECTOR_CACHE[0] <= _SECTOR_CACHE_TTL_SECONDS:
         return _SECTOR_CACHE[1][:limit], _SECTOR_CACHE[2]
     if pykrx_stock is None:
-        return [], "pykrx를 불러오지 못했습니다."
+        return [], "국내 섹터 데이터 모듈을 불러오지 못했습니다."
 
     rows: list[dict[str, Any]] = []
-    errors: list[str] = []
     used_date = ""
     for business_date in _candidate_business_dates():
         date_rows: list[dict[str, Any]] = []
-        date_errors: list[str] = []
         for market in ("KOSPI", "KOSDAQ"):
             try:
                 frame = _load_index_frame(business_date, market)
                 for ticker, series in frame.iterrows():
                     ticker_text = str(ticker)
                     name = str(pykrx_stock.get_index_ticker_name(ticker_text) or ticker_text)
-                    close = _pick_numeric(series, "종가", "현재가")
-                    change_rate = _pick_numeric(series, "등락률")
-                    volume = _pick_numeric(series, "거래량")
-                    turnover = _pick_numeric(series, "거래대금")
+                    close = _pick_numeric(series, "종가", "현재가", "지수", "현재지수")
+                    change_rate = _pick_numeric(series, "등락률", "변동률")
+                    if change_rate == 0:
+                        previous = _previous_index_close(business_date, ticker_text)
+                        if previous > 0 and close > 0:
+                            change_rate = (close - previous) / previous * 100
+                    volume = _pick_numeric(series, "거래량", "거래주식수")
+                    turnover = _pick_numeric(series, "거래대금", "거래금액")
                     if close <= 0:
                         continue
                     strength = max(0.0, min(100.0, 50.0 + change_rate * 8.0))
@@ -312,22 +334,15 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
                             "as_of": business_date,
                         }
                     )
-            except Exception as exc:
-                date_errors.append(f"{market}: {exc}")
+            except Exception:
+                continue
         if date_rows:
             rows = date_rows
-            errors = date_errors
             used_date = business_date
             break
-        errors.extend(f"{business_date} {message}" for message in date_errors)
 
     rows.sort(key=lambda item: (float(item.get("relative_strength") or 0), float(item.get("turnover") or 0)), reverse=True)
-    warning_parts = []
-    if used_date:
-        warning_parts.append(f"기준일 {used_date}")
-    if errors:
-        warning_parts.append(" | ".join(errors[-4:]))
-    warning = " · ".join(warning_parts) if warning_parts else None
+    warning = f"기준일 {used_date}" if used_date else "국내 섹터 데이터를 불러오는 중입니다. 잠시 후 다시 확인해 주세요."
     _SECTOR_CACHE = (now, rows, warning)
     return rows[:limit], warning
 
@@ -341,7 +356,5 @@ def load_sector_strength(db_path: str | Path, *, limit: int = 10, refresh: bool 
         return db_rows, db_error
     live_rows, live_error = _calculate_live_sector_strength(limit)
     if live_rows:
-        warning = db_error if db_error else live_error
-        return live_rows, warning
-    errors = [message for message in (db_error, live_error) if message]
-    return [], " · ".join(errors) if errors else "섹터 강도 데이터를 계산하지 못했습니다."
+        return live_rows, live_error
+    return [], live_error or db_error or "국내 섹터 데이터를 불러오는 중입니다. 잠시 후 다시 확인해 주세요."

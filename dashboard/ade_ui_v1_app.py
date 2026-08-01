@@ -22,6 +22,7 @@ from recommendation.run_context import load_latest_context
 
 
 ORDER_CANDIDATES_PATH = Path("output/ade_order_candidates.json")
+THEME_PATH = Path(__file__).with_name("ade_zero_base_theme.css")
 
 
 CUSTOM_CSS = """
@@ -45,9 +46,14 @@ CUSTOM_CSS = """
 """
 
 
+def _apply_zero_base_theme() -> None:
+    if THEME_PATH.exists():
+        st.markdown(f"<style>{THEME_PATH.read_text(encoding='utf-8')}</style>", unsafe_allow_html=True)
+
+
 def run() -> None:
     st.set_page_config(page_title="ADE Decision Engine", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
-    apply_design_system(); st.markdown(CUSTOM_CSS, unsafe_allow_html=True); _init_state(); _render_top_navigation()
+    apply_design_system(); st.markdown(CUSTOM_CSS, unsafe_allow_html=True); _apply_zero_base_theme(); _init_state(); _render_top_navigation()
     page = st.session_state.ade_primary_page
     if page == "상황종합판": _render_overview()
     elif page == "추천결과": _render_recommendations()
@@ -148,14 +154,19 @@ def _render_professional_summary(data: dict[str,Any]) -> None:
 
 
 def _render_prediction_horizons(data: dict[str,Any]) -> None:
-    st.markdown("### 기간별 전망")
-    rows=[]; probs=data.get("up_probabilities") or {}; returns=data.get("returns_by_day") or {}; medians=data.get("median_returns") or {}
-    for day in [3,5,7,10,20]: rows.append({"기간":f"{day}일","상승확률":_pct(_first_number(probs.get(str(day)),probs.get(day),data.get(f"up_probability_{day}d"))),"기대수익률":_pct(_first_number(returns.get(str(day)),returns.get(day),data.get(f"expected_return_{day}d"))),"중앙값 수익률":_pct(_first_number(medians.get(str(day)),medians.get(day),data.get(f"median_return_{day}d")))})
+    st.markdown('<div class="ade-section"><h3>기간별 전망</h3><div class="ade-explain">3·5·7·10·20일 구간의 상승확률과 기대수익률을 동일한 기준으로 비교합니다.</div></div>',unsafe_allow_html=True)
+    rows=[]
+    predictions=data.get("prediction") if isinstance(data.get("prediction"),dict) else {}
+    up_probabilities=data.get("up_probabilities") if isinstance(data.get("up_probabilities"),dict) else {}
+    returns_by_day=data.get("returns_by_day") if isinstance(data.get("returns_by_day"),dict) else {}
+    median_returns=data.get("median_returns") if isinstance(data.get("median_returns"),dict) else {}
+    for day in (3,5,7,10,20):
+        rows.append({"기간":f"{day}일","상승확률":_pct(_first_number(up_probabilities.get(str(day)),predictions.get(f"up_probability_{day}d"),data.get(f"up_probability_{day}d"))),"기대수익률":_pct(_first_number(returns_by_day.get(str(day)),predictions.get(f"expected_return_{day}d"),data.get(f"expected_return_{day}d"))),"중앙값 수익률":_pct(_first_number(median_returns.get(str(day)),predictions.get(f"median_return_{day}d"),data.get(f"median_return_{day}d")))})
     st.dataframe(pd.DataFrame(rows),hide_index=True,use_container_width=True)
 
 
 def _render_matched_case(data: dict[str,Any]) -> None:
-    st.markdown("### 가장 유사한 과거 사례")
+    st.markdown('<div class="ade-section"><h3>가장 유사한 과거 사례</h3><div class="ade-explain">현재 주봉 형태와 STO 구조에 가장 가까운 과거 이벤트 구간입니다. 과거 사례 자체가 미래를 보장하지는 않지만, 기준 경로와 위험 범위를 제공합니다.</div></div>',unsafe_allow_html=True)
     labels={"matched_name":"종목명","matched_ticker":"종목코드","matched_event_date":"이벤트 날짜","matched_event_id":"이벤트 ID","equivalent_week_index":"동일 주차","weeks_compared":"비교 주수","future_weeks_available":"향후 관측 주수","matched_max_return":"실현 최대수익률","matched_max_drawdown":"실현 최대낙폭"}
     rows=[]
     for key,label in labels.items():
@@ -166,7 +177,7 @@ def _render_matched_case(data: dict[str,Any]) -> None:
 
 
 def _render_replay_cases(data: dict[str,Any]) -> None:
-    st.markdown("### 유사 사례 Top N")
+    st.markdown('<div class="ade-section"><h3>유사 사례 Top N</h3><div class="ade-explain">Replay는 과거 차트를 단순 재생하는 기능이 아니라 현재 구조와 유사한 과거 이벤트 경로를 순위화하는 분석입니다.</div></div>',unsafe_allow_html=True)
     matches=data.get("replay_matches")
     if not isinstance(matches,list) or not matches: st.caption("저장된 유사 사례 목록이 없습니다."); return
     rows=[]
@@ -177,13 +188,13 @@ def _render_replay_cases(data: dict[str,Any]) -> None:
 
 
 def _render_risk_and_order_reference(data: dict[str,Any]) -> None:
-    st.markdown("### 위험 및 주문 참고값")
+    st.markdown('<div class="ade-section"><h3>위험 및 주문 참고값</h3><div class="ade-explain">주문 자동승인이 아니라 의사결정 참고정보입니다. 기대수익과 기대낙폭을 함께 보고 진입가격, 보유기간, 목표·손절 기준을 확인합니다.</div></div>',unsafe_allow_html=True)
     values=[("7일 상승확률",_pct(_first_number(data.get("seven_day_up_probability"),data.get("up_probability_7d")))),("7일 기대수익",_pct(_first_number(data.get("seven_day_expected_return"),data.get("expected_return_7d")))),("7일 기대 최대수익",_pct(data.get("expected_max_return_7d"))),("20일 기대 최대수익",_pct(data.get("expected_max_return_20d"))),("예상 최대낙폭",_pct(_first_number(data.get("expected_max_drawdown_7d"),data.get("expected_max_drawdown")))),("예상 고점일",_text(data.get("expected_peak_day"))),("권장 보유기간",_days(data.get("holding_days"))),("목표 / 손절",f"{_pct(data.get('target_return'))} / {_pct(data.get('stop_return'))}")]
     st.markdown('<div class="ade-grid">'+''.join(f'<div class="ade-card"><span>{a}</span><strong>{b}</strong></div>' for a,b in values)+'</div>',unsafe_allow_html=True)
 
 
 def _render_reasoning(data: dict[str,Any]) -> None:
-    st.markdown("### 계산 근거와 해석")
+    st.markdown('<div class="ade-section"><h3>계산 근거와 해석</h3><div class="ade-explain">모델이 저장한 설명값을 가공하지 않고 읽기 좋은 형태로 정리합니다.</div></div>',unsafe_allow_html=True)
     reasons=data.get("reasons") or data.get("reasoning") or data.get("explanation")
     if isinstance(reasons,list):
         for reason in reasons: st.markdown(f"- {reason}")
@@ -192,7 +203,8 @@ def _render_reasoning(data: dict[str,Any]) -> None:
     elif reasons: st.write(reasons)
     else: st.caption("저장된 계산 근거가 없습니다.")
     structure=data.get("current_sto_structure")
-    if structure not in (None,"",[],{}): st.markdown("#### 현재 STO 배열"); st.json(structure if isinstance(structure,(dict,list)) else {"structure":structure},expanded=False)
+    if structure not in (None,"",[],{}):
+        st.markdown("#### 현재 STO 배열"); st.json(structure if isinstance(structure,(dict,list)) else {"structure":structure},expanded=False)
 
 
 def _render_raw_payload(data: dict[str,Any]) -> None:
@@ -207,61 +219,54 @@ def _render_raw_payload(data: dict[str,Any]) -> None:
 def _render_orders() -> None:
     market=_market_selector("ade_order_market"); st.session_state.ade_market=market
     if st.session_state.ade_order_ticker: _render_order_ticket(market,st.session_state.ade_order_ticker); return
-    st.markdown("## 주문 후보 · 보유종목")
-    group=st.segmented_control("목록",options=["주문후보","보유종목","최근"],default="주문후보",label_visibility="collapsed")
-    c1,c2,c3=st.columns([2.6,1,1]); query=c1.text_input("종목 검색",placeholder="종목명 또는 종목코드",label_visibility="collapsed"); c2.selectbox("정렬",["추천순","등락률순","거래량순","이름순"],label_visibility="collapsed"); c3.button("추가/편집",use_container_width=True)
-    if query and st.button("검색 종목을 주문후보에 추가",type="primary"): _add_order_candidate(market,query,query); st.rerun()
-    rows=[row for row in _load_order_candidates() if row.get("market")==market]
-    if not rows: rows=[{"ticker":"005930" if market=="kr" else "NVDA","symbol":"삼성전자" if market=="kr" else "NVIDIA"},{"ticker":"000660" if market=="kr" else "TSLA","symbol":"SK하이닉스" if market=="kr" else "Tesla"}]
-    st.markdown('<div class="watch-row muted"><div></div><div>종목</div><div>현재가</div><div>등락</div><div>거래량</div><div></div></div>',unsafe_allow_html=True)
-    for i,row in enumerate(rows):
-        ticker=str(row.get("ticker")); symbol=str(row.get("symbol") or ticker); price=100000+i*4370; change=(i%3-1)*2.14; cls="up" if change>0 else "down" if change<0 else "muted"
-        st.markdown(f'<div class="watch-row"><div>▮</div><div><strong>{symbol}</strong><small>{ticker} · {"KRX+NXT" if market=="kr" else "NASDAQ"}</small></div><div><strong>{price:,.2f}</strong></div><div class="{cls}">{change:+.2f}%</div><div>{(1250000+i*382000):,}</div><div></div></div>',unsafe_allow_html=True)
-        if st.button(f"{symbol} 주문",key=f"candidate_{market}_{ticker}",use_container_width=True): st.session_state.ade_order_ticker=ticker; st.rerun()
+    st.markdown("### 주문")
+    query=st.text_input("종목 검색",placeholder="종목명 또는 종목코드")
+    if query and st.button("주문후보에 추가",type="primary"): _add_order_candidate(market,query,query); st.rerun()
+    candidates=[row for row in _load_order_candidates() if row.get("market")==market]
+    st.markdown("#### 주문후보")
+    for row in candidates:
+        if st.button(f"{row['symbol']} · {row['ticker']}",key=f"candidate_{market}_{row['ticker']}",use_container_width=True): st.session_state.ade_order_ticker=row['ticker']; st.rerun()
+    st.markdown("#### 보유종목"); st.info("KIS 보유종목 연결 영역")
 
 
 def _render_order_ticket(market: str,ticker: str) -> None:
     if st.button("← 주문목록으로 돌아가기"): st.session_state.ade_order_ticker=None; st.rerun()
-    current=204000.0 if market=="kr" else 311.21
-    st.markdown(f'<div class="ticket-head"><div><h2>{ticker}</h2><span class="muted">{ticker} · {"KRX+NXT" if market=="kr" else "미국주식"}</span></div><div><div class="price up">{current:,.2f}</div><span class="up">▲ 2.36%</span></div></div>',unsafe_allow_html=True)
-    st.markdown('<div class="ticket-tabs"><span class="active">매수</span><span>매도</span><span>정정/취소</span><span>체결/예약</span><span>잔고</span></div>',unsafe_allow_html=True)
-    left,right=st.columns([1.05,1.25],gap="large")
+    st.markdown(f"## {ticker} 주문")
+    left,right=st.columns([1.2,1])
     with left:
-        book_mode=st.segmented_control("호가",options=["호가","체결"],default="호가",label_visibility="collapsed")
-        st.caption("상한가 / 하한가, 매도·매수 잔량, 현재가와 체결강도를 함께 표시합니다.")
+        st.markdown("### 실시간 호가")
         rows=[]
-        for i in range(5,0,-1): rows.extend([f'<div class="ask">{current+i*500:,.0f}</div>',f'<div class="mid">{120+i*17:,}</div>',f'<div>{(900+i*130):,}</div>'])
-        rows.extend(['<div class="head">가격</div>','<div class="head">건수</div>','<div class="head">잔량</div>'])
-        for i in range(0,6): rows.extend([f'<div class="bid">{current-i*500:,.0f}</div>',f'<div class="mid">{3+i*41:,}</div>',f'<div>{(350+i*154):,}</div>'])
+        for i in range(5,0,-1): rows.extend([f'<div class="ask">{100000+i*100:,.0f}</div>',f'<div class="mid">{100000+i*100:,.0f}</div>',f'<div>{1200+i*80:,}</div>'])
+        rows.extend(['<div class="head">매도호가</div>','<div class="head">가격</div>','<div class="head">잔량</div>'])
+        for i in range(1,6): rows.extend([f'<div class="bid">{100000-i*100:,.0f}</div>',f'<div class="mid">{100000-i*100:,.0f}</div>',f'<div>{1500+i*90:,}</div>'])
         st.markdown('<div class="ade-orderbook">'+''.join(rows)+'</div>',unsafe_allow_html=True)
-        c1,c2,c3=st.columns(3); c1.metric("총 매도잔량","8,420"); c2.metric("체결강도","112.4%"); c3.metric("총 매수잔량","10,315")
     with right:
-        side=st.segmented_control("주문 구분",options=["매수","매도"],default="매수",label_visibility="collapsed")
-        cash=st.segmented_control("거래 구분",options=["현금","신용"],default="현금",label_visibility="collapsed")
-        venues=["SOR","KRX","NXT"] if market=="kr" else ["NASDAQ","NYSE","AMEX"]; venue=st.segmented_control("시장",options=venues,default=venues[0],label_visibility="collapsed")
-        order_type=st.selectbox("주문유형",["지정가","시장가","최유리","조건부지정가","최우선지정가"])
-        price=st.number_input("가격",min_value=0.0,value=current,step=500.0 if market=="kr" else .01)
-        quantity=st.number_input("수량",min_value=0,value=1,step=1)
-        c1,c2=st.columns(2); c1.metric("주문가능수량","128주"); c2.metric("미수가능수량","0주")
-        st.markdown("#### AI 주문 참고")
-        ai1,ai2,ai3=st.columns(3); ai1.metric("권장 진입가",f"{current*0.992:,.2f}"); ai2.metric("권장 수량",f"{max(1,quantity)}주"); ai3.metric("포트폴리오 비중","3.0%")
-        st.caption("추천 엔진의 참고값이며 주문 승인 로직은 변경하지 않습니다.")
-        st.metric("예상 주문금액",f"{price*quantity:,.0f}")
-        c1,c2=st.columns([1,2]); c1.button("예약주문",use_container_width=True); submit=c2.button(f"{cash} {side}",type="primary",use_container_width=True)
-        if submit: st.warning("실제 증권사 주문 전송은 아직 비활성화되어 있습니다.")
+        side=st.radio("주문 구분",["매수","매도"],horizontal=True); account_type=st.radio("거래",["현금","신용"],horizontal=True)
+        venue=st.selectbox("시장",["SOR","KRX","NXT"] if market=="kr" else ["NASDAQ","NYSE","AMEX"])
+        order_type=st.selectbox("주문유형",["지정가","시장가","최유리","조건부지정가"]); price=st.number_input("가격",min_value=0.0,value=100000.0,step=100.0); quantity=st.number_input("수량",min_value=0,value=1,step=1)
+        st.metric("예상 주문금액",f"{price*quantity:,.0f}"); st.markdown("#### AI 주문 참고"); st.info("추천 진입가, 권장 수량, 포트폴리오 비중을 표시하는 영역입니다.")
+        if st.button(f"{side} 주문",type="primary",use_container_width=True): st.warning("실제 증권사 주문 전송은 아직 비활성화되어 있습니다.")
 
 
 def _render_jp_radar() -> None:
     st.markdown("## JP Radar")
-    market=_market_selector("ade_jp_market"); default_level="종목" if st.session_state.ade_jp_ticker else "시장"; level=st.radio("분석 단계",["시장","업종","종목"],horizontal=True,index=["시장","업종","종목"].index(default_level))
+    market=_market_selector("ade_jp_market")
+    default_level="종목" if st.session_state.ade_jp_ticker else "시장"
+    level=st.radio("분석 단계",["시장","업종","종목"],horizontal=True,index=["시장","업종","종목"].index(default_level))
     target_code=""; ticker=""; target_label=""
-    if level=="시장": choices=["kospi50","kosdaq50"] if market=="kr" else ["nasdaq30"]; target_code=st.selectbox("시장",choices,format_func=lambda code:SECTORS[code].name); target_label=SECTORS[target_code].name
-    elif level=="업종": target_code=st.selectbox("업종",["ship","bio"],format_func=lambda code:SECTORS[code].name); target_label=SECTORS[target_code].name
-    else: ticker=st.text_input("종목코드",value=st.session_state.ade_jp_ticker or ("005930" if market=="kr" else "AAPL")); target_label=normalize_jp_ticker(ticker) if ticker else "종목"
+    if level=="시장":
+        choices=["kospi50","kosdaq50"] if market=="kr" else ["nasdaq30"]
+        target_code=st.selectbox("시장",choices,format_func=lambda code:SECTORS[code].name); target_label=SECTORS[target_code].name
+    elif level=="업종":
+        target_code=st.selectbox("업종",["ship","bio"],format_func=lambda code:SECTORS[code].name); target_label=SECTORS[target_code].name
+    else:
+        ticker=st.text_input("종목코드",value=st.session_state.ade_jp_ticker or ("005930" if market=="kr" else "AAPL")); target_label=normalize_jp_ticker(ticker) if ticker else "종목"
     period_label=st.selectbox("표시 기간",["3개월","6개월","1년","3년","전체"],index=2); periods={"3개월":92,"6개월":183,"1년":365,"3년":1095,"전체":3650}
     try:
-        with st.spinner(f"{target_label} JP Radar 계산 중..."): result=JPStockRadarEngine().analyze(ticker,intraday_period="5d",intraday_interval="5m") if level=="종목" else JPRadarLiveEngine().analyze(sector_code=target_code,refresh_history=False,intraday_period="5d",intraday_interval="5m")
-    except Exception as exc: st.error(f"JP Radar 분석 실패: {exc}"); return
+        with st.spinner(f"{target_label} JP Radar 계산 중..."):
+            result=JPStockRadarEngine().analyze(ticker,intraday_period="5d",intraday_interval="5m") if level=="종목" else JPRadarLiveEngine().analyze(sector_code=target_code,refresh_history=False,intraday_period="5d",intraday_interval="5m")
+    except Exception as exc:
+        st.error(f"JP Radar 분석 실패: {exc}"); return
     radar=result.radar; yearly=radar.yearly
     st.markdown('<div class="ade-grid">'+''.join(f'<div class="ade-card"><span>{a}</span><strong>{b}</strong><small>{c}</small></div>' for a,b,c in [("종합 판단",radar.combined_signal,level),("실시간 가격",f"{result.latest_price:,.2f}",f"{result.change_rate:+.2f}%"),("일봉 에너지",f"{radar.daily.latest_energy:.2f}",radar.daily.signal_grade),("주봉 에너지",f"{radar.weekly.latest_energy:.2f}",radar.weekly.signal_grade),("연봉 의미 점수",f"{radar.yearly_score:+.1f}",yearly.state),("연봉 현재 위치",yearly.state,f"{yearly.year}년"),("연봉 시가",f"{yearly.open:,.2f}","양봉" if yearly.bullish else "음봉"),("데이터 갱신",result.updated_at.split("T")[-1],result.source)])+'</div>',unsafe_allow_html=True)
     st.plotly_chart(make_live_radar_chart(result,mobile=False,period_days=periods[period_label]),use_container_width=True,config={"displaylogo":False,"scrollZoom":True,"responsive":True})
@@ -282,42 +287,45 @@ def _jp_interpretation(result: Any,level: str) -> str:
 
 
 def _market_selector(key: str) -> str:
-    value=st.segmented_control("시장",options=["kr","us"],default=st.session_state.get("ade_market","kr"),format_func=lambda value:"국내" if value=="kr" else "미국",key=key,label_visibility="collapsed"); return str(value or "kr")
+    value=st.segmented_control("시장",options=["kr","us"],default=st.session_state.get("ade_market","kr"),format_func=lambda v:"국내" if v=="kr" else "미국",key=key,label_visibility="collapsed")
+    return str(value or "kr")
 
 
-def _load_recommendations(market: str) -> tuple[list[dict[str,Any]],Any]:
+def _load_recommendations(market: str):
     profile=get_market_profile(market)
     if not profile.db_path.exists(): return [],None
     with sqlite3.connect(str(profile.db_path),timeout=5) as conn:
         conn.row_factory=sqlite3.Row; context=load_latest_context(conn,profile.code,50)
         if context is None: return [],None
         name_map=build_name_map(conn,profile.code); rows=[]
-        for row in context.recommendations:
-            item=dict(row); code=normalize_ticker(item.get("ticker"),market); item["ticker"]=code; item["symbol"]=item.get("name") or name_map.get(code) or code; rows.append(item)
+        for source in context.recommendations:
+            row=dict(source); ticker=normalize_ticker(row.get("ticker"),market); row["ticker"]=ticker; row["symbol"]=name_map.get(ticker) or row.get("name") or ticker; rows.append(row)
         return rows,context
 
 
-def _load_order_candidates() -> list[dict[str,Any]]:
-    if not ORDER_CANDIDATES_PATH.exists(): return []
-    try: return json.loads(ORDER_CANDIDATES_PATH.read_text(encoding="utf-8"))
-    except Exception: return []
-
-
 def _add_order_candidate(market: str,ticker: str,symbol: str) -> None:
-    rows=_load_order_candidates(); key=(market,str(ticker))
-    if not any((row.get("market"),str(row.get("ticker")))==key for row in rows): rows.append({"market":market,"ticker":str(ticker),"symbol":str(symbol),"added_at":datetime.now().isoformat(timespec="seconds")})
+    rows=_load_order_candidates(); normalized={"market":market,"ticker":ticker,"symbol":symbol,"added_at":datetime.now().isoformat(timespec="seconds")}
+    rows=[r for r in rows if not (r.get("market")==market and r.get("ticker")==ticker)]; rows.insert(0,normalized)
     ORDER_CANDIDATES_PATH.parent.mkdir(parents=True,exist_ok=True); ORDER_CANDIDATES_PATH.write_text(json.dumps(rows,ensure_ascii=False,indent=2),encoding="utf-8")
 
 
+def _load_order_candidates() -> list[dict[str,Any]]:
+    try:
+        return json.loads(ORDER_CANDIDATES_PATH.read_text(encoding="utf-8")) if ORDER_CANDIDATES_PATH.exists() else []
+    except Exception: return []
+
+
 def _render_status_bar() -> None:
-    st.markdown('<div class="ade-statusbar"><span>AI <b class="ade-ok">정상</b></span><span>DB <b class="ade-ok">정상</b></span><span>KIS <b class="ade-ok">연결</b></span><span>Yahoo <b class="ade-ok">연결</b></span></div>',unsafe_allow_html=True)
+    st.markdown('<div class="ade-statusbar"><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span>KIS 연결</span><span>Yahoo 연결</span><span>추천·Replay·STO 규칙 유지</span></div>',unsafe_allow_html=True)
 
 
 def _safe_json(value: Any) -> dict[str,Any]:
     if isinstance(value,dict): return value
-    if not value: return {}
-    try: parsed=json.loads(value); return parsed if isinstance(parsed,dict) else {}
-    except Exception: return {}
+    if isinstance(value,str):
+        try:
+            parsed=json.loads(value); return parsed if isinstance(parsed,dict) else {}
+        except Exception: return {}
+    return {}
 
 
 def _num(value: Any) -> float:
@@ -327,11 +335,24 @@ def _num(value: Any) -> float:
 
 def _first_number(*values: Any) -> float:
     for value in values:
-        if value not in (None,""): return _num(value)
+        if value not in (None,""):
+            try: return float(value)
+            except Exception: continue
     return 0.0
 
 
-def _pct(value: Any) -> str: return f"{_num(value):.1f}%"
+def _pct(value: Any) -> str:
+    try:
+        number=float(value)
+        if abs(number)<=1: number*=100
+        return f"{number:.1f}%"
+    except Exception: return "-"
+
+
 def _text(value: Any) -> str: return "-" if value in (None,"") else str(value)
+
 def _days(value: Any) -> str: return "-" if value in (None,"") else f"{value}일"
-def _format_value(key: str,value: Any) -> str: return _pct(value) if "return" in key or "drawdown" in key else str(value)
+
+def _format_value(key: str,value: Any) -> Any:
+    if "return" in key or "drawdown" in key or "similarity" in key or "probability" in key: return _pct(value)
+    return value

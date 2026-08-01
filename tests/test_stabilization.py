@@ -61,3 +61,31 @@ def test_kis_config_matches_broker_config_contract(monkeypatch: pytest.MonkeyPat
     assert config.account_product_code == '01'
     assert config.environment == 'paper'
     assert config.is_live is False
+
+
+def test_kis_config_splits_full_account_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    from broker.kis import kis_config_from_env
+
+    monkeypatch.setenv('KIS_APP_KEY', 'key')
+    monkeypatch.setenv('KIS_APP_SECRET', 'secret')
+    monkeypatch.setenv('KIS_ACCOUNT_NO', '12345678-01')
+    monkeypatch.delenv('KIS_ACCOUNT_PRODUCT_CODE', raising=False)
+    monkeypatch.delenv('KIS_PRODUCT_CODE', raising=False)
+    monkeypatch.delenv('KIS_ACCOUNT', raising=False)
+
+    config = kis_config_from_env()
+    assert config.account_no == '12345678'
+    assert config.account_product_code == '01'
+
+
+def test_kis_config_rejects_invalid_account_length(monkeypatch: pytest.MonkeyPatch) -> None:
+    from broker.base import BrokerError
+    from broker.kis import kis_config_from_env
+
+    monkeypatch.setenv('KIS_APP_KEY', 'key')
+    monkeypatch.setenv('KIS_APP_SECRET', 'secret')
+    monkeypatch.setenv('KIS_ACCOUNT_NO', '1234')
+    monkeypatch.delenv('KIS_ACCOUNT', raising=False)
+
+    with pytest.raises(BrokerError, match='exactly 8 digits'):
+        kis_config_from_env()

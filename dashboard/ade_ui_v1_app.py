@@ -35,6 +35,8 @@ ORDER_CANDIDATES_PATH = Path("output/ade_order_candidates.json")
 THEME_PATH = Path(__file__).with_name("ade_zero_base_theme.css")
 CUSTOM_CSS = """<style>[data-testid="stSidebar"],[data-testid="stSidebarNav"],section[data-testid="stSidebar"],div[data-testid="stSidebarNav"],[data-testid="collapsedControl"],button[kind="headerNoPadding"]{display:none!important}</style>"""
 LIVE_REFRESH_SECONDS = 5
+LIVE_PRICE_MAX_AGE_SECONDS = 15
+LIVE_SESSION_TICKER_LIMIT = 5
 
 
 def _apply_zero_base_theme() -> None:
@@ -72,6 +74,8 @@ def _init_state() -> None:
         "ade_live_orderbook": True,
         "ade_live_refresh": True,
         "ade_order_signature": None,
+        "ade_order_context": None,
+        "ade_live_ticker_lru": [],
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -171,7 +175,7 @@ def _render_recommendations() -> None:
             _add_order_candidate(market, ticker, symbol)
             st.session_state.ade_primary_page = "주문"
             st.session_state.ade_order_ticker = ticker
-            st.session_state.ade_order_confirmation = False
+            _reset_order_confirmation()
             st.rerun()
         st.divider()
 
@@ -201,8 +205,8 @@ def _render_orders() -> None:
     market = _market_selector("ade_order_market")
     if previous_market != market:
         st.session_state.ade_order_ticker = None
-        st.session_state.ade_order_confirmation = False
-        st.session_state.ade_order_signature = None
+        _reset_order_confirmation()
+        _clear_live_session_state()
     st.session_state.ade_market = market
     if st.session_state.ade_order_ticker:
         _render_order_ticket(market, st.session_state.ade_order_ticker)
@@ -221,7 +225,7 @@ def _render_orders() -> None:
         for row in [r for r in _load_order_candidates() if r.get("market") == market]:
             if st.button(f"{row['symbol']} · {row['ticker']}", key=f"candidate_{market}_{row['ticker']}", use_container_width=True):
                 st.session_state.ade_order_ticker = row["ticker"]
-                st.session_state.ade_order_confirmation = False
+                _reset_order_confirmation()
                 st.rerun()
     with tabs[1]:
         if not positions:
@@ -229,7 +233,7 @@ def _render_orders() -> None:
         for row in positions:
             if st.button(f"{row.get('name') or row.get('ticker')} · {row.get('ticker')} · {int(row.get('quantity') or 0)}주 · {float(row.get('pnl_rate') or 0):+.2f}%", key=f"holding_{row.get('ticker')}", use_container_width=True):
                 st.session_state.ade_order_ticker = str(row.get("ticker"))
-                st.session_state.ade_order_confirmation = False
+                _reset_order_confirmation()
                 st.rerun()
     with tabs[2]:
         _render_pending_orders()
@@ -300,7 +304,41 @@ def _live_state_key(ticker: str, field: str) -> str:
     return f"ade_live_{field}_{ticker}"
 
 
+def _order_price_key(ticker: str, side: str, order_type: str) -> str:
+    return f"ade_order_price_{ticker}_{side}_{order_type}"
+
+
+def _order_quantity_key(ticker: str, side: str, order_type: str) -> str:
+    return f"ade_order_quantity_{ticker}_{side}_{order_type}"
+
+
+def _reset_order_confirmation() -> None:
+    st.session_state.ade_order_confirmation = False
+    st.session_state.ade_order_signature = None
+
+
+def _touch_live_ticker(ticker: str) -> None:
+    lru = [item for item in st.session_state.get("ade_live_ticker_lru", []) if item != ticker]
+    lru.append(ticker)
+    while len(lru) > LIVE_SESSION_TICKER_LIMIT:
+        expired = lru.pop(0)
+        _clear_live_ticker_state(expired)
+    st.session_state.ade_live_ticker_lru = lru
+
+
+def _clear_live_ticker_state(ticker: str) -> None:
+    for field in ("best_ask", "best_bid", "midpoint", "received_at"):
+        st.session_state.pop(_live_state_key(ticker, field), None)
+
+
+def _clear_live_session_state() -> None:
+    for ticker in list(st.session_state.get("ade_live_ticker_lru", [])):
+        _clear_live_ticker_state(ticker)
+    st.session_state.ade_live_ticker_lru = []
+
+
 def _store_live_prices(ticker: str, best_ask: float, best_bid: float, midpoint: float, received_at: float | None) -> None:
+    _touch_live_ticker(ticker)
     st.session_state[_live_state_key(ticker, "best_ask")] = float(best_ask or 0)
     st.session_state[_live_state_key(ticker, "best_bid")] = float(best_bid or 0)
     st.session_state[_live_state_key(ticker, "midpoint")] = float(midpoint or 0)
@@ -308,6 +346,10 @@ def _store_live_prices(ticker: str, best_ask: float, best_bid: float, midpoint: 
 
 
 def _load_live_prices(ticker: str, fallback_price: float) -> tuple[float, float, float]:
+    received_at = st.session_state.get(_live_state_key(ticker, "received_at"))
+    if not received_at or time.time() - float(received_at) > LIVE_PRICE_MAX_AGE_SECONDS:
+        _clear_live_ticker_state(ticker)
+        return fallback_price, fallback_price, fallback_price
     best_ask = float(st.session_state.get(_live_state_key(ticker, "best_ask"), 0) or fallback_price)
     best_bid = float(st.session_state.get(_live_state_key(ticker, "best_bid"), 0) or fallback_price)
     midpoint = float(st.session_state.get(_live_state_key(ticker, "midpoint"), 0) or fallback_price)
@@ -322,7 +364,8 @@ def _render_live_orderbook(ticker: str, fallback_price: float) -> tuple[float, f
     received_times = [item.received_at for item in (snapshot, trade) if item is not None]
     latest_received = max(received_times) if received_times else None
     if snapshot is None:
-        detail = f" · {client.last_error}" if client.last_error else ""
+        health = client.health_snapshot()
+        detail = f" · {health.get('last_error')}" if health.get("last_error") else ""
         st.info(f"KIS 실시간 호가 연결 중입니다{detail}")
         best_ask, best_bid, midpoint = _load_live_prices(ticker, fallback_price)
         return best_ask, best_bid, midpoint, latest_received
@@ -366,8 +409,7 @@ def _render_live_market_fragment(ticker: str, fallback_price: float) -> None:
 def _render_order_ticket(market: str, ticker: str) -> None:
     if st.button("← 주문목록으로 돌아가기"):
         st.session_state.ade_order_ticker = None
-        st.session_state.ade_order_confirmation = False
-        st.session_state.ade_order_signature = None
+        _reset_order_confirmation()
         st.rerun()
     normalized_ticker = _normalize_kr_ticker(ticker) if market == "kr" else ticker.strip().upper()
     if market == "kr" and not normalized_ticker:
@@ -415,39 +457,54 @@ def _render_order_ticket(market: str, ticker: str) -> None:
                     st.caption(f"최근 체결 {trade.trade_time} · 체결량 {trade.volume:,}주 · 수신 {time.strftime('%H:%M:%S', time.localtime(trade.received_at))}")
         best_ask, best_bid, mid = _load_live_prices(ticker, default_price) if live and market == "kr" else (default_price, default_price, default_price)
     with right:
-        side = st.radio("주문 구분", ["매수", "매도"], horizontal=True)
-        order_type_label = st.selectbox("주문유형", ["지정가", "시장가"])
+        side = st.radio("주문 구분", ["매수", "매도"], horizontal=True, key=f"ade_order_side_{ticker}")
+        order_type_label = st.selectbox("주문유형", ["지정가", "시장가"], key=f"ade_order_type_{ticker}")
         order_type = "LIMIT" if order_type_label == "지정가" else "MARKET"
+        context = (ticker, side, order_type)
+        if st.session_state.ade_order_context != context:
+            st.session_state.ade_order_context = context
+            _reset_order_confirmation()
         live_default = best_ask if side == "매수" else best_bid
-        price = st.number_input("가격", min_value=0.0, value=float(live_default or default_price), step=100.0, disabled=order_type == "MARKET")
+        price_key = _order_price_key(ticker, side, order_type)
+        if price_key not in st.session_state:
+            st.session_state[price_key] = float(live_default or default_price)
+        price = st.number_input("가격", min_value=0.0, step=100.0, disabled=order_type == "MARKET", key=price_key)
         reference = price if order_type == "LIMIT" else float(mid or default_price)
         orderable, orderable_error = load_orderable(ticker, reference, order_type) if side == "매수" and market == "kr" else (None, None)
         max_sell = int((holding or {}).get("quantity") or 0)
         available = int((orderable or {}).get("orderable_quantity") or 0) if side == "매수" else max_sell
-        quantity = st.number_input("수량", min_value=0, max_value=available if available > 0 else None, value=1 if available > 0 else 0, step=1)
+        quantity_key = _order_quantity_key(ticker, side, order_type)
+        if quantity_key not in st.session_state:
+            st.session_state[quantity_key] = 1 if available > 0 else 0
+        if available <= 0:
+            st.session_state[quantity_key] = 0
+        elif int(st.session_state.get(quantity_key, 0)) > available:
+            st.session_state[quantity_key] = available
+        quantity = st.number_input("수량", min_value=0, max_value=available if available > 0 else 0, step=1, key=quantity_key)
         c1, c2 = st.columns(2)
         c1.metric("주문가능수량", f"{available:,}주")
         c2.metric("예상금액", f"₩{reference * quantity:,.0f}")
         if orderable:
             st.caption(f"KIS 주문가능현금 ₩{float(orderable.get('orderable_cash') or 0):,.0f}")
         signature = (ticker, side, order_type, round(float(price), 4), int(quantity))
-        if st.session_state.ade_order_signature != signature:
-            st.session_state.ade_order_signature = signature
+        if st.session_state.ade_order_signature is not None and st.session_state.ade_order_signature != signature:
             st.session_state.ade_order_confirmation = False
-        st.session_state.ade_order_confirmation = st.checkbox("주문 내용을 확인했습니다.", value=st.session_state.ade_order_confirmation)
+        st.session_state.ade_order_signature = signature
+        st.session_state.ade_order_confirmation = st.checkbox("주문 내용을 확인했습니다.", value=st.session_state.ade_order_confirmation, key=f"ade_order_confirm_{ticker}_{side}_{order_type}")
         can_submit = market == "kr" and kis_paper_enabled() and quantity > 0 and st.session_state.ade_order_confirmation and quantity <= available
         if st.button(f"{side} 주문 전송", type="primary", use_container_width=True, disabled=not can_submit):
             try:
                 result = submit_paper_order(ticker=ticker, side="BUY" if side == "매수" else "SELL", quantity=int(quantity), order_type=order_type, limit_price=float(price) if order_type == "LIMIT" else None)
                 if result.accepted:
                     st.success(f"접수 완료 · 주문번호 {result.order_id or '-'} · {result.message}")
-                    st.session_state.ade_order_confirmation = False
+                    _reset_order_confirmation()
                     _kis_data(True)
                 else:
                     st.error(result.message)
             except Exception as exc:
                 st.error(str(exc))
-        for msg in [error, quote_error, orderable_error, market_client.last_error]:
+        health = market_client.health_snapshot()
+        for msg in [error, quote_error, orderable_error, health.get("last_error")]:
             if msg:
                 st.caption(msg)
 
@@ -461,7 +518,7 @@ def _render_jp_radar() -> None:
     except Exception as exc:
         st.error(f"JP Radar 분석 실패: {exc}")
         return
-    st.plotly_chart(make_live_radar_chart(result, mobile=False, period_days=365), use_container_width=True, config={"displaylogo": False, "scrollZoom": True, "responsive": True})
+    st.plotly_chart(make_live_radar_chart(result, mobile=False, period_days=365), use_container_width=True, config={"displaylogo": False,"scrollZoom": True,"responsive": True})
 
 
 def _market_selector(key: str) -> str:
@@ -522,17 +579,13 @@ def _render_status_bar() -> None:
     else:
         kis_text = "KIS 미설정"
         kis_class = ""
-    market_client = shared_market_client()
-    latest_times = []
-    for ticker in list(getattr(market_client, "_subscriptions", [])):
-        for item in (market_client.latest_orderbook(ticker), market_client.latest_trade(ticker)):
-            if item is not None:
-                latest_times.append(item.received_at)
-    if market_client.connected and latest_times:
-        age = time.time() - max(latest_times)
+    health = shared_market_client().health_snapshot()
+    latest_received_at = health.get("latest_received_at")
+    if health.get("connected") and latest_received_at:
+        age = time.time() - float(latest_received_at)
         ws_text = "실시간 정상" if age <= 3 else ("실시간 지연" if age <= 10 else "실시간 오래됨")
         ws_class = "ade-ok" if age <= 3 else ""
-    elif market_client.connected:
+    elif health.get("connected"):
         ws_text = "실시간 연결·수신대기"
         ws_class = ""
     else:

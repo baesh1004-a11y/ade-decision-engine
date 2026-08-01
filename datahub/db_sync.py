@@ -18,11 +18,16 @@ DATABASE_ARCHIVES = (
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
 _PROGRESS_STEP_BYTES = 25 * 1024 * 1024
 _FULL_CHECK_ENV = "DB_SYNC_FULL_CHECK"
+_FORCE_REFRESH_ENV = "DB_SYNC_FORCE_REFRESH"
 _SQLITE_HEADER = b"SQLite format 3\x00"
 
 
 def _log(message: str) -> None:
     print(f"[db-sync] {message}", flush=True)
+
+
+def _env_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _read_prefix(path: Path, size: int = 512) -> bytes:
@@ -93,7 +98,7 @@ def _validate_sqlite(path: Path) -> None:
     try:
         connection.execute("PRAGMA query_only = ON")
         connection.execute("SELECT name FROM sqlite_master LIMIT 1").fetchone()
-        if os.getenv(_FULL_CHECK_ENV, "").strip().lower() in {"1", "true", "yes", "on"}:
+        if _env_enabled(_FULL_CHECK_ENV):
             _log(f"Running SQLite quick_check for {path.name}")
             result = connection.execute("PRAGMA quick_check").fetchone()
             if not result or str(result[0]).lower() != "ok":
@@ -149,12 +154,24 @@ def _extract_database_member(
 
 
 def sync_database_archive(url_env: str, destination: Path, archive_path: Path) -> None:
+    force_refresh = _env_enabled(_FORCE_REFRESH_ENV)
+    if not force_refresh and _existing_database_is_valid(destination):
+        size_mb = destination.stat().st_size / (1024 * 1024)
+        _log(
+            f"Using existing valid {destination} ({size_mb:,.1f} MiB); "
+            f"skipping archive download and extraction. Set {_FORCE_REFRESH_ENV}=1 to refresh."
+        )
+        return
+
     archive_url = os.getenv(url_env, "").strip()
     if not archive_url:
         if _existing_database_is_valid(destination):
             _log(f"{url_env} is not set; using existing valid {destination}")
             return
         raise RuntimeError(f"{url_env} is not set and valid local database is missing: {destination}")
+
+    if force_refresh:
+        _log(f"{_FORCE_REFRESH_ENV}=1; refreshing {destination.name} from archive")
 
     _log(f"Downloading {destination.name} archive from {url_env}")
     _download(archive_url, archive_path)

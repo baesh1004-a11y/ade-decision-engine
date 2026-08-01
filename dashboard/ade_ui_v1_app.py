@@ -41,6 +41,7 @@ from dashboard.order_candidate_store import (
     upsert_candidate,
 )
 from dashboard.professional_components import render_workspace_card, render_workspace_intro
+from dashboard.sto_professional_panel import render_professional_sto_panel
 from dashboard.ui_workspace import DEFAULT_WORKSPACE_KEY, WORKSPACES, get_workspace
 from jp_radar.live_chart import make_live_radar_chart
 from jp_radar.stock_engine import JPStockRadarEngine
@@ -365,6 +366,19 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
                     use_container_width=True,
                     config=CHART_CONFIG,
                 )
+
+    if pattern is not None and not historical.empty and not current.empty:
+        historical_label = str(pattern["name"] or pattern["ticker"])
+        render_professional_sto_panel(
+            current=current,
+            historical=historical,
+            pattern=pattern,
+            current_label=symbol,
+            historical_label=historical_label,
+            stored_similarity=sto,
+        )
+    else:
+        st.info("STO 구조 비교에 필요한 현재 가격 또는 과거 유사사례 데이터가 부족합니다.")
 
     left, right = st.columns([1.25, 1])
     with left:

@@ -296,6 +296,24 @@ def _render_daily_orders() -> None:
     st.dataframe(pd.DataFrame(shown), hide_index=True, use_container_width=True)
 
 
+def _live_state_key(ticker: str, field: str) -> str:
+    return f"ade_live_{field}_{ticker}"
+
+
+def _store_live_prices(ticker: str, best_ask: float, best_bid: float, midpoint: float, received_at: float | None) -> None:
+    st.session_state[_live_state_key(ticker, "best_ask")] = float(best_ask or 0)
+    st.session_state[_live_state_key(ticker, "best_bid")] = float(best_bid or 0)
+    st.session_state[_live_state_key(ticker, "midpoint")] = float(midpoint or 0)
+    st.session_state[_live_state_key(ticker, "received_at")] = received_at
+
+
+def _load_live_prices(ticker: str, fallback_price: float) -> tuple[float, float, float]:
+    best_ask = float(st.session_state.get(_live_state_key(ticker, "best_ask"), 0) or fallback_price)
+    best_bid = float(st.session_state.get(_live_state_key(ticker, "best_bid"), 0) or fallback_price)
+    midpoint = float(st.session_state.get(_live_state_key(ticker, "midpoint"), 0) or fallback_price)
+    return best_ask, best_bid, midpoint
+
+
 def _render_live_orderbook(ticker: str, fallback_price: float) -> tuple[float, float, float, float | None]:
     client = shared_market_client()
     client.subscribe(ticker)
@@ -306,7 +324,8 @@ def _render_live_orderbook(ticker: str, fallback_price: float) -> tuple[float, f
     if snapshot is None:
         detail = f" · {client.last_error}" if client.last_error else ""
         st.info(f"KIS 실시간 호가 연결 중입니다{detail}")
-        return fallback_price, fallback_price, fallback_price, latest_received
+        best_ask, best_bid, midpoint = _load_live_prices(ticker, fallback_price)
+        return best_ask, best_bid, midpoint, latest_received
     valid_asks = [level for level in snapshot.asks if level.price > 0 and level.quantity >= 0]
     valid_bids = [level for level in snapshot.bids if level.price > 0 and level.quantity >= 0]
     rows: list[str] = []
@@ -319,30 +338,29 @@ def _render_live_orderbook(ticker: str, fallback_price: float) -> tuple[float, f
     best_ask = valid_asks[0].price if valid_asks else fallback_price
     best_bid = valid_bids[0].price if valid_bids else fallback_price
     midpoint = (best_ask + best_bid) / 2 if best_ask and best_bid else fallback_price
+    _store_live_prices(ticker, best_ask, best_bid, midpoint, latest_received)
     age = time.time() - snapshot.received_at
     freshness = "정상" if age <= 3 else ("지연" if age <= 10 else "오래됨")
     st.caption(f"매도총잔량 {snapshot.total_ask_quantity:,} · 매수총잔량 {snapshot.total_bid_quantity:,} · 수신 {time.strftime('%H:%M:%S', time.localtime(snapshot.received_at))} · {freshness}")
     return best_ask, best_bid, midpoint, latest_received
 
 
-def _render_live_market_fragment(ticker: str, fallback_price: float) -> tuple[float, float, float]:
+def _render_live_market_fragment(ticker: str, fallback_price: float) -> None:
     fragment = getattr(st, "fragment", None)
     if fragment is None:
-        best_ask, best_bid, midpoint, _ = _render_live_orderbook(ticker, fallback_price)
+        _render_live_orderbook(ticker, fallback_price)
         time.sleep(LIVE_REFRESH_SECONDS)
         st.rerun()
-        return best_ask, best_bid, midpoint
+        return
 
     @fragment(run_every=f"{LIVE_REFRESH_SECONDS}s")
-    def _fragment_body() -> tuple[float, float, float]:
-        best_ask, best_bid, midpoint, _ = _render_live_orderbook(ticker, fallback_price)
+    def _fragment_body() -> None:
+        _render_live_orderbook(ticker, fallback_price)
         trade = shared_market_client().latest_trade(ticker)
         if trade:
             st.caption(f"최근 체결 {trade.trade_time} · 체결량 {trade.volume:,}주 · 수신 {time.strftime('%H:%M:%S', time.localtime(trade.received_at))}")
-        return best_ask, best_bid, midpoint
 
-    result = _fragment_body()
-    return result if result is not None else (fallback_price, fallback_price, fallback_price)
+    _fragment_body()
 
 
 def _render_order_ticket(market: str, ticker: str) -> None:
@@ -390,13 +408,12 @@ def _render_order_ticket(market: str, ticker: str) -> None:
         st.session_state.ade_live_refresh = refresh
         if live and market == "kr":
             if refresh:
-                best_ask, best_bid, mid = _render_live_market_fragment(ticker, default_price)
+                _render_live_market_fragment(ticker, default_price)
             else:
-                best_ask, best_bid, mid, _ = _render_live_orderbook(ticker, default_price)
+                _render_live_orderbook(ticker, default_price)
                 if trade:
                     st.caption(f"최근 체결 {trade.trade_time} · 체결량 {trade.volume:,}주 · 수신 {time.strftime('%H:%M:%S', time.localtime(trade.received_at))}")
-        else:
-            best_ask = best_bid = mid = default_price
+        best_ask, best_bid, mid = _load_live_prices(ticker, default_price) if live and market == "kr" else (default_price, default_price, default_price)
     with right:
         side = st.radio("주문 구분", ["매수", "매도"], horizontal=True)
         order_type_label = st.selectbox("주문유형", ["지정가", "시장가"])

@@ -16,6 +16,17 @@ from dashboard.market_overview_service import (
 MARKET_REFRESH_SECONDS = 60
 
 
+def _format_age(updated_at: float | None) -> str:
+    if not updated_at:
+        return "기준시각 없음"
+    age = max(0, int(time.time() - float(updated_at)))
+    if age < 60:
+        return f"{age}초 전"
+    if age < 3600:
+        return f"{age // 60}분 전"
+    return f"{age // 3600}시간 전"
+
+
 def _render_market_metrics() -> None:
     metrics, error = load_market_overview()
     ordered = ["kospi", "kosdaq", "sp500", "nasdaq", "usdkrw", "vix"]
@@ -23,16 +34,21 @@ def _render_market_metrics() -> None:
         item = metrics[key]
         if item.value is None:
             col.metric(item.label, item.status)
-            if item.error:
-                col.caption(item.error[:80])
+            detail = item.error or "값을 검증할 수 없습니다."
+            col.caption(f"{item.market_state} · {detail[:70]}")
             continue
         value = f"{item.value:,.2f}"
         delta = f"{item.change:+,.2f} · {item.change_rate:+.2f}%" if item.change is not None else None
         col.metric(item.label, value, delta)
-        if item.updated_at:
-            col.caption(f"{time.strftime('%H:%M:%S', time.localtime(item.updated_at))} · {item.source}")
+        verified_text = "검증됨" if item.verified else "검증 필요"
+        col.caption(
+            f"{item.market_state} · {item.status} · {verified_text} · "
+            f"{time.strftime('%m-%d %H:%M', time.localtime(item.updated_at)) if item.updated_at else '-'} "
+            f"({_format_age(item.updated_at)})"
+        )
     if error:
-        st.warning(f"일부 시장 데이터 조회 실패: {error}")
+        st.warning(error)
+    st.caption("시장지표는 Yahoo Finance 참고값입니다. 거래소 공식값이나 주문 가격으로 사용하지 않습니다.")
 
 
 def _render_market_overview() -> None:
@@ -65,21 +81,21 @@ def _render_market_overview() -> None:
         st.dataframe(
             [
                 {
-                    "데이터 소스": "Yahoo Finance",
+                    "데이터 소스": "시장지표 · Yahoo Finance 참고용",
                     "상태": market_state.get("status"),
-                    "최근 성공": time.strftime("%H:%M:%S", time.localtime(float(market_state["checked_at"]))) if market_state.get("checked_at") else "-",
+                    "최근 기준시각": time.strftime("%m-%d %H:%M:%S", time.localtime(float(market_state["checked_at"]))) if market_state.get("checked_at") else "-",
                     "상세": market_state.get("detail"),
                 },
                 {
                     "데이터 소스": "SQLite",
                     "상태": db_state.get("status"),
-                    "최근 성공": time.strftime("%H:%M:%S", time.localtime(float(db_state["checked_at"]))) if db_state.get("checked_at") else "-",
+                    "최근 점검": time.strftime("%m-%d %H:%M:%S", time.localtime(float(db_state["checked_at"]))) if db_state.get("checked_at") else "-",
                     "상세": db_state.get("detail"),
                 },
                 {
                     "데이터 소스": "KIS WebSocket",
                     "상태": "정상" if ws_state.get("connected") and ws_state.get("latest_received_at") else ("연결·수신대기" if ws_state.get("connected") else "대기"),
-                    "최근 성공": time.strftime("%H:%M:%S", time.localtime(float(ws_state["latest_received_at"]))) if ws_state.get("latest_received_at") else "-",
+                    "최근 수신": time.strftime("%m-%d %H:%M:%S", time.localtime(float(ws_state["latest_received_at"]))) if ws_state.get("latest_received_at") else "-",
                     "상세": ws_state.get("last_error") or f"구독 {ws_state.get('subscription_count', 0)}개",
                 },
             ],
@@ -120,8 +136,12 @@ def _render_status_bar() -> None:
 
     db_text = "DB 정상" if db_state.get("status") == "정상" else "DB 오류"
     db_class = "ade-ok" if db_state.get("status") == "정상" else ""
-    yahoo_text = "Yahoo 정상" if market_state.get("status") == "정상" else "Yahoo 오류"
-    yahoo_class = "ade-ok" if market_state.get("status") == "정상" else ""
+    if market_state.get("status") == "정상":
+        market_text, market_class = "시장지표 검증됨", "ade-ok"
+    elif market_state.get("status") == "주의":
+        market_text, market_class = "시장지표 검증 필요", ""
+    else:
+        market_text, market_class = "시장지표 오류", ""
 
     latest_received_at = ws_state.get("latest_received_at")
     if ws_state.get("connected") and latest_received_at:
@@ -136,7 +156,7 @@ def _render_status_bar() -> None:
     st.markdown(
         f'<div class="ade-statusbar"><span>AI 상태 미측정</span><span class="{db_class}">{db_text}</span>'
         f'<span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span>'
-        f'<span class="{yahoo_class}">{yahoo_text}</span><span>추천·Replay·STO 규칙 유지</span></div>',
+        f'<span class="{market_class}">{market_text}</span><span>추천·Replay·STO 규칙 유지</span></div>',
         unsafe_allow_html=True,
     )
 

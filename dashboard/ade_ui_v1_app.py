@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import json
 import re
 import sqlite3
 import time
 import uuid
-from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 import pandas as pd
@@ -26,14 +23,22 @@ from dashboard.kis_zero_base_bridge import (
     revise_paper_order,
     submit_paper_order,
 )
+from dashboard.order_candidate_store import (
+    OrderCandidateStoreError,
+    clear_candidates,
+    delete_candidate,
+    list_candidates,
+    mark_selected,
+    store_health,
+    upsert_candidate,
+)
 from jp_radar.live_chart import make_live_radar_chart
 from jp_radar.stock_engine import JPStockRadarEngine
 from markets.profiles import get_market_profile
 from markets.symbol_display import build_name_map, normalize_ticker
 from recommendation.run_context import load_latest_context
 
-ORDER_CANDIDATES_PATH = Path("output/ade_order_candidates.json")
-THEME_PATH = Path(__file__).with_name("ade_zero_base_theme.css")
+THEME_PATH = __import__("pathlib").Path(__file__).with_name("ade_zero_base_theme.css")
 CUSTOM_CSS = """<style>[data-testid="stSidebar"],[data-testid="stSidebarNav"],section[data-testid="stSidebar"],div[data-testid="stSidebarNav"],[data-testid="collapsedControl"],button[kind="headerNoPadding"]{display:none!important}</style>"""
 LIVE_REFRESH_SECONDS = 5
 LIVE_PRICE_MAX_AGE_SECONDS = 15
@@ -83,6 +88,7 @@ def _init_state() -> None:
         "ade_last_submitted_signature": None,
         "ade_last_submitted_at": 0.0,
         "ade_last_client_request_id": None,
+        "ade_owner_id": uuid.uuid4().hex,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -179,7 +185,11 @@ def _render_recommendations() -> None:
             st.session_state.ade_jp_ticker = ticker
             st.rerun()
         if cols[4].button("주문", key=f"order_{market}_{ticker}", type="primary", use_container_width=True):
-            _add_order_candidate(market, ticker, symbol)
+            try:
+                _add_order_candidate(market, ticker, symbol)
+            except OrderCandidateStoreError as exc:
+                st.error(str(exc))
+                continue
             st.session_state.ade_primary_page = "주문"
             st.session_state.ade_order_ticker = ticker
             _reset_order_confirmation()
@@ -228,12 +238,30 @@ def _render_orders() -> None:
         if query and not normalized_query:
             st.caption("국내 주문은 6자리 숫자 종목코드를 입력하세요.")
         if normalized_query and st.button("주문후보에 추가", type="primary"):
-            _add_order_candidate(market, normalized_query, normalized_query)
-            st.rerun()
-        for row in [r for r in _load_order_candidates() if r.get("market") == market]:
-            if st.button(f"{row['symbol']} · {row['ticker']}", key=f"candidate_{market}_{row['ticker']}", use_container_width=True):
-                st.session_state.ade_order_ticker = row["ticker"]
+            try:
+                _add_order_candidate(market, normalized_query, normalized_query)
+                st.rerun()
+            except OrderCandidateStoreError as exc:
+                st.error(str(exc))
+        try:
+            rows = _load_order_candidates(market)
+        except OrderCandidateStoreError as exc:
+            st.error(str(exc))
+            rows = []
+        if rows:
+            if st.button("현재 시장 후보 전체 삭제", key=f"clear_candidates_{market}"):
+                clear_candidates(_owner_id(), market)
+                st.rerun()
+        for row in rows:
+            c1, c2 = st.columns([5, 1])
+            ticker = str(row["ticker"])
+            if c1.button(f"{row['symbol']} · {ticker}", key=f"candidate_{market}_{ticker}", use_container_width=True):
+                mark_selected(_owner_id(), market, ticker)
+                st.session_state.ade_order_ticker = ticker
                 _reset_order_confirmation()
+                st.rerun()
+            if c2.button("삭제", key=f"delete_candidate_{market}_{ticker}", use_container_width=True):
+                delete_candidate(_owner_id(), market, ticker)
                 st.rerun()
     with tabs[1]:
         if not positions:
@@ -568,7 +596,7 @@ def _render_order_ticket(market: str, ticker: str) -> None:
             st.session_state.ade_order_submit_state = "submitting"
             st.session_state.ade_last_client_request_id = request_id
             try:
-                ok, preflight_error, latest_available = _preflight_order(
+                ok, preflight_error, _latest_available = _preflight_order(
                     ticker=ticker,
                     side=side,
                     quantity=int(quantity),
@@ -658,20 +686,16 @@ def _normalize_kr_ticker(value: str) -> str:
     return text.zfill(6)
 
 
+def _owner_id() -> str:
+    return str(st.session_state.ade_owner_id)
+
+
 def _add_order_candidate(market: str, ticker: str, symbol: str) -> None:
-    rows = _load_order_candidates()
-    normalized = {"market": market, "ticker": ticker, "symbol": symbol, "added_at": datetime.now().isoformat(timespec="seconds")}
-    rows = [r for r in rows if not (r.get("market") == market and r.get("ticker") == ticker)]
-    rows.insert(0, normalized)
-    ORDER_CANDIDATES_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ORDER_CANDIDATES_PATH.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    upsert_candidate(_owner_id(), market, ticker, symbol)
 
 
-def _load_order_candidates() -> list[dict[str, Any]]:
-    try:
-        return json.loads(ORDER_CANDIDATES_PATH.read_text(encoding="utf-8")) if ORDER_CANDIDATES_PATH.exists() else []
-    except Exception:
-        return []
+def _load_order_candidates(market: str | None = None) -> list[dict[str, Any]]:
+    return list_candidates(_owner_id(), market)
 
 
 def _render_status_bar() -> None:
@@ -696,7 +720,10 @@ def _render_status_bar() -> None:
     else:
         ws_text = "실시간 대기"
         ws_class = ""
-    st.markdown(f'<div class="ade-statusbar"><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span>Yahoo 연결</span><span>추천·Replay·STO 규칙 유지</span></div>', unsafe_allow_html=True)
+    candidate_health = store_health()
+    candidate_text = "후보DB 정상" if candidate_health.get("status") == "정상" else "후보DB 오류"
+    candidate_class = "ade-ok" if candidate_health.get("status") == "정상" else ""
+    st.markdown(f'<div class="ade-statusbar"><span class="ade-ok">AI 정상</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span>Yahoo 연결</span><span class="{candidate_class}">{candidate_text}</span><span>추천·Replay·STO 규칙 유지</span></div>', unsafe_allow_html=True)
 
 
 def _safe_json(value: Any) -> dict[str, Any]:
@@ -704,6 +731,7 @@ def _safe_json(value: Any) -> dict[str, Any]:
         return value
     if isinstance(value, str):
         try:
+            import json
             parsed = json.loads(value)
             return parsed if isinstance(parsed, dict) else {}
         except Exception:

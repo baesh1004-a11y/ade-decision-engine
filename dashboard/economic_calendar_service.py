@@ -35,16 +35,27 @@ class EconomicEvent:
 _CACHE: tuple[float, list[EconomicEvent], str | None] | None = None
 _CACHE_TTL_SECONDS = 6 * 60 * 60
 _HTTP_TIMEOUT_SECONDS = 15
-_USER_AGENT = "ADE-Decision-Engine/1.0"
+_USER_AGENT = "Mozilla/5.0 (compatible; ADE-Decision-Engine/1.0; +https://github.com/baesh1004-a11y/ade-decision-engine)"
 
 _FOMC_URL = "https://www.federalreserve.gov/monetarypolicy/fomccalendars.htm"
-_BLS_ICS_URL = "https://www.bls.gov/schedule/news_release/bls.ics"
+_BLS_ICS_URLS = (
+    "https://www.bls.gov/schedule/news_release/bls.ics",
+    "https://www.bls.gov/schedule/news_release/bls.csv",
+)
 _BEA_URL = "https://www.bea.gov/news/schedule/"
 _BOK_URL = "https://www.bok.or.kr/portal/singl/crncyPolicyDrcMtg/listYear.do?menuNo=200755&mtgSe=A&pYear={year}"
 
 
-def _fetch_text(url: str) -> str:
-    request = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
+def _fetch_text(url: str, *, accept: str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8") -> str:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": _USER_AGENT,
+            "Accept": accept,
+            "Accept-Language": "en-US,en;q=0.9,ko;q=0.8",
+            "Cache-Control": "no-cache",
+        },
+    )
     with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT_SECONDS) as response:
         charset = response.headers.get_content_charset() or "utf-8"
         return response.read().decode(charset, errors="replace")
@@ -120,13 +131,15 @@ def _load_fomc_events() -> list[EconomicEvent]:
     text = _clean_html(_fetch_text(_FOMC_URL))
     rows: list[EconomicEvent] = []
     eastern = ZoneInfo("America/New_York")
+    month_map = {name: index for index, name in enumerate(("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"), start=1)}
     for year_text, block in re.findall(r"(20\d{2}) FOMC Meetings(.*?)(?=20\d{2} FOMC Meetings|Future Year:|$)", text, flags=re.S):
         year = int(year_text)
-        month_map = {name: index for index, name in enumerate(("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"), start=1)}
-        for month_name, days in re.findall(r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:-(\d{1,2}))?\*?", block):
-            month = month_map[month_name]
-            end_day = int(days[1] or days[0]) if isinstance(days, tuple) else int(days)
-            rows.append(EconomicEvent(datetime(year, month, end_day, 14, 0, tzinfo=eastern), "미국", "통화정책", "FOMC 금리결정", "매우 높음", "Federal Reserve", "정례회의 마지막 날 14:00 ET 기준"))
+        for month_name, start_day, end_day in re.findall(
+            r"(January|February|March|April|May|June|July|August|September|October|November|December)\s+(\d{1,2})(?:-(\d{1,2}))?\*?",
+            block,
+        ):
+            meeting_day = int(end_day or start_day)
+            rows.append(EconomicEvent(datetime(year, month_map[month_name], meeting_day, 14, 0, tzinfo=eastern), "미국", "통화정책", "FOMC 금리결정", "매우 높음", "Federal Reserve", "정례회의 마지막 날 14:00 ET 기준"))
     return rows
 
 
@@ -140,8 +153,17 @@ def _unfold_ics(text: str) -> list[str]:
     return lines
 
 
-def _load_bls_events() -> list[EconomicEvent]:
-    lines = _unfold_ics(_fetch_text(_BLS_ICS_URL))
+def _parse_bls_datetime(raw: str) -> datetime:
+    value = re.sub(r"[^0-9TZ]", "", raw)
+    if value.endswith("Z"):
+        return datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    if "T" in value:
+        return datetime.strptime(value[:15], "%Y%m%dT%H%M%S").replace(tzinfo=ZoneInfo("America/New_York"))
+    return datetime.strptime(value[:8], "%Y%m%d").replace(hour=8, minute=30, tzinfo=ZoneInfo("America/New_York"))
+
+
+def _load_bls_ics(text: str) -> list[EconomicEvent]:
+    lines = _unfold_ics(text)
     rows: list[EconomicEvent] = []
     current: dict[str, str] = {}
     for line in lines:
@@ -157,17 +179,59 @@ def _load_bls_events() -> list[EconomicEvent]:
                 "Producer Price Index": ("물가", "미국 PPI 발표"),
                 "Employment Situation": ("고용", "미국 고용보고서"),
             }
-            matched = next(((key, value) for key, value in title_map.items() if key.lower() in summary.lower()), None)
+            matched = next((value for key, value in title_map.items() if key.lower() in summary.lower()), None)
             if not matched:
                 continue
-            value = re.sub(r"[^0-9TZ]", "", dt_raw)
-            parsed = datetime.strptime(value, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc) if value.endswith("Z") else datetime.strptime(value[:15], "%Y%m%dT%H%M%S").replace(tzinfo=ZoneInfo("America/New_York"))
-            category, title = matched[1]
-            rows.append(EconomicEvent(parsed, "미국", category, title, "매우 높음", "U.S. Bureau of Labor Statistics", summary))
+            category, title = matched
+            rows.append(EconomicEvent(_parse_bls_datetime(dt_raw), "미국", category, title, "매우 높음", "U.S. Bureau of Labor Statistics", summary))
         elif ":" in line:
             key, value = line.split(":", 1)
             current[key.split(";", 1)[0]] = value.replace("\\,", ",").replace("\\n", " ")
     return rows
+
+
+def _load_bls_csv(text: str) -> list[EconomicEvent]:
+    rows: list[EconomicEvent] = []
+    eastern = ZoneInfo("America/New_York")
+    title_map = {
+        "Consumer Price Index": ("물가", "미국 CPI 발표"),
+        "Producer Price Index": ("물가", "미국 PPI 발표"),
+        "Employment Situation": ("고용", "미국 고용보고서"),
+    }
+    for line in text.splitlines():
+        if not line.strip() or line.lower().startswith("date"):
+            continue
+        for key, (category, title) in title_map.items():
+            if key.lower() not in line.lower():
+                continue
+            date_match = re.search(r"(\d{1,2})/(\d{1,2})/(20\d{2})", line)
+            time_match = re.search(r"(\d{1,2}):(\d{2})\s*(AM|PM)", line, flags=re.I)
+            if not date_match:
+                continue
+            month, day, year = map(int, date_match.groups())
+            hour, minute = (8, 30)
+            if time_match:
+                hour = int(time_match.group(1)) % 12
+                minute = int(time_match.group(2))
+                if time_match.group(3).upper() == "PM":
+                    hour += 12
+            rows.append(EconomicEvent(datetime(year, month, day, hour, minute, tzinfo=eastern), "미국", category, title, "매우 높음", "U.S. Bureau of Labor Statistics", line.strip()))
+            break
+    return rows
+
+
+def _load_bls_events() -> list[EconomicEvent]:
+    errors: list[str] = []
+    for url in _BLS_ICS_URLS:
+        try:
+            text = _fetch_text(url, accept="text/calendar,text/csv,text/plain,*/*")
+            rows = _load_bls_csv(text) if url.endswith(".csv") else _load_bls_ics(text)
+            if rows:
+                return rows
+            errors.append(f"{url.rsplit('/', 1)[-1]}: 일정 없음")
+        except Exception as exc:
+            errors.append(f"{url.rsplit('/', 1)[-1]}: {exc}")
+    raise RuntimeError("; ".join(errors))
 
 
 def _load_bea_events() -> list[EconomicEvent]:

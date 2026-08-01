@@ -6,6 +6,7 @@ import streamlit as st
 
 from dashboard import ade_ui_v1_app as base_ui
 from dashboard.ade_ui_v1_app import *  # noqa: F401,F403
+from dashboard.economic_calendar_service import load_economic_calendar
 from dashboard.kis_zero_base_bridge import load_kis_index
 from dashboard.market_overview_service import (
     database_health,
@@ -76,6 +77,17 @@ def _render_market_metrics() -> None:
     st.caption("KOSPI·KOSDAQ은 KIS 우선, 실패 시 Yahoo fallback입니다. 미국지수·환율·VIX는 Yahoo 참고값입니다.")
 
 
+def _render_event_table(*, compact: bool = False) -> None:
+    rows, warning = load_economic_calendar(days_ahead=90)
+    if rows:
+        visible = rows[:5] if compact else rows
+        st.dataframe(visible, hide_index=True, use_container_width=True)
+    else:
+        st.info("향후 90일 내 표시할 일정이 없습니다.")
+    if warning:
+        st.caption(warning)
+
+
 def _render_market_overview() -> None:
     st.markdown("### 시장의 현재 정보")
     fragment = getattr(st, "fragment", None)
@@ -89,7 +101,7 @@ def _render_market_overview() -> None:
         _fragment_body()
 
     st.markdown("#### 주요 이벤트")
-    st.info("경제 이벤트 공급원은 아직 연결되지 않았습니다. 데이터가 없는 상태를 정상 연결로 표시하지 않습니다.")
+    _render_event_table(compact=True)
 
     st.markdown("#### 국내 섹터 강도")
     rows, sector_error = load_sector_strength(get_market_profile("kr").db_path)
@@ -114,9 +126,16 @@ def _render_market_overview() -> None:
                     "상세": f"{float(value.get('value') or 0):,.2f}" if value else (kis_error or "조회 실패"),
                 }
             )
+        event_rows, event_warning = load_economic_calendar(days_ahead=90)
         st.dataframe(
             kis_rows
             + [
+                {
+                    "데이터 소스": "경제 캘린더 · 규칙 기반",
+                    "상태": "부분 연결" if event_rows else "데이터 없음",
+                    "최근 기준시각": time.strftime("%m-%d %H:%M:%S"),
+                    "상세": f"향후 90일 {len(event_rows)}건" + (f" · {event_warning}" if event_warning else ""),
+                },
                 {
                     "데이터 소스": "Yahoo 시장지표 · fallback/참고용",
                     "상태": market_state.get("status"),
@@ -141,6 +160,11 @@ def _render_market_overview() -> None:
         )
 
 
+def _render_event_page() -> None:
+    st.markdown("### 주요 이벤트")
+    _render_event_table(compact=False)
+
+
 def _render_overview_v2() -> None:
     tabs = st.segmented_control(
         "상황종합판 하위 메뉴",
@@ -153,7 +177,7 @@ def _render_overview_v2() -> None:
     if tabs == "시장":
         _render_market_overview()
     elif tabs == "이벤트":
-        base_ui._render_event_timeline()
+        _render_event_page()
     else:
         base_ui._render_portfolio_overview()
 

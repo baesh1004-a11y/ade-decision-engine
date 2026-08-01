@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import time
 from datetime import datetime, timedelta
@@ -16,6 +17,9 @@ _REQUIRED_ENV = ("KIS_APP_KEY", "KIS_APP_SECRET", "KIS_ACCOUNT")
 _T = TypeVar("_T")
 _CACHE_LOCK = RLock()
 _CACHE: dict[str, tuple[float, Any]] = {}
+_BROKER_LOCK = RLock()
+_BROKER: KISBrokerAdapter | None = None
+_BROKER_FINGERPRINT: tuple[str, str, str, str] | None = None
 
 
 def kis_configured() -> bool:
@@ -31,8 +35,24 @@ def kis_paper_enabled() -> bool:
         return False
 
 
+def _broker_fingerprint() -> tuple[str, str, str, str]:
+    app_key = os.getenv("KIS_APP_KEY", "").strip()
+    app_secret = os.getenv("KIS_APP_SECRET", "").strip()
+    account = os.getenv("KIS_ACCOUNT", "").strip() or os.getenv("KIS_ACCOUNT_NO", "").strip()
+    environment = os.getenv("KIS_ENV", "paper").strip().lower()
+    secret_hash = hashlib.sha256(f"{app_key}:{app_secret}".encode("utf-8")).hexdigest()
+    return environment, account, secret_hash, os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "01").strip()
+
+
 def _broker() -> KISBrokerAdapter:
-    return kis_broker_from_env()
+    global _BROKER, _BROKER_FINGERPRINT
+    fingerprint = _broker_fingerprint()
+    with _BROKER_LOCK:
+        if _BROKER is None or _BROKER_FINGERPRINT != fingerprint:
+            _BROKER = kis_broker_from_env()
+            _BROKER_FINGERPRINT = fingerprint
+            _invalidate()
+        return _BROKER
 
 
 def _cached(key: str, ttl_seconds: float, loader: Callable[[], _T]) -> _T:
@@ -43,7 +63,7 @@ def _cached(key: str, ttl_seconds: float, loader: Callable[[], _T]) -> _T:
             return cached[1]
     value = loader()
     with _CACHE_LOCK:
-        _CACHE[key] = (now, value)
+        _CACHE[key] = (time.monotonic(), value)
     return value
 
 

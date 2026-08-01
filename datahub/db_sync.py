@@ -8,11 +8,12 @@ import zipfile
 from pathlib import Path
 
 from datahub.bootstrap import ensure_market_databases
+from datahub.paths import archive_path, market_db_path, us_market_db_path
 
 
 DATABASE_ARCHIVES = (
-    ("MARKET_DB_ARCHIVE_URL", Path("datahub/market.db"), Path("datahub/.market-db-archive.zip")),
-    ("US_MARKET_DB_ARCHIVE_URL", Path("datahub/us_market.db"), Path("datahub/.us-market-db-archive.zip")),
+    ("MARKET_DB_ARCHIVE_URL", market_db_path(), archive_path(".market-db-archive.zip")),
+    ("US_MARKET_DB_ARCHIVE_URL", us_market_db_path(), archive_path(".us-market-db-archive.zip")),
 )
 
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
@@ -153,7 +154,7 @@ def _extract_database_member(
         candidate.unlink(missing_ok=True)
 
 
-def sync_database_archive(url_env: str, destination: Path, archive_path: Path) -> None:
+def sync_database_archive(url_env: str, destination: Path, archive_file: Path) -> None:
     force_refresh = _env_enabled(_FORCE_REFRESH_ENV)
     if not force_refresh and _existing_database_is_valid(destination):
         size_mb = destination.stat().st_size / (1024 * 1024)
@@ -174,25 +175,25 @@ def sync_database_archive(url_env: str, destination: Path, archive_path: Path) -
         _log(f"{_FORCE_REFRESH_ENV}=1; refreshing {destination.name} from archive")
 
     _log(f"Downloading {destination.name} archive from {url_env}")
-    _download(archive_url, archive_path)
+    _download(archive_url, archive_file)
 
     try:
-        if not zipfile.is_zipfile(archive_path):
+        if not zipfile.is_zipfile(archive_file):
             raise RuntimeError(f"Downloaded file for {destination.name} is not a valid ZIP archive")
 
-        with zipfile.ZipFile(archive_path) as archive:
+        with zipfile.ZipFile(archive_file) as archive:
             member = _find_archive_member(archive, destination.name)
             _extract_database_member(archive, member, destination)
     finally:
-        archive_path.unlink(missing_ok=True)
+        archive_file.unlink(missing_ok=True)
 
 
 def sync_market_databases() -> None:
     fatal_failures: list[str] = []
 
-    for url_env, destination, archive_path in DATABASE_ARCHIVES:
+    for url_env, destination, archive_file in DATABASE_ARCHIVES:
         try:
-            sync_database_archive(url_env, destination, archive_path)
+            sync_database_archive(url_env, destination, archive_file)
         except Exception as exc:
             _log(f"ERROR {destination.name} synchronization failed: {exc}")
             if _existing_database_is_valid(destination):

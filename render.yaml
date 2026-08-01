@@ -6,15 +6,11 @@ services:
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
     startCommand: python -m datahub.db_sync && exec python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
     autoDeploy: true
-    disk:
-      name: ade-data
-      mountPath: /var/data/ade
-      sizeGB: 5
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.3
       - key: ADE_DATA_DIR
-        value: /var/data/ade
+        value: datahub
       - key: MARKET_DB_ARCHIVE_URL
         value: https://pub-952a5fb7e0c6404e8a91d0ac4f32b660.r2.dev/ade-market-db.zip
       - key: US_MARKET_DB_ARCHIVE_URL

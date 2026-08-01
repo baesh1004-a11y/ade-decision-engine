@@ -1,0 +1,57 @@
+name: smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Compile core modules
+        run: python -m compileall broker dashboard datahub markets recommendation jp_radar
+      - name: Import smoke tests
+        env:
+          KIS_APP_KEY: ''
+          KIS_APP_SECRET: ''
+          KIS_ACCOUNT_NO: ''
+          KIS_ENV: paper
+        run: |
+          python -c "import dashboard_app"
+          python -c "from broker.kis import KISBrokerAdapter, kis_broker_from_env, kis_config_from_env"
+          python -c "from dashboard.market_overview_service import load_market_overview"
+          python -c "from broker.kis_websocket import KISWebSocketMarketClient; KISWebSocketMarketClient()"
+      - name: Verify live-order guard
+        run: |
+          python - <<'PY'
+          from broker.base import BrokerConfig, BrokerError, BrokerOrder
+          from broker.kis import KISBrokerAdapter
+
+          config = BrokerConfig(
+              broker='kis',
+              account_no='00000000',
+              account_product_code='01',
+              app_key='test',
+              app_secret='test',
+              is_live=True,
+          )
+          adapter = KISBrokerAdapter(config)
+          order = BrokerOrder(
+              market='kr', ticker='005930', side='BUY', quantity=1,
+              order_type='MARKET', limit_price=None, dry_run=False,
+          )
+          try:
+              adapter.place_order(order)
+          except BrokerError as exc:
+              assert 'blocked' in str(exc).lower() or '차단' in str(exc)
+          else:
+              raise AssertionError('live order guard did not block')
+          PY

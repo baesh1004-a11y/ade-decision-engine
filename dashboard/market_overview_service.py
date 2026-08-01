@@ -25,6 +25,7 @@ class MarketMetric:
     error: str | None = None
     fetched_at: float | None = None
     market_state: str = "unknown"
+    verified: bool = False
 
 
 _SYMBOLS: dict[str, tuple[str, str]] = {
@@ -42,6 +43,14 @@ _MARKET_META: dict[str, tuple[str, dt_time, dt_time]] = {
     "^IXIC": ("America/New_York", dt_time(9, 30), dt_time(16, 0)),
     "^VIX": ("America/Chicago", dt_time(8, 30), dt_time(15, 15)),
     "KRW=X": ("Etc/UTC", dt_time(0, 0), dt_time(23, 59)),
+}
+_VALUE_RANGES: dict[str, tuple[float, float]] = {
+    "^KS11": (500.0, 5000.0),
+    "^KQ11": (200.0, 2500.0),
+    "^GSPC": (1000.0, 15000.0),
+    "^IXIC": (3000.0, 50000.0),
+    "KRW=X": (500.0, 3000.0),
+    "^VIX": (5.0, 200.0),
 }
 _CACHE_LOCK = RLock()
 _CACHE: tuple[float, dict[str, MarketMetric], str | None] | None = None
@@ -86,26 +95,55 @@ def _history_metric(label: str, symbol: str, history: pd.DataFrame, now: float) 
     source = "Yahoo Finance · 참고용"
     state = _market_state(symbol, now)
     if history.empty or "Close" not in history:
-        return MarketMetric(label, None, None, None, None, "오류", source, "가격 데이터 없음", now, state)
+        return MarketMetric(label, None, None, None, None, "오류", source, "가격 데이터 없음", now, state, False)
     closes = history["Close"].dropna()
     if closes.empty:
-        return MarketMetric(label, None, None, None, None, "오류", source, "종가 데이터 없음", now, state)
+        return MarketMetric(label, None, None, None, None, "오류", source, "종가 데이터 없음", now, state, False)
     value = float(closes.iloc[-1])
     previous = float(closes.iloc[-2]) if len(closes) >= 2 else value
     change = value - previous
     change_rate = change / previous * 100 if previous else 0.0
     updated_at = _last_bar_timestamp(history.loc[closes.index], now)
-    if not pd.notna(value) or value <= 0:
-        return MarketMetric(label, None, None, None, updated_at, "오류", source, "비정상 가격", now, state)
-    if abs(change_rate) > 40:
-        return MarketMetric(label, None, None, None, updated_at, "오류", source, f"비정상 변동률 {change_rate:.2f}%", now, state)
+    minimum, maximum = _VALUE_RANGES.get(symbol, (0.0, float("inf")))
+    if not pd.notna(value) or not (minimum <= value <= maximum):
+        return MarketMetric(
+            label,
+            None,
+            None,
+            None,
+            updated_at,
+            "검증 필요",
+            source,
+            f"값 범위 이탈: {value:,.2f}",
+            now,
+            state,
+            False,
+        )
+    if abs(change_rate) > 20:
+        return MarketMetric(
+            label,
+            None,
+            None,
+            None,
+            updated_at,
+            "검증 필요",
+            source,
+            f"비정상 변동률 {change_rate:.2f}%",
+            now,
+            state,
+            False,
+        )
     age = max(0.0, now - updated_at)
     status = "정상"
+    verified = True
     if state == "장중" and age > 10 * 60:
         status = "지연"
+        verified = False
     elif state in {"장마감", "휴장"}:
         status = "종가"
-    return MarketMetric(label, value, change, change_rate, updated_at, status, source, None, now, state)
+    elif state == "장전":
+        status = "전일종가"
+    return MarketMetric(label, value, change, change_rate, updated_at, status, source, None, now, state, verified)
 
 
 def _stale_metrics(now: float, error: str) -> dict[str, MarketMetric] | None:
@@ -115,13 +153,13 @@ def _stale_metrics(now: float, error: str) -> dict[str, MarketMetric] | None:
     stale: dict[str, MarketMetric] = {}
     for key, metric in cached_metrics.items():
         if metric.value is None or not metric.updated_at:
-            stale[key] = replace(metric, status="오류", error=error, fetched_at=now)
+            stale[key] = replace(metric, status="오류", error=error, fetched_at=now, verified=False)
             continue
         age = now - metric.updated_at
         if age <= _STALE_TTL_SECONDS:
-            stale[key] = replace(metric, status="마지막 정상값 사용", error=error, fetched_at=now)
+            stale[key] = replace(metric, status="마지막 정상값 사용", error=error, fetched_at=now, verified=False)
         else:
-            stale[key] = replace(metric, value=None, change=None, change_rate=None, status="만료", error=error, fetched_at=now)
+            stale[key] = replace(metric, value=None, change=None, change_rate=None, status="만료", error=error, fetched_at=now, verified=False)
     return stale
 
 
@@ -155,9 +193,12 @@ def load_market_overview(*, refresh: bool = False) -> tuple[dict[str, MarketMetr
                     history = frame
                 metrics[key] = _history_metric(label, symbol, history, now)
             valid_count = sum(item.value is not None for item in metrics.values())
+            verified_count = sum(item.verified for item in metrics.values())
             if valid_count == 0:
                 raise RuntimeError("시장 데이터 조회 결과가 없습니다.")
-            error = None if valid_count == len(metrics) else f"일부 지표 조회 실패: {valid_count}/{len(metrics)}"
+            error = None
+            if valid_count != len(metrics) or verified_count != len(metrics):
+                error = f"시장지표 검증 결과: 값 {valid_count}/{len(metrics)}, 검증 {verified_count}/{len(metrics)}"
             _CACHE = (time.time(), metrics, error)
             _LAST_SUCCESS_AT = now
             _LAST_ERROR = error
@@ -172,7 +213,7 @@ def load_market_overview(*, refresh: bool = False) -> tuple[dict[str, MarketMetr
                 _CACHE = (_CACHE[0], stale, error)
                 return stale, error
             metrics = {
-                key: MarketMetric(label, None, None, None, None, "오류", "Yahoo Finance · 참고용", error, now, _market_state(symbol, now))
+                key: MarketMetric(label, None, None, None, None, "오류", "Yahoo Finance · 참고용", error, now, _market_state(symbol, now), False)
                 for key, (label, symbol) in _SYMBOLS.items()
             }
             _CACHE = (time.time(), metrics, error)
@@ -207,12 +248,16 @@ def database_health(db_path: str | Path) -> dict[str, Any]:
 
 def market_health(metrics: dict[str, MarketMetric], error: str | None) -> dict[str, Any]:
     valid = [item for item in metrics.values() if item.value is not None and item.updated_at]
+    verified = [item for item in valid if item.verified]
     latest = max((item.updated_at or 0 for item in valid), default=None)
-    statuses = {item.status for item in valid}
-    if valid:
-        status = "정상" if statuses <= {"정상", "종가"} and not error else "주의"
-        return {"status": status, "detail": f"{len(valid)}/{len(metrics)} 지표 수신", "checked_at": latest, "error": error}
-    return {"status": "오류", "detail": error or "수신 데이터 없음", "checked_at": None, "error": error}
+    if len(verified) == len(metrics) and not error:
+        status = "정상"
+    elif valid:
+        status = "주의"
+    else:
+        status = "오류"
+    detail = f"값 {len(valid)}/{len(metrics)} · 검증 {len(verified)}/{len(metrics)}"
+    return {"status": status, "detail": detail, "checked_at": latest, "error": error}
 
 
 def load_sector_strength(db_path: str | Path, *, limit: int = 5) -> tuple[list[dict[str, Any]], str | None]:

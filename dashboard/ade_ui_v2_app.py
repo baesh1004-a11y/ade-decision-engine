@@ -14,6 +14,7 @@ from dashboard.market_overview_service import (
     load_sector_strength,
     market_health,
 )
+from dashboard.news_disclosure_service import load_market_news, news_diagnostics
 
 MARKET_REFRESH_SECONDS = 60
 _KIS_INDEX_CODES = {"kospi": "0001", "kosdaq": "1001"}
@@ -118,6 +119,16 @@ def _render_sector_strength() -> None:
         st.caption(f"참고: {sector_error}")
 
 
+def _render_market_news() -> None:
+    rows, warning = load_market_news(limit=10)
+    if rows:
+        st.dataframe(rows, hide_index=True, use_container_width=True)
+    else:
+        st.info("표시할 최신 시장 뉴스가 없습니다.")
+    if warning:
+        st.caption(warning)
+
+
 def _render_market_overview() -> None:
     st.markdown("### 시장의 현재 정보")
     fragment = getattr(st, "fragment", None)
@@ -135,6 +146,9 @@ def _render_market_overview() -> None:
 
     st.markdown("#### 국내 섹터 강도")
     _render_sector_strength()
+
+    st.markdown("#### 최신 시장 뉴스")
+    _render_market_news()
 
     with st.expander("데이터 연결 진단"):
         metrics, market_error = load_market_overview()
@@ -154,6 +168,8 @@ def _render_market_overview() -> None:
             )
         event_rows, event_warning = load_economic_calendar(days_ahead=90)
         sector_rows, sector_warning = load_sector_strength(get_market_profile("kr").db_path, limit=10)
+        news_rows, news_warning = load_market_news(limit=10)
+        news_state = news_diagnostics()
         st.dataframe(
             kis_rows
             + [
@@ -168,6 +184,12 @@ def _render_market_overview() -> None:
                     "상태": "정상" if sector_rows else "오류",
                     "최근 기준시각": time.strftime("%m-%d %H:%M:%S"),
                     "상세": f"상위 {len(sector_rows)}개 업종" + (f" · {sector_warning}" if sector_warning else ""),
+                },
+                {
+                    "데이터 소스": "시장 뉴스 · Google News RSS",
+                    "상태": "정상" if news_rows else "오류",
+                    "최근 기준시각": time.strftime("%m-%d %H:%M:%S"),
+                    "상세": f"최신 {len(news_rows)}건 · DART {'설정됨' if news_state.get('dart_configured') else '미설정'}" + (f" · {news_warning}" if news_warning else ""),
                 },
                 {
                     "데이터 소스": "Yahoo 시장지표 · fallback/참고용",

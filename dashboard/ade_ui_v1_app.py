@@ -248,9 +248,7 @@ def _render_recommendations() -> None:
     recommendations, context = _load_recommendations(market)
     st.markdown(f"### {'국내' if market == 'kr' else '미국'} 추천종목")
     if context is not None:
-        st.caption(
-            f"실행ID {context.run_id} · 생성 {str(context.finished_at or '-')[:19]} · 추천 {context.recommendation_count}개"
-        )
+        st.caption(f"실행ID {context.run_id} · 생성 {str(context.finished_at or '-')[:19]} · 추천 {context.recommendation_count}개")
     if not recommendations:
         st.info("저장된 추천 결과가 없습니다.")
         return
@@ -332,15 +330,20 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     news_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "뉴스")
     disclosure_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "공시")
 
-    st.markdown(f"## {symbol}")
-    st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end}")
-
     risk_score = None
     environment_score = None
     if validation is not None:
         row = dict(validation)
         risk_score = float(row.get("risk_score") or 0)
         environment_score = float(row.get("final_score") or row.get("score") or 0)
+
+    target = _payload_number(payload, "target_price", "take_profit", "expected_price")
+    stop = _payload_number(payload, "stop_loss", "stop_price")
+    confidence = _payload_number(payload, "confidence", "confidence_score")
+    summary = _payload_text(payload, "ai_summary", "summary", "reason", "recommendation_reason")
+
+    st.markdown(f"## {symbol}")
+    st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end}")
 
     kpis = st.columns(6)
     kpis[0].metric("추천점수", f"{weekly:.1f}")
@@ -350,23 +353,34 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     kpis[4].metric("환경점수", f"{environment_score:.1f}" if environment_score is not None else "미측정")
     kpis[5].metric("위험점수", f"{risk_score:.1f}" if risk_score is not None else "미측정")
 
-    if current.empty:
-        st.warning("현재 가격 데이터가 부족하여 차트를 표시할 수 없습니다.")
-    else:
-        chart_tab, compare_tab = st.tabs(["현재 차트", "과거 패턴 비교"])
-        with chart_tab:
+    st.markdown("### 1. 가격·거래량과 종합 판단")
+    main_left, main_right = st.columns([1.55, 1], gap="large")
+    with main_left:
+        if current.empty:
+            st.warning("현재 가격 데이터가 부족하여 메인 차트를 표시할 수 없습니다.")
+        else:
             st.plotly_chart(build_trading_chart(current, symbol), use_container_width=True, config=CHART_CONFIG)
-        with compare_tab:
-            if historical.empty or pattern is None:
-                st.info("비교 가능한 과거 패턴이 없습니다.")
-            else:
-                historical_label = str(pattern["name"] or pattern["ticker"])
-                st.plotly_chart(
-                    build_pattern_compare_chart(current, historical, symbol, historical_label),
-                    use_container_width=True,
-                    config=CHART_CONFIG,
-                )
+    with main_right:
+        st.markdown("#### AI 종합판단")
+        if summary:
+            st.write(summary)
+        else:
+            st.info("AI 요약 데이터가 아직 저장되지 않았습니다. 저장된 추천·패턴·뉴스 데이터를 기준으로 확인 중입니다.")
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {"항목": "목표가", "값": f"{target:,.0f}" if target is not None else "미산출"},
+                    {"항목": "손절가", "값": f"{stop:,.0f}" if stop is not None else "미산출"},
+                    {"항목": "신뢰도", "값": f"{confidence:.1f}" if confidence is not None else "미산출"},
+                    {"항목": "뉴스", "값": f"{news_count}건"},
+                    {"항목": "공시", "값": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
+                ]
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
 
+    st.markdown("### 2. STO 구조와 Replay 패턴 비교")
     if pattern is not None and not historical.empty and not current.empty:
         historical_label = str(pattern["name"] or pattern["ticker"])
         render_professional_sto_panel(
@@ -380,13 +394,30 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     else:
         st.info("STO 구조 비교에 필요한 현재 가격 또는 과거 유사사례 데이터가 부족합니다.")
 
-    left, right = st.columns([1.25, 1])
+    if not current.empty and pattern is not None and not historical.empty:
+        st.markdown("### 3. 원본 패턴 검증")
+        compare_left, compare_right = st.columns([1, 1], gap="large")
+        with compare_left:
+            st.markdown("#### 현재 종목 원본 차트")
+            st.plotly_chart(build_trading_chart(current, symbol), use_container_width=True, config=CHART_CONFIG)
+        with compare_right:
+            historical_label = str(pattern["name"] or pattern["ticker"])
+            st.markdown(f"#### 과거 유사사례 · {historical_label}")
+            st.plotly_chart(
+                build_pattern_compare_chart(current, historical, symbol, historical_label),
+                use_container_width=True,
+                config=CHART_CONFIG,
+            )
+
+    st.markdown("### 4. 근거·리스크·시장 환경")
+    left, right = st.columns([1.15, 1], gap="large")
     with left:
         st.markdown("#### 추천 근거")
-        evidence_rows = []
-        evidence_rows.append({"항목": "주봉 패턴", "값": f"{weekly:.1f}%", "상태": "핵심 순위 근거"})
-        evidence_rows.append({"항목": "STO 필터", "값": f"{sto:.1f}%", "상태": "PASS"})
-        evidence_rows.append({"항목": "과거 유사사례", "값": f"{replay_count}건", "상태": "확인 가능" if replay_count else "없음"})
+        evidence_rows = [
+            {"항목": "주봉 패턴", "값": f"{weekly:.1f}%", "상태": "핵심 순위 근거"},
+            {"항목": "STO 필터", "값": f"{sto:.1f}%", "상태": "PASS"},
+            {"항목": "과거 유사사례", "값": f"{replay_count}건", "상태": "확인 가능" if replay_count else "없음"},
+        ]
         if environment_score is not None:
             evidence_rows.append({"항목": "시장·업종 환경", "값": f"{environment_score:.1f}", "상태": "측정됨"})
         if risk_score is not None:
@@ -405,23 +436,6 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         st.dataframe(pd.DataFrame(availability), hide_index=True, use_container_width=True)
 
     with right:
-        st.markdown("#### 투자 판단 메모")
-        summary = _payload_text(payload, "ai_summary", "summary", "reason", "recommendation_reason")
-        if summary:
-            st.write(summary)
-        else:
-            st.info("AI 요약 데이터가 아직 저장되지 않았습니다. 현재 화면은 저장된 추천·가격·패턴 데이터만 표시합니다.")
-
-        target = _payload_number(payload, "target_price", "take_profit", "expected_price")
-        stop = _payload_number(payload, "stop_loss", "stop_price")
-        confidence = _payload_number(payload, "confidence", "confidence_score")
-        memo_rows = [
-            {"항목": "목표가", "값": f"{target:,.0f}" if target is not None else "미산출"},
-            {"항목": "손절가", "값": f"{stop:,.0f}" if stop is not None else "미산출"},
-            {"항목": "신뢰도", "값": f"{confidence:.1f}" if confidence is not None else "미산출"},
-        ]
-        st.dataframe(pd.DataFrame(memo_rows), hide_index=True, use_container_width=True)
-
         st.markdown("#### 반대 근거·주의사항")
         cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
         if isinstance(cautions, str):
@@ -432,15 +446,17 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         else:
             st.caption("저장된 반대 근거 데이터가 없습니다. 데이터가 없음을 긍정 신호로 해석하면 안 됩니다.")
 
-        if validation is None:
-            st.markdown("#### 시장·업종 환경 조언")
+        st.markdown("#### 시장·업종 환경 조언")
+        if validation is not None:
+            st.success("시장·업종 환경 조언이 계산되어 있습니다.")
+        else:
             st.caption("추천 순위는 바꾸지 않고, 선택 종목의 시장·업종 환경을 추가 확인합니다.")
             if st.button("환경 조언 계산", key=f"detail_validate_{run_id}_{ticker}", use_container_width=True):
                 recommendation_base._run_selected_validation(profile.db_path, run_id, selected, payload)
                 st.success("환경 조언을 저장했습니다.")
                 st.rerun()
 
-    st.markdown("#### 최신 뉴스·공시")
+    st.markdown("### 5. 최신 뉴스·공시")
     if news_rows:
         st.dataframe(news_rows, hide_index=True, use_container_width=True)
     else:
@@ -548,10 +564,7 @@ def _render_candidate_controls(market: str) -> None:
 
 
 def _action_is_recent(signature: tuple[Any, ...]) -> bool:
-    return (
-        st.session_state.ade_last_order_action_signature == signature
-        and time.time() - float(st.session_state.ade_last_order_action_at or 0) < ORDER_ACTION_DUPLICATE_WINDOW_SECONDS
-    )
+    return st.session_state.ade_last_order_action_signature == signature and time.time() - float(st.session_state.ade_last_order_action_at or 0) < ORDER_ACTION_DUPLICATE_WINDOW_SECONDS
 
 
 def _render_pending_orders() -> None:

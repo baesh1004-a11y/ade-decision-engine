@@ -28,6 +28,7 @@ from dashboard.kis_zero_base_bridge import (
     revise_paper_order,
     submit_paper_order,
 )
+from dashboard.news_disclosure_service import load_security_news
 from dashboard.order_candidate_store import (
     OrderCandidateStoreError,
     clear_candidates,
@@ -326,6 +327,10 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     if not current.empty and "Date" in current.columns:
         current_end = str(pd.to_datetime(current["Date"].iloc[-1]))[:19]
 
+    news_rows, news_warning = load_security_news(ticker, symbol, limit=16)
+    news_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "뉴스")
+    disclosure_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "공시")
+
     st.markdown(f"## {symbol}")
     st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end}")
 
@@ -379,8 +384,8 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
             {"데이터": "현재 가격·거래량", "상태": "있음" if not current.empty else "없음"},
             {"데이터": "과거 패턴", "상태": "있음" if not historical.empty and pattern is not None else "없음"},
             {"데이터": "환경 조언", "상태": "있음" if validation is not None else "없음"},
-            {"데이터": "뉴스", "상태": "미연결"},
-            {"데이터": "공시", "상태": "미연결"},
+            {"데이터": "뉴스", "상태": f"{news_count}건" if news_count else "없음"},
+            {"데이터": "공시", "상태": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
             {"데이터": "외국인·기관 수급", "상태": "미연결"},
         ]
         st.dataframe(pd.DataFrame(availability), hide_index=True, use_container_width=True)
@@ -420,6 +425,14 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
                 recommendation_base._run_selected_validation(profile.db_path, run_id, selected, payload)
                 st.success("환경 조언을 저장했습니다.")
                 st.rerun()
+
+    st.markdown("#### 최신 뉴스·공시")
+    if news_rows:
+        st.dataframe(news_rows, hide_index=True, use_container_width=True)
+    else:
+        st.info("표시할 최신 뉴스·공시가 없습니다.")
+    if news_warning:
+        st.caption(news_warning)
 
 
 def _render_orders() -> None:

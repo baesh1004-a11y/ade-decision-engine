@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import dataclass
 from typing import Any
@@ -25,6 +26,18 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
+def _decode_json(value: object) -> dict[str, Any]:
+    if not value:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    try:
+        decoded = json.loads(str(value))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
 def latest_run(conn: sqlite3.Connection, market: str | None = None) -> dict[str, Any] | None:
     """Return the most recent run regardless of status or recommendation count."""
     if not _table_exists(conn, "recommendation_runs"):
@@ -32,7 +45,8 @@ def latest_run(conn: sqlite3.Connection, market: str | None = None) -> dict[str,
 
     market_filter = ""
     params: list[object] = []
-    if market and _table_exists(conn, "daily_recommendations"):
+    has_recommendations = _table_exists(conn, "daily_recommendations")
+    if market and has_recommendations:
         market_filter = """
         AND (
             EXISTS(
@@ -47,6 +61,10 @@ def latest_run(conn: sqlite3.Connection, market: str | None = None) -> dict[str,
         """
         params.append(market)
 
+    count_filter = "AND d.market=?" if market and has_recommendations else ""
+    if market and has_recommendations:
+        params.insert(0, market)
+
     row = conn.execute(
         f"""
         SELECT
@@ -55,7 +73,7 @@ def latest_run(conn: sqlite3.Connection, market: str | None = None) -> dict[str,
                 SELECT COUNT(*)
                 FROM daily_recommendations d
                 WHERE d.run_id=r.run_id
-                {"AND d.market=?" if market and _table_exists(conn, "daily_recommendations") else ""}
+                {count_filter}
             ), 0) AS actual_recommendation_count
         FROM recommendation_runs r
         WHERE 1=1
@@ -63,9 +81,16 @@ def latest_run(conn: sqlite3.Connection, market: str | None = None) -> dict[str,
         ORDER BY COALESCE(r.finished_at, r.started_at) DESC, r.started_at DESC
         LIMIT 1
         """,
-        tuple(([market] if market and _table_exists(conn, "daily_recommendations") else []) + params),
+        tuple(params),
     ).fetchone()
-    return dict(row) if row else None
+    if row is None:
+        return None
+    item = dict(row)
+    item["diagnostics"] = _decode_json(item.get("diagnostics_json"))
+    item["parameters"] = _decode_json(item.get("parameters_json"))
+    item.pop("diagnostics_json", None)
+    item.pop("parameters_json", None)
+    return item
 
 
 def completed_runs(

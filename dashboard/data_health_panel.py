@@ -22,7 +22,7 @@ def _disclosure_status(
         return "대기", "국내 종목만 DART 공시를 확인합니다."
     warning = str(news_warning or "").strip()
     if "DART_API_KEY 미설정" in warning:
-        return "미연결", "DART_API_KEY 미설정"
+        return "미연결", "Render 환경변수 DART_API_KEY 설정 필요"
     if "DART 조회 실패" in warning or "DART " in warning:
         return "오류", warning
     if disclosure_count > 0:
@@ -45,6 +45,7 @@ def build_data_health_rows(
     validation_attempted: bool,
     validation_error: str | None,
     market: str,
+    supply_health: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, str]]:
     current_ok = current is not None and not current.empty
     historical_ok = historical is not None and not historical.empty and pattern is not None
@@ -66,6 +67,16 @@ def build_data_health_rows(
     else:
         validation_status = "대기"
         validation_detail = "자동 계산 대기"
+
+    supply_health = supply_health or {}
+    investor = supply_health.get("investor") or {
+        "status": "대기" if market != "kr" else "오류",
+        "detail": "수급 진단 결과 없음",
+    }
+    program_short = supply_health.get("program_short") or {
+        "status": "대기" if market != "kr" else "오류",
+        "detail": "수급 진단 결과 없음",
+    }
 
     rows = [
         {
@@ -113,14 +124,14 @@ def build_data_health_rows(
         {
             "영역": "수급",
             "데이터": "외국인·기관",
-            "상태": "미연결",
-            "세부": "데이터 공급 경로 미구축",
+            "상태": str(investor.get("status") or "오류"),
+            "세부": str(investor.get("detail") or "조회 결과 없음"),
         },
         {
             "영역": "수급",
             "데이터": "프로그램·공매도",
-            "상태": "미연결",
-            "세부": "데이터 공급 경로 미구축",
+            "상태": str(program_short.get("status") or "오류"),
+            "세부": str(program_short.get("detail") or "조회 결과 없음"),
         },
     ]
     return rows

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import uuid
 from datetime import datetime
 from pathlib import Path
 from time import monotonic
@@ -154,6 +155,7 @@ def get_status(market_code: str) -> dict[str, object]:
         "overall_progress": 0.0,
         "thread_alive": False,
         "lock_exists": False,
+        "request_id": None,
     }
 
 
@@ -169,17 +171,19 @@ def start_job(
     min_weekly_similarity: float,
     use_sto_filter: bool,
     min_sto_similarity: float,
-) -> bool:
+) -> str | None:
     with _LOCK:
         existing = _JOBS.get(market_code)
         if existing and existing.get("thread") and existing["thread"].is_alive():
-            return False
+            return None
 
+        request_id = f"REQ-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
         cancel_event = threading.Event()
         heartbeat_stop = threading.Event()
         started_at = _now()
         startup_trace: list[dict[str, str]] = [{"stage": "STARTING", "at": started_at}]
         initial = {
+            "request_id": request_id,
             "state": "STARTING",
             "running": True,
             "stage": "STARTING",
@@ -226,6 +230,7 @@ def start_job(
                 startup_trace.clear()
                 startup_trace.extend(trace)
                 status = {
+                    "request_id": request_id,
                     "state": "RUNNING",
                     "running": True,
                     "stage": stage,
@@ -283,6 +288,7 @@ def start_job(
                         3,
                     )
                 status = {
+                    "request_id": request_id,
                     "state": "RUNNING",
                     "running": True,
                     **progress,
@@ -332,6 +338,7 @@ def start_job(
                         3,
                     )
                 final = {
+                    "request_id": request_id,
                     "state": result.status,
                     "running": False,
                     "stage": result.status,
@@ -359,6 +366,7 @@ def start_job(
                         3,
                     )
                 final = {
+                    "request_id": request_id,
                     "state": "FAILED",
                     "running": False,
                     "stage": "FAILED",
@@ -387,6 +395,7 @@ def start_job(
         thread = threading.Thread(target=worker, name=f"ade-{market_code}-recommendation", daemon=True)
         heartbeat = threading.Thread(target=heartbeat_worker, name=f"ade-{market_code}-heartbeat", daemon=True)
         _JOBS[market_code] = {
+            "request_id": request_id,
             "thread": thread,
             "heartbeat_thread": heartbeat,
             "heartbeat_stop": heartbeat_stop,
@@ -395,7 +404,7 @@ def start_job(
         }
         thread.start()
         heartbeat.start()
-        return True
+        return request_id
 
 
 def cancel_job(market_code: str) -> bool:

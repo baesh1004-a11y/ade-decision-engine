@@ -71,6 +71,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             f"sto_min={min_sto_similarity:.1f} top_n={top_n}"
         )
 
+        pattern_query_started = perf_counter()
         patterns = self.conn.execute(
             """
             SELECT *
@@ -81,6 +82,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             """,
             (market, MULTI_PATTERN_VERSION, cutoff, pattern_limit),
         ).fetchall()
+        duration_pattern_query = perf_counter() - pattern_query_started
         if not patterns:
             raise RuntimeError(
                 f"최근 {candidate_years}년 급등직전 패턴이 없습니다. 패턴 DB를 다시 구축하세요."
@@ -110,9 +112,17 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "symbols_with_sto_pass": 0,
             "symbols_with_matches": 0,
             "final_recommendations": 0,
+            "duration_pattern_query_seconds": round(duration_pattern_query, 3),
             "duration_prepare_seconds": 0.0,
+            "duration_symbol_list_seconds": 0.0,
+            "duration_price_load_seconds": 0.0,
+            "duration_feature_extract_seconds": 0.0,
+            "duration_weekly_compare_seconds": 0.0,
+            "duration_sto_compare_seconds": 0.0,
+            "duration_sort_seconds": 0.0,
             "duration_match_seconds": 0.0,
             "duration_total_seconds": 0.0,
+            "slowest_symbols": [],
         }
 
         prepare_started = perf_counter()
@@ -134,10 +144,13 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         if not prepared:
             raise RuntimeError("조회된 급등직전 패턴을 비교 가능한 형태로 준비하지 못했습니다.")
 
+        symbol_list_started = perf_counter()
         symbols = self._active_symbols(market)
+        diagnostics["duration_symbol_list_seconds"] = round(perf_counter() - symbol_list_started, 3)
         diagnostics["symbols_total"] = len(symbols)
         ranked_results: list[tuple[float, float, EventRecommendation]] = []
         match_started = perf_counter()
+        slowest_symbols: list[dict[str, object]] = []
 
         for symbol_index, symbol in enumerate(symbols, start=1):
             if cancelled():
@@ -145,6 +158,13 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                 raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
             ticker = str(symbol["ticker"])
+            symbol_started = perf_counter()
+            price_seconds = 0.0
+            feature_seconds = 0.0
+            weekly_seconds = 0.0
+            sto_seconds = 0.0
+
+            price_started = perf_counter()
             try:
                 data = self.price_repo.fetch_dataframe(market, ticker, source=source)
                 if data.empty:
@@ -155,17 +175,42 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                 diagnostics["symbols_price_error"] = int(diagnostics["symbols_price_error"]) + 1
                 log(f"price_error ticker={ticker} type={type(exc).__name__} message={exc}")
                 data = pd.DataFrame()
+            price_seconds = perf_counter() - price_started
+            diagnostics["duration_price_load_seconds"] = round(
+                float(diagnostics["duration_price_load_seconds"]) + price_seconds, 3
+            )
 
             current = data.tail(120).reset_index(drop=True)
             if len(current) < 120:
                 diagnostics["symbols_without_120d"] = int(diagnostics["symbols_without_120d"]) + 1
+                symbol_total = perf_counter() - symbol_started
+                slowest_symbols.append(
+                    {
+                        "ticker": ticker,
+                        "total_seconds": round(symbol_total, 4),
+                        "price_seconds": round(price_seconds, 4),
+                        "feature_seconds": 0.0,
+                        "weekly_seconds": 0.0,
+                        "sto_seconds": 0.0,
+                        "status": "INSUFFICIENT_120D",
+                    }
+                )
+                slowest_symbols = sorted(
+                    slowest_symbols, key=lambda item: float(item["total_seconds"]), reverse=True
+                )[:10]
                 if symbol_index == len(symbols) or symbol_index % 25 == 0:
                     publish("MATCH", symbol_index, len(symbols), f"{ticker}: 120일 데이터 부족", ticker=ticker, diagnostics=diagnostics.copy())
                 continue
 
             diagnostics["symbols_with_120d"] = int(diagnostics["symbols_with_120d"]) + 1
+            feature_started = perf_counter()
             current_weekly = self.weekly_engine.extract(current)
             current_sto = self.sto_engine.extract(current)
+            feature_seconds = perf_counter() - feature_started
+            diagnostics["duration_feature_extract_seconds"] = round(
+                float(diagnostics["duration_feature_extract_seconds"]) + feature_seconds, 3
+            )
+
             candidate_matches: list[tuple[float, sqlite3.Row, ReplayMatch]] = []
             symbol_weekly_pass = False
             symbol_sto_pass = False
@@ -175,13 +220,25 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     diagnostics["cancelled_at_symbol"] = symbol_index
                     raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
+                weekly_started = perf_counter()
                 weekly_score = self.weekly_engine.similarity(current_weekly, weekly)
+                weekly_delta = perf_counter() - weekly_started
+                weekly_seconds += weekly_delta
+                diagnostics["duration_weekly_compare_seconds"] = round(
+                    float(diagnostics["duration_weekly_compare_seconds"]) + weekly_delta, 3
+                )
                 if weekly_score < min_weekly_similarity:
                     continue
                 diagnostics["weekly_pass_comparisons"] = int(diagnostics["weekly_pass_comparisons"]) + 1
                 symbol_weekly_pass = True
 
+                sto_started = perf_counter()
                 sto_score = self.sto_engine.similarity(current_sto, sto)
+                sto_delta = perf_counter() - sto_started
+                sto_seconds += sto_delta
+                diagnostics["duration_sto_compare_seconds"] = round(
+                    float(diagnostics["duration_sto_compare_seconds"]) + sto_delta, 3
+                )
                 if sto_score < min_sto_similarity:
                     continue
                 diagnostics["sto_pass_comparisons"] = int(diagnostics["sto_pass_comparisons"]) + 1
@@ -254,19 +311,61 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                 )
                 ranked_results.append((best.weekly_similarity, average_weekly, recommendation))
 
+            symbol_total = perf_counter() - symbol_started
+            slowest_symbols.append(
+                {
+                    "ticker": ticker,
+                    "total_seconds": round(symbol_total, 4),
+                    "price_seconds": round(price_seconds, 4),
+                    "feature_seconds": round(feature_seconds, 4),
+                    "weekly_seconds": round(weekly_seconds, 4),
+                    "sto_seconds": round(sto_seconds, 4),
+                    "status": "MATCHED" if selected else "NO_MATCH",
+                }
+            )
+            slowest_symbols = sorted(
+                slowest_symbols, key=lambda item: float(item["total_seconds"]), reverse=True
+            )[:10]
+
             if symbol_index == len(symbols) or symbol_index % 25 == 0:
                 diagnostics["duration_match_seconds"] = round(perf_counter() - match_started, 3)
+                diagnostics["slowest_symbols"] = slowest_symbols
                 publish("MATCH", symbol_index, len(symbols), f"{ticker} 분석 완료", ticker=ticker, diagnostics=diagnostics.copy())
 
         diagnostics["duration_match_seconds"] = round(perf_counter() - match_started, 3)
+        sort_started = perf_counter()
         publish("RANK", 0, 1, "주봉 유사도가 높은 종목 순으로 정렬하고 있습니다.", diagnostics=diagnostics.copy())
         ranked_results.sort(
             key=lambda item: (item[0], item[1], item[2].sto_similarity),
             reverse=True,
         )
+        diagnostics["duration_sort_seconds"] = round(perf_counter() - sort_started, 3)
         recommendations = [item[2] for item in ranked_results[:top_n]]
         diagnostics["final_recommendations"] = len(recommendations)
         diagnostics["duration_total_seconds"] = round(perf_counter() - started, 3)
+        diagnostics["slowest_symbols"] = slowest_symbols
+
+        log(
+            "timing "
+            f"pattern_query={diagnostics['duration_pattern_query_seconds']}s "
+            f"prepare={diagnostics['duration_prepare_seconds']}s "
+            f"symbol_list={diagnostics['duration_symbol_list_seconds']}s "
+            f"price_load={diagnostics['duration_price_load_seconds']}s "
+            f"feature_extract={diagnostics['duration_feature_extract_seconds']}s "
+            f"weekly_compare={diagnostics['duration_weekly_compare_seconds']}s "
+            f"sto_compare={diagnostics['duration_sto_compare_seconds']}s "
+            f"sort={diagnostics['duration_sort_seconds']}s "
+            f"match={diagnostics['duration_match_seconds']}s "
+            f"total={diagnostics['duration_total_seconds']}s"
+        )
+        for rank, item in enumerate(slowest_symbols, start=1):
+            log(
+                "slow_symbol "
+                f"rank={rank} ticker={item['ticker']} total={item['total_seconds']}s "
+                f"price={item['price_seconds']}s feature={item['feature_seconds']}s "
+                f"weekly={item['weekly_seconds']}s sto={item['sto_seconds']}s "
+                f"status={item['status']}"
+            )
         log(
             "complete "
             f"recommendations={len(recommendations)} patterns={len(prepared)} symbols={len(symbols)} "

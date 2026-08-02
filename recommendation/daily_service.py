@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import traceback
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -105,6 +106,14 @@ class DailyRecommendationService:
     def close(self) -> None:
         self.conn.close()
 
+    @staticmethod
+    def _write_error_log(run_id: str, payload: dict[str, object]) -> Path:
+        error_dir = runtime_path("recommendation_errors")
+        error_dir.mkdir(parents=True, exist_ok=True)
+        path = error_dir / f"{run_id}.json"
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return path
+
     def run(
         self,
         run_type: str,
@@ -127,7 +136,12 @@ class DailyRecommendationService:
         if not self._process_lock.acquire(blocking=False):
             raise RuntimeError("Another recommendation job is already running")
 
+        current_stage = "START"
+        run_id = "unassigned"
+
         def emit(stage: str, message: str, progress: float = 0.0, **extra: object) -> None:
+            nonlocal current_stage
+            current_stage = stage
             if progress_callback is None:
                 return
             payload: dict[str, object] = {
@@ -323,6 +337,27 @@ class DailyRecommendationService:
                 self.conn.rollback()
                 if report_path is not None:
                     report_path.unlink(missing_ok=True)
+
+                error_payload = {
+                    "run_id": run_id,
+                    "failed_stage": current_stage,
+                    "exception_type": type(exc).__name__,
+                    "exception_message": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "occurred_at": finished.isoformat(timespec="seconds"),
+                }
+                error_log_path = self._write_error_log(run_id, error_payload)
+                detailed_error = (
+                    f"[{current_stage}] {type(exc).__name__}: {exc} "
+                    f"(error_log={error_log_path})"
+                )
+                diagnostics = {
+                    **diagnostics,
+                    "failed_stage": current_stage,
+                    "exception_type": type(exc).__name__,
+                    "error_log_path": str(error_log_path),
+                }
+
                 try:
                     self.conn.execute(
                         """
@@ -334,14 +369,14 @@ class DailyRecommendationService:
                             finished.isoformat(timespec="seconds"),
                             elapsed,
                             json.dumps(diagnostics, ensure_ascii=False),
-                            str(exc),
+                            detailed_error,
                             run_id,
                         ),
                     )
                     self.conn.commit()
                 except Exception:
                     self.conn.rollback()
-                raise
+                raise RuntimeError(detailed_error) from exc
         finally:
             self._process_lock.release()
 

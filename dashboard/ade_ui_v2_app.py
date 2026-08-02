@@ -6,6 +6,7 @@ import streamlit as st
 
 from dashboard import ade_ui_v1_app as base_ui
 from dashboard.ade_ui_v1_app import *  # noqa: F401,F403
+from dashboard.ade_recommendation_page import render_recommendation_page
 from dashboard.economic_calendar_service import load_economic_calendar
 from dashboard.kis_zero_base_bridge import load_kis_index
 from dashboard.market_overview_service import (
@@ -237,6 +238,46 @@ def _render_overview_v2() -> None:
         base_ui._render_portfolio_overview()
 
 
+def _open_recommendation_detail(ticker: str) -> None:
+    st.session_state.ade_recommendation_detail = ticker
+    st.session_state.ade_show_heavy_charts = False
+    st.rerun()
+
+
+def _open_recommendation_jp(ticker: str) -> None:
+    st.session_state.ade_primary_page = "JP Radar"
+    st.session_state.ade_jp_ticker = ticker
+    st.rerun()
+
+
+def _open_recommendation_order(market: str, ticker: str, symbol: str) -> None:
+    try:
+        base_ui._add_order_candidate(market, ticker, symbol)
+    except base_ui.OrderCandidateStoreError as exc:
+        st.error(str(exc))
+        return
+    st.session_state.ade_primary_page = "주문"
+    st.session_state.ade_order_ticker = ticker
+    base_ui._reset_order_confirmation()
+    st.rerun()
+
+
+def _render_recommendations_v2() -> None:
+    market = base_ui._market_selector("ade_reco_market")
+    if st.session_state.ade_recommendation_detail:
+        base_ui._render_recommendation_detail(market, st.session_state.ade_recommendation_detail)
+        return
+    recommendations, context = base_ui._load_recommendations(market)
+    render_recommendation_page(
+        market=market,
+        recommendations=recommendations,
+        context=context,
+        open_detail=_open_recommendation_detail,
+        open_jp=_open_recommendation_jp,
+        open_order=lambda ticker, symbol: _open_recommendation_order(market, ticker, symbol),
+    )
+
+
 def _render_status_bar() -> None:
     metrics, market_error = load_market_overview()
     market_state = market_health(metrics, market_error)
@@ -292,7 +333,7 @@ def run() -> None:
         _render_overview_v2()
     elif page == "추천결과":
         base_ui._release_live_lease()
-        base_ui._render_recommendations()
+        _render_recommendations_v2()
     elif page == "주문":
         base_ui._render_orders()
     else:

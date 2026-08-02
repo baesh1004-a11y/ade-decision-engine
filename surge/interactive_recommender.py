@@ -45,7 +45,6 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         progress_callback: ProgressCallback | None = None,
         cancel_check: CancelCheck | None = None,
     ) -> tuple[list[EventRecommendation], dict[str, object]]:
-        # Legacy arguments remain only so older schedulers keep working.
         del lookback_months, use_recent_replay, use_weekly_filter, use_sto_filter
 
         candidate_years = max(1, int(candidate_years))
@@ -53,10 +52,14 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         replay_top_n = max(1, int(replay_top_n))
         top_n = max(1, int(top_n))
 
+        def log(message: str) -> None:
+            print(f"[ADE][RECOMMEND] {message}", flush=True)
+
         def cancelled() -> bool:
             return bool(cancel_check and cancel_check())
 
         def publish(stage: str, current: int, total: int, message: str, **extra: object) -> None:
+            log(f"stage={stage} current={current} total={total} message={message}")
             if progress_callback is None:
                 return
             progress_callback(
@@ -72,6 +75,11 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
 
         market, source = self._market_and_source()
         cutoff = (datetime.now().date() - timedelta(days=candidate_years * 365)).isoformat()
+        log(
+            f"start market={market} source={source} years={candidate_years} "
+            f"pattern_limit={pattern_limit} weekly_min={min_weekly_similarity:.1f} "
+            f"sto_min={min_sto_similarity:.1f} top_n={top_n}"
+        )
         patterns = self.conn.execute(
             """
             SELECT *
@@ -82,7 +90,9 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             """,
             (market, MULTI_PATTERN_VERSION, cutoff, pattern_limit),
         ).fetchall()
+        log(f"patterns_loaded={len(patterns)} cutoff={cutoff}")
         if not patterns:
+            log("abort reason=no_recent_patterns")
             raise RuntimeError(
                 f"최근 {candidate_years}년 급등직전 패턴이 없습니다. 패턴 DB를 다시 구축하세요."
             )
@@ -91,14 +101,17 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         prepared: list[tuple[sqlite3.Row, object, object]] = []
         for index, row in enumerate(patterns, start=1):
             if cancelled():
+                log(f"cancelled stage=PREPARE index={index}")
                 raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
             item = self._prepare_pattern(row)
             if item is not None:
                 prepared.append(item)
             if index == len(patterns) or index % 50 == 0:
                 publish("PREPARE", index, len(patterns), "과거 급등직전 120일 패턴을 준비하고 있습니다.")
+        log(f"patterns_prepared={len(prepared)}")
 
         symbols = self._active_symbols(market)
+        log(f"symbols_total={len(symbols)}")
         diagnostics: dict[str, object] = {
             "algorithm": "pre-surge-120d-weekly-rank-sto-filter-v2",
             "ranking_score": "weekly_similarity",
@@ -123,6 +136,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         for symbol_index, symbol in enumerate(symbols, start=1):
             if cancelled():
                 diagnostics["cancelled_at_symbol"] = symbol_index
+                log(f"cancelled stage=MATCH symbol_index={symbol_index}")
                 raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
             ticker = str(symbol["ticker"])
@@ -140,6 +154,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             for pattern_index, (row, weekly, sto) in enumerate(prepared, start=1):
                 if pattern_index % 50 == 0 and cancelled():
                     diagnostics["cancelled_at_symbol"] = symbol_index
+                    log(f"cancelled stage=MATCH symbol_index={symbol_index} pattern_index={pattern_index}")
                     raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
                 weekly_score = self.weekly_engine.similarity(current_weekly, weekly)
@@ -152,8 +167,6 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     continue
                 diagnostics["sto_pass_comparisons"] = int(diagnostics["sto_pass_comparisons"]) + 1
 
-                # Schema compatibility: final_similarity is the ranking score,
-                # and the ranking score is now weekly similarity only.
                 ranking_score = weekly_score
                 match = ReplayMatch(
                     event_id=str(row["pattern_id"]),
@@ -222,6 +235,15 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                 )
                 ranked_results.append((best.weekly_similarity, average_weekly, recommendation))
 
+            if symbol_index == len(symbols) or symbol_index % 25 == 0:
+                log(
+                    "progress "
+                    f"symbols={symbol_index}/{len(symbols)} "
+                    f"with_120d={diagnostics['symbols_with_120d']} "
+                    f"weekly_pass={diagnostics['weekly_pass_comparisons']} "
+                    f"sto_pass={diagnostics['sto_pass_comparisons']} "
+                    f"matched={diagnostics['symbols_with_matches']}"
+                )
             publish("MATCH", symbol_index, len(symbols), f"{ticker} 분석 완료", ticker=ticker, diagnostics=diagnostics.copy())
 
         publish("RANK", 0, 1, "주봉 유사도가 높은 종목 순으로 정렬하고 있습니다.", diagnostics=diagnostics.copy())
@@ -235,5 +257,14 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         )
         recommendations = [item[2] for item in ranked_results[:top_n]]
         diagnostics["final_recommendations"] = len(recommendations)
+        log(
+            "complete "
+            f"recommendations={len(recommendations)} "
+            f"patterns={len(prepared)} symbols={len(symbols)} "
+            f"with_120d={diagnostics['symbols_with_120d']} "
+            f"weekly_pass={diagnostics['weekly_pass_comparisons']} "
+            f"sto_pass={diagnostics['sto_pass_comparisons']} "
+            f"matched={diagnostics['symbols_with_matches']}"
+        )
         publish("COMPLETE", 1, 1, "추천 분석이 완료되었습니다.", diagnostics=diagnostics.copy())
         return recommendations, diagnostics

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -8,10 +9,14 @@ from time import perf_counter
 import pandas as pd
 
 from recommendation.event_recommender import EventRecommendation, ReplayMatch
+from sto.structure_similarity import STOStructure
 from surge.multi_horizon import MULTI_PATTERN_VERSION, MultiHorizonSurgePatternRecommender
+from weekly.shape_similarity import WeeklyShape
 
 ProgressCallback = Callable[[dict[str, object]], None]
 CancelCheck = Callable[[], bool]
+
+FEATURE_CACHE_VERSION = "weekly26-sto3layer-v1"
 
 
 class RecommendationCancelled(RuntimeError):
@@ -20,6 +25,115 @@ class RecommendationCancelled(RuntimeError):
 
 class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
     """Official ADE pre-surge recommender."""
+
+    def _ensure_feature_cache(self) -> None:
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS recommendation_feature_cache (
+                market TEXT NOT NULL,
+                ticker TEXT NOT NULL,
+                last_trade_date TEXT NOT NULL,
+                feature_version TEXT NOT NULL,
+                weekly_json TEXT NOT NULL,
+                sto_json TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (market, ticker, last_trade_date, feature_version)
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_recommendation_feature_cache_lookup
+            ON recommendation_feature_cache(market, ticker, last_trade_date, feature_version)
+            """
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _weekly_from_dict(payload: dict[str, object]) -> WeeklyShape:
+        return WeeklyShape(
+            normalized_close=list(payload.get("normalized_close") or []),
+            normalized_high=list(payload.get("normalized_high") or []),
+            normalized_low=list(payload.get("normalized_low") or []),
+            volume_ratio=list(payload.get("volume_ratio") or []),
+            box_width=float(payload.get("box_width") or 0.0),
+            pullback_depth=float(payload.get("pullback_depth") or 0.0),
+            breakout_angle=float(payload.get("breakout_angle") or 0.0),
+            trend_slope=float(payload.get("trend_slope") or 0.0),
+            labels=list(payload.get("labels") or []),
+        )
+
+    @staticmethod
+    def _sto_from_dict(payload: dict[str, object]) -> STOStructure:
+        return STOStructure(
+            short=float(payload.get("short") or 0.0),
+            middle=float(payload.get("middle") or 0.0),
+            long=float(payload.get("long") or 0.0),
+            spread_sm=float(payload.get("spread_sm") or 0.0),
+            spread_ml=float(payload.get("spread_ml") or 0.0),
+            convergence=float(payload.get("convergence") or 0.0),
+            slope_short=float(payload.get("slope_short") or 0.0),
+            slope_middle=float(payload.get("slope_middle") or 0.0),
+            slope_long=float(payload.get("slope_long") or 0.0),
+            arrangement=str(payload.get("arrangement") or "UNKNOWN"),
+            vector=list(payload.get("vector") or []),
+            labels=list(payload.get("labels") or []),
+            short_path=list(payload.get("short_path") or []),
+            middle_path=list(payload.get("middle_path") or []),
+            long_path=list(payload.get("long_path") or []),
+        )
+
+    def _load_cached_features(
+        self,
+        market: str,
+        ticker: str,
+        last_trade_date: str,
+    ) -> tuple[WeeklyShape, STOStructure] | None:
+        row = self.conn.execute(
+            """
+            SELECT weekly_json, sto_json
+            FROM recommendation_feature_cache
+            WHERE market=? AND ticker=? AND last_trade_date=? AND feature_version=?
+            """,
+            (market, ticker, last_trade_date, FEATURE_CACHE_VERSION),
+        ).fetchone()
+        if row is None:
+            return None
+        try:
+            weekly_payload = json.loads(str(row["weekly_json"]))
+            sto_payload = json.loads(str(row["sto_json"]))
+            return self._weekly_from_dict(weekly_payload), self._sto_from_dict(sto_payload)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+
+    def _save_cached_features(
+        self,
+        market: str,
+        ticker: str,
+        last_trade_date: str,
+        weekly: WeeklyShape,
+        sto: STOStructure,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO recommendation_feature_cache(
+                market, ticker, last_trade_date, feature_version, weekly_json, sto_json
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(market, ticker, last_trade_date, feature_version)
+            DO UPDATE SET weekly_json=excluded.weekly_json,
+                          sto_json=excluded.sto_json,
+                          updated_at=CURRENT_TIMESTAMP
+            """,
+            (
+                market,
+                ticker,
+                last_trade_date,
+                FEATURE_CACHE_VERSION,
+                json.dumps(weekly.to_dict(), ensure_ascii=False, separators=(",", ":")),
+                json.dumps(sto.to_dict(), ensure_ascii=False, separators=(",", ":")),
+            ),
+        )
 
     def recommend_interactive(
         self,
@@ -38,6 +152,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
     ) -> tuple[list[EventRecommendation], dict[str, object]]:
         del lookback_months, use_recent_replay, use_weekly_filter, use_sto_filter
 
+        self._ensure_feature_cache()
         started = perf_counter()
         candidate_years = max(1, int(candidate_years))
         pattern_limit = max(10, int(weekly_pool_n))
@@ -106,6 +221,8 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "symbols_price_error": 0,
             "symbols_with_120d": 0,
             "symbols_without_120d": 0,
+            "feature_cache_hit": 0,
+            "feature_cache_miss": 0,
             "weekly_pass_comparisons": 0,
             "sto_pass_comparisons": 0,
             "symbols_with_weekly_pass": 0,
@@ -117,7 +234,9 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "duration_symbol_list_seconds": 0.0,
             "duration_bulk_price_load_seconds": 0.0,
             "duration_price_load_seconds": 0.0,
+            "duration_feature_cache_read_seconds": 0.0,
             "duration_feature_extract_seconds": 0.0,
+            "duration_feature_cache_write_seconds": 0.0,
             "duration_weekly_compare_seconds": 0.0,
             "duration_sto_compare_seconds": 0.0,
             "duration_sort_seconds": 0.0,
@@ -165,6 +284,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         ranked_results: list[tuple[float, float, EventRecommendation]] = []
         match_started = perf_counter()
         slowest_symbols: list[dict[str, object]] = []
+        pending_cache_writes = 0
 
         for symbol_index, symbol in enumerate(symbols, start=1):
             if cancelled():
@@ -220,13 +340,39 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                 continue
 
             diagnostics["symbols_with_120d"] = int(diagnostics["symbols_with_120d"]) + 1
-            feature_started = perf_counter()
-            current_weekly = self.weekly_engine.extract(current)
-            current_sto = self.sto_engine.extract(current)
-            feature_seconds = perf_counter() - feature_started
-            diagnostics["duration_feature_extract_seconds"] = round(
-                float(diagnostics["duration_feature_extract_seconds"]) + feature_seconds, 3
+            last_trade_date = str(pd.Timestamp(current.iloc[-1]["Date"]).date())
+
+            cache_read_started = perf_counter()
+            cached = self._load_cached_features(market, ticker, last_trade_date)
+            diagnostics["duration_feature_cache_read_seconds"] = round(
+                float(diagnostics["duration_feature_cache_read_seconds"])
+                + (perf_counter() - cache_read_started),
+                3,
             )
+
+            if cached is not None:
+                diagnostics["feature_cache_hit"] = int(diagnostics["feature_cache_hit"]) + 1
+                current_weekly, current_sto = cached
+            else:
+                diagnostics["feature_cache_miss"] = int(diagnostics["feature_cache_miss"]) + 1
+                feature_started = perf_counter()
+                current_weekly = self.weekly_engine.extract(current)
+                current_sto = self.sto_engine.extract(current)
+                feature_seconds = perf_counter() - feature_started
+                diagnostics["duration_feature_extract_seconds"] = round(
+                    float(diagnostics["duration_feature_extract_seconds"]) + feature_seconds, 3
+                )
+                cache_write_started = perf_counter()
+                self._save_cached_features(market, ticker, last_trade_date, current_weekly, current_sto)
+                diagnostics["duration_feature_cache_write_seconds"] = round(
+                    float(diagnostics["duration_feature_cache_write_seconds"])
+                    + (perf_counter() - cache_write_started),
+                    3,
+                )
+                pending_cache_writes += 1
+                if pending_cache_writes >= 100:
+                    self.conn.commit()
+                    pending_cache_writes = 0
 
             candidate_matches: list[tuple[float, sqlite3.Row, ReplayMatch]] = []
             symbol_weekly_pass = False
@@ -305,7 +451,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     market=market,
                     ticker=ticker,
                     name=symbol["name"],
-                    recent_event_date=str(pd.Timestamp(current.iloc[-1]["Date"]).date()),
+                    recent_event_date=last_trade_date,
                     recent_money_ratio=0.0,
                     matched_event_id=best.event_id,
                     matched_event_date=best.event_date,
@@ -349,6 +495,9 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                 diagnostics["slowest_symbols"] = slowest_symbols
                 publish("MATCH", symbol_index, len(symbols), f"{ticker} 분석 완료", ticker=ticker, diagnostics=diagnostics.copy())
 
+        if pending_cache_writes:
+            self.conn.commit()
+
         diagnostics["duration_match_seconds"] = round(perf_counter() - match_started, 3)
         sort_started = perf_counter()
         publish("RANK", 0, 1, "주봉 유사도가 높은 종목 순으로 정렬하고 있습니다.", diagnostics=diagnostics.copy())
@@ -356,11 +505,10 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             key=lambda item: (item[0], item[1], item[2].sto_similarity),
             reverse=True,
         )
-        recommendations = [item[2] for item in ranked_results[:top_n]]
         diagnostics["duration_sort_seconds"] = round(perf_counter() - sort_started, 3)
+        recommendations = [item[2] for item in ranked_results[:top_n]]
         diagnostics["final_recommendations"] = len(recommendations)
         diagnostics["duration_total_seconds"] = round(perf_counter() - started, 3)
-        diagnostics["slowest_symbols"] = slowest_symbols
         log(
             "timing "
             f"pattern_query={diagnostics['duration_pattern_query_seconds']}s "
@@ -368,12 +516,18 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             f"symbol_list={diagnostics['duration_symbol_list_seconds']}s "
             f"bulk_price_load={diagnostics['duration_bulk_price_load_seconds']}s "
             f"price_load={diagnostics['duration_price_load_seconds']}s "
+            f"feature_cache_read={diagnostics['duration_feature_cache_read_seconds']}s "
             f"feature_extract={diagnostics['duration_feature_extract_seconds']}s "
+            f"feature_cache_write={diagnostics['duration_feature_cache_write_seconds']}s "
             f"weekly_compare={diagnostics['duration_weekly_compare_seconds']}s "
             f"sto_compare={diagnostics['duration_sto_compare_seconds']}s "
             f"sort={diagnostics['duration_sort_seconds']}s "
             f"match={diagnostics['duration_match_seconds']}s "
             f"total={diagnostics['duration_total_seconds']}s"
+        )
+        log(
+            f"feature_cache hit={diagnostics['feature_cache_hit']} "
+            f"miss={diagnostics['feature_cache_miss']} version={FEATURE_CACHE_VERSION}"
         )
         for rank, item in enumerate(slowest_symbols, start=1):
             log(

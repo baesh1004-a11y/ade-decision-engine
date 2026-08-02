@@ -19,6 +19,10 @@ _STALE_AFTER_SECONDS = 30
 _RUNTIME_DIR = Path(os.getenv("ADE_RUNTIME_DIR", "output"))
 _STAGE_LABELS = {
     "STARTING": "작업 준비",
+    "THREAD_STARTED": "작업 스레드 시작",
+    "SERVICE_READY": "추천 서비스 준비",
+    "LOCK_WAIT": "작업 잠금 확인",
+    "ENGINE_START": "추천 엔진 시작",
     "PREPARE": "과거 패턴 준비",
     "MATCH": "전체 종목 비교",
     "RANK": "추천 순위 계산",
@@ -56,6 +60,8 @@ def _seconds_since(value: object) -> float | None:
 
 def _overall_progress(stage: str, stage_progress: float) -> float:
     value = min(1.0, max(0.0, float(stage_progress or 0.0)))
+    if stage in {"STARTING", "THREAD_STARTED", "SERVICE_READY", "LOCK_WAIT", "ENGINE_START"}:
+        return 0.02 * value
     if stage == "PREPARE":
         return 0.10 * value
     if stage == "MATCH":
@@ -172,6 +178,7 @@ def start_job(
         cancel_event = threading.Event()
         heartbeat_stop = threading.Event()
         started_at = _now()
+        startup_trace: list[dict[str, str]] = [{"stage": "STARTING", "at": started_at}]
         initial = {
             "state": "STARTING",
             "running": True,
@@ -186,6 +193,7 @@ def start_job(
             "message": "추천 작업을 준비하고 있습니다.",
             "diagnostics": {},
             "stage_durations": {},
+            "startup_trace": startup_trace,
             "started_at": started_at,
             "heartbeat_at": started_at,
         }
@@ -208,14 +216,45 @@ def start_job(
                     job["status"] = _write_status(market_code, status)
 
         def worker() -> None:
+            stage_started_at = monotonic()
+            last_stage: str | None = None
+            stage_durations: dict[str, float] = {}
+            service: DailyRecommendationService | None = None
+
+            def publish_startup(stage: str, message: str) -> None:
+                trace = [*startup_trace, {"stage": stage, "at": _now()}]
+                startup_trace.clear()
+                startup_trace.extend(trace)
+                status = {
+                    "state": "RUNNING",
+                    "running": True,
+                    "stage": stage,
+                    "stage_label": _STAGE_LABELS[stage],
+                    "progress": 0.0,
+                    "stage_progress": 0.0,
+                    "overall_progress": _overall_progress(stage, 0.0),
+                    "current": 0,
+                    "total": 0,
+                    "current_ticker": None,
+                    "message": message,
+                    "diagnostics": {},
+                    "stage_durations": dict(stage_durations),
+                    "startup_trace": list(startup_trace),
+                    "started_at": started_at,
+                    "heartbeat_at": _now(),
+                    "elapsed_seconds": _seconds_since(started_at) or 0.0,
+                }
+                with _LOCK:
+                    if market_code in _JOBS:
+                        _JOBS[market_code]["status"] = _write_status(market_code, status)
+
+            publish_startup("THREAD_STARTED", "추천 작업 스레드를 시작했습니다.")
             service = DailyRecommendationService(db_path)
+            publish_startup("SERVICE_READY", "추천 서비스 초기화를 완료했습니다.")
             manager = ADEJobManager(
                 lock_path=_lock_path(market_code),
                 status_path=_job_status_path(market_code),
             )
-            stage_started_at = monotonic()
-            last_stage: str | None = None
-            stage_durations: dict[str, float] = {}
 
             def on_progress(progress: dict[str, object]) -> None:
                 nonlocal stage_started_at, last_stage
@@ -259,6 +298,7 @@ def start_job(
                     "current_ticker": ticker,
                     "matched_symbols": diagnostics.get("symbols_with_matches", 0),
                     "stage_durations": live_stage_durations,
+                    "startup_trace": list(startup_trace),
                     "started_at": started_at,
                     "heartbeat_at": _now(),
                     "elapsed_seconds": _seconds_since(started_at) or 0.0,
@@ -269,7 +309,9 @@ def start_job(
 
             final: dict[str, object]
             try:
+                publish_startup("LOCK_WAIT", "추천 작업 잠금을 확인하고 있습니다.")
                 with manager.acquire(f"{market_code.upper()}_MANUAL_RECOMMENDATION", wait=False):
+                    publish_startup("ENGINE_START", "추천 엔진 실행을 시작했습니다.")
                     result = service.run(
                         "MANUAL",
                         top_n=top_n,
@@ -302,6 +344,7 @@ def start_job(
                     "recommendation_count": result.recommendation_count,
                     "elapsed_seconds": result.elapsed_seconds,
                     "stage_durations": stage_durations,
+                    "startup_trace": list(startup_trace),
                     "report_path": result.report_path,
                     "diagnostics": result.diagnostics or {},
                     "error_message": result.error_message,
@@ -327,12 +370,14 @@ def start_job(
                     "error_message": str(exc),
                     "diagnostics": {},
                     "stage_durations": stage_durations,
+                    "startup_trace": list(startup_trace),
                     "started_at": started_at,
                     "heartbeat_at": _now(),
                     "elapsed_seconds": _seconds_since(started_at) or 0.0,
                 }
             finally:
-                service.close()
+                if service is not None:
+                    service.close()
                 heartbeat_stop.set()
 
             with _LOCK:

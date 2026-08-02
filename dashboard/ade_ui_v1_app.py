@@ -381,6 +381,19 @@ def _pattern_from_replay(conn: sqlite3.Connection, payload: dict[str, Any]):
     return None
 
 
+def _run_validation_once(profile, run_id: str, market: str, ticker: str, selected: dict[str, Any], payload: dict[str, Any], validation_key: str) -> None:
+    if run_id == "-" or st.session_state.ade_validation_attempted.get(validation_key):
+        return
+    st.session_state.ade_validation_attempted[validation_key] = True
+    st.session_state.ade_validation_errors.pop(validation_key, None)
+    try:
+        recommendation_base._run_selected_validation(profile.db_path, run_id, selected, payload)
+        _load_recommendations.clear()
+    except Exception as exc:
+        LOGGER.exception("Automatic environment validation failed run_id=%s ticker=%s", run_id, ticker)
+        st.session_state.ade_validation_errors[validation_key] = f"환경 검증 실패: {exc}"
+
+
 def _render_recommendation_detail(market: str, ticker: str) -> None:
     if st.button("← 추천종목으로 돌아가기"):
         st.session_state.ade_recommendation_detail = None
@@ -394,8 +407,15 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     profile = get_market_profile(market)
     normalized_ticker = normalize_ticker(ticker, market)
     payload = _safe_json(selected.get("payload_json"))
+    run_id = context.run_id if context else "-"
     validation = context.validations.get(normalized_ticker) if context else None
-    validation_key = f"{context.run_id if context else '-'}:{market}:{normalized_ticker}"
+    validation_key = f"{run_id}:{market}:{normalized_ticker}"
+    if validation is None:
+        _run_validation_once(profile, run_id, market, normalized_ticker, selected, payload, validation_key)
+        if st.session_state.ade_validation_errors.get(validation_key) is None and st.session_state.ade_validation_attempted.get(validation_key):
+            recommendations, context = _load_recommendations(market)
+            selected = next((r for r in recommendations if str(r.get("ticker")) == ticker), selected)
+            validation = context.validations.get(normalized_ticker) if context else None
     validation_attempted = bool(st.session_state.ade_validation_attempted.get(validation_key))
     validation_error = st.session_state.ade_validation_errors.get(validation_key)
     with sqlite3.connect(str(profile.db_path), timeout=5) as conn:
@@ -411,7 +431,6 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     symbol = str(selected.get("symbol") or selected.get("name") or ticker)
     weekly = float(selected.get("weekly_similarity") or selected.get("score") or selected.get("final_similarity") or 0)
     sto = float(selected.get("sto_similarity") or 0)
-    run_id = context.run_id if context else "-"
     finished_at = str(context.finished_at or "-")[:19] if context else "-"
     replay_matches = payload.get("replay_matches") or []
     replay_count = len(replay_matches) if isinstance(replay_matches, list) else 0
@@ -618,21 +637,11 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
 
         st.markdown("#### 시장·업종 환경 조언")
         if validation is not None:
-            st.success("시장·업종 환경 조언이 계산되어 있습니다.")
+            st.success("시장·업종 환경 조언이 자동 계산되어 있습니다.")
+        elif validation_error:
+            st.error(validation_error)
         else:
-            st.caption("추천 순위는 바꾸지 않고, 선택 종목의 시장·업종 환경을 추가 확인합니다.")
-            if st.button("환경 조언 계산", key=f"detail_validate_{run_id}_{ticker}", use_container_width=True):
-                st.session_state.ade_validation_attempted[validation_key] = True
-                st.session_state.ade_validation_errors.pop(validation_key, None)
-                try:
-                    recommendation_base._run_selected_validation(profile.db_path, run_id, selected, payload)
-                    _load_recommendations.clear()
-                    st.success("환경 조언을 저장했습니다.")
-                except Exception as exc:
-                    LOGGER.exception("Environment validation failed run_id=%s ticker=%s", run_id, ticker)
-                    st.session_state.ade_validation_errors[validation_key] = f"환경 검증 실패: {exc}"
-                    st.error("환경 조언 계산에 실패했습니다.")
-                st.rerun()
+            st.caption("시장·업종 환경 조언 자동 계산 결과를 기다리고 있습니다.")
 
     st.markdown("### 5. 최신 뉴스·공시")
     if news_rows:

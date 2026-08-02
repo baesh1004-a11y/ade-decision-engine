@@ -15,6 +15,7 @@ import streamlit as st
 from broker.kis_websocket import shared_market_client
 from dashboard import recommendation_workbench_v2_app as recommendation_base
 from dashboard.charts import CHART_CONFIG, build_pattern_compare_chart, build_trading_chart
+from dashboard.data_health_panel import build_data_health_rows, render_data_health_panel
 from dashboard.kis_zero_base_bridge import (
     cancel_paper_order,
     kis_configured,
@@ -427,6 +428,20 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     kpis[3].metric("과거 유사사례", f"{replay_count}건")
     kpis[4].metric("환경점수", f"{environment_score:.1f}" if environment_score is not None else "미측정")
     kpis[5].metric("위험점수", f"{risk_score:.1f}" if risk_score is not None else "미측정")
+
+    health_rows = build_data_health_rows(
+        current=current,
+        current_source=current_source,
+        current_warning=current_warning,
+        historical=historical,
+        pattern=pattern,
+        replay_count=replay_count,
+        news_count=news_count,
+        disclosure_count=disclosure_count,
+        validation=validation,
+        market=market,
+    )
+    render_data_health_panel(health_rows)
 
     st.markdown("### 1. 가격·거래량과 종합 판단")
     if current.empty:

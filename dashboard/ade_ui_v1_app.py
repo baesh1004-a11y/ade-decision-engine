@@ -448,7 +448,12 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     else:
         main_left, main_right = st.columns([1.55, 1], gap="large")
         with main_left:
-            st.plotly_chart(build_trading_chart(current, symbol), use_container_width=True, config=CHART_CONFIG)
+            st.plotly_chart(
+                build_trading_chart(current, symbol),
+                key=f"recommendation_main_chart_{market}_{ticker}",
+                use_container_width=True,
+                config=CHART_CONFIG,
+            )
         with main_right:
             st.markdown("#### AI 종합판단")
             if summary:
@@ -508,12 +513,19 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         compare_left, compare_right = st.columns([1, 1], gap="large")
         with compare_left:
             st.markdown("#### 현재 종목 원본 차트")
-            st.plotly_chart(build_trading_chart(current, symbol), use_container_width=True, config=CHART_CONFIG)
+            st.plotly_chart(
+                build_trading_chart(current, symbol),
+                key=f"recommendation_raw_chart_{market}_{ticker}",
+                use_container_width=True,
+                config=CHART_CONFIG,
+            )
         with compare_right:
             historical_label = str(pattern["name"] or pattern["ticker"])
             st.markdown(f"#### 과거 유사사례 · {historical_label}")
+            pattern_identity = str(pattern["pattern_id"] if "pattern_id" in pattern.keys() else historical_label)
             st.plotly_chart(
                 build_pattern_compare_chart(current, historical, symbol, historical_label),
+                key=f"recommendation_pattern_compare_{market}_{ticker}_{pattern_identity}",
                 use_container_width=True,
                 config=CHART_CONFIG,
             )

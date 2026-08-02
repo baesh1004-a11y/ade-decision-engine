@@ -21,6 +21,26 @@ MARKET_REFRESH_SECONDS = 60
 _KIS_INDEX_CODES = {"kospi": "0001", "kosdaq": "1001"}
 
 
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_market_overview():
+    return load_market_overview()
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_economic_calendar(days_ahead: int = 90):
+    return load_economic_calendar(days_ahead=days_ahead)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_sector_strength(db_path: str, limit: int = 10):
+    return load_sector_strength(db_path, limit=limit)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_market_news(limit: int = 10):
+    return load_market_news(limit=limit)
+
+
 def _format_age(updated_at: float | None) -> str:
     if not updated_at:
         return "기준시각 없음"
@@ -33,7 +53,7 @@ def _format_age(updated_at: float | None) -> str:
 
 
 def _render_market_metrics() -> None:
-    metrics, error = load_market_overview()
+    metrics, error = _cached_market_overview()
     ordered = ["kospi", "kosdaq", "sp500", "nasdaq", "usdkrw", "vix"]
     kis_errors: list[str] = []
 
@@ -80,7 +100,7 @@ def _render_market_metrics() -> None:
 
 
 def _render_event_table(*, compact: bool = False) -> None:
-    rows, warning = load_economic_calendar(days_ahead=90)
+    rows, warning = _cached_economic_calendar(90)
     if rows:
         visible = rows[:5] if compact else rows
         st.dataframe(visible, hide_index=True, use_container_width=True)
@@ -91,7 +111,8 @@ def _render_event_table(*, compact: bool = False) -> None:
 
 
 def _render_sector_strength() -> None:
-    rows, sector_error = load_sector_strength(get_market_profile("kr").db_path, limit=10)
+    db_path = str(get_market_profile("kr").db_path)
+    rows, sector_error = _cached_sector_strength(db_path, 10)
     if not rows:
         st.info(sector_error or "섹터 강도 데이터가 없습니다.")
         return
@@ -121,7 +142,7 @@ def _render_sector_strength() -> None:
 
 
 def _render_market_news() -> None:
-    rows, warning = load_market_news(limit=10)
+    rows, warning = _cached_market_news(10)
     if rows:
         st.dataframe(rows, hide_index=True, use_container_width=True)
     else:
@@ -152,7 +173,8 @@ def _render_market_overview() -> None:
     _render_market_news()
 
     with st.expander("데이터 연결 진단"):
-        metrics, market_error = load_market_overview()
+        st.caption("진단 패널을 펼친 경우에만 추가 상태 조회를 수행합니다.")
+        metrics, market_error = _cached_market_overview()
         market_state = market_health(metrics, market_error)
         db_state = database_health(get_market_profile("kr").db_path)
         ws_state = shared_market_client().health_snapshot()
@@ -167,9 +189,9 @@ def _render_market_overview() -> None:
                     "상세": f"{float(value.get('value') or 0):,.2f}" if value else (kis_error or "조회 실패"),
                 }
             )
-        event_rows, event_warning = load_economic_calendar(days_ahead=90)
-        sector_rows, sector_warning = load_sector_strength(get_market_profile("kr").db_path, limit=10)
-        news_rows, news_warning = load_market_news(limit=10)
+        event_rows, event_warning = _cached_economic_calendar(90)
+        sector_rows, sector_warning = _cached_sector_strength(str(get_market_profile("kr").db_path), 10)
+        news_rows, news_warning = _cached_market_news(10)
         news_state = news_diagnostics()
         st.dataframe(
             kis_rows
@@ -305,7 +327,7 @@ def _render_status_bar(*, lightweight: bool = False) -> None:
         )
         return
 
-    metrics, market_error = load_market_overview()
+    metrics, market_error = _cached_market_overview()
     market_state = market_health(metrics, market_error)
     ws_state = shared_market_client().health_snapshot()
 

@@ -8,6 +8,7 @@ from time import perf_counter
 
 import pandas as pd
 
+from prediction.replay_prediction import ReplayPredictionEngine
 from recommendation.event_recommender import EventRecommendation, ReplayMatch
 from sto.structure_similarity import STOStructure
 from surge.multi_horizon import MULTI_PATTERN_VERSION, MultiHorizonSurgePatternRecommender
@@ -153,6 +154,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         del lookback_months, use_recent_replay, use_weekly_filter, use_sto_filter
 
         self._ensure_feature_cache()
+        prediction_engine = ReplayPredictionEngine(self.db_path)
         started = perf_counter()
         candidate_years = max(1, int(candidate_years))
         pattern_limit = max(10, int(weekly_pool_n))
@@ -199,6 +201,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         ).fetchall()
         duration_pattern_query = perf_counter() - pattern_query_started
         if not patterns:
+            prediction_engine.close()
             raise RuntimeError(
                 f"최근 {candidate_years}년 급등직전 패턴이 없습니다. 패턴 DB를 다시 구축하세요."
             )
@@ -228,6 +231,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "symbols_with_weekly_pass": 0,
             "symbols_with_sto_pass": 0,
             "symbols_with_matches": 0,
+            "predictions_created": 0,
             "final_recommendations": 0,
             "duration_pattern_query_seconds": round(duration_pattern_query, 3),
             "duration_prepare_seconds": 0.0,
@@ -239,6 +243,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "duration_feature_cache_write_seconds": 0.0,
             "duration_weekly_compare_seconds": 0.0,
             "duration_sto_compare_seconds": 0.0,
+            "duration_prediction_seconds": 0.0,
             "duration_sort_seconds": 0.0,
             "duration_match_seconds": 0.0,
             "duration_total_seconds": 0.0,
@@ -250,6 +255,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         prepared: list[tuple[sqlite3.Row, object, object]] = []
         for index, row in enumerate(patterns, start=1):
             if cancelled():
+                prediction_engine.close()
                 raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
             item = self._prepare_pattern(row)
             if item is not None:
@@ -262,6 +268,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         diagnostics["patterns_prepared"] = len(prepared)
         diagnostics["duration_prepare_seconds"] = round(perf_counter() - prepare_started, 3)
         if not prepared:
+            prediction_engine.close()
             raise RuntimeError("조회된 급등직전 패턴을 비교 가능한 형태로 준비하지 못했습니다.")
 
         symbol_list_started = perf_counter()
@@ -289,6 +296,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         for symbol_index, symbol in enumerate(symbols, start=1):
             if cancelled():
                 diagnostics["cancelled_at_symbol"] = symbol_index
+                prediction_engine.close()
                 raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
             ticker = str(symbol["ticker"])
@@ -381,6 +389,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             for pattern_index, (row, weekly, sto) in enumerate(prepared, start=1):
                 if pattern_index % 50 == 0 and cancelled():
                     diagnostics["cancelled_at_symbol"] = symbol_index
+                    prediction_engine.close()
                     raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
                 weekly_started = perf_counter()
@@ -447,6 +456,33 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     for _, row, _ in selected
                 ) / len(selected)
 
+                prediction_started = perf_counter()
+                prediction = prediction_engine.predict(matches)
+                diagnostics["duration_prediction_seconds"] = round(
+                    float(diagnostics["duration_prediction_seconds"])
+                    + (perf_counter() - prediction_started),
+                    3,
+                )
+                if prediction is not None:
+                    diagnostics["predictions_created"] = int(diagnostics["predictions_created"]) + 1
+
+                reasons = [
+                    "현재 최근 120거래일을 과거 실제 급등 직전 120거래일과 비교",
+                    f"추천 순위 점수는 주봉 유사도 단일 기준: {best_score:.2f}%",
+                    f"STO는 최소 {min_sto_similarity:.1f}% 통과 필터이며 대표 사례 STO는 {best.sto_similarity:.2f}%",
+                    f"가장 유사한 과거 사례: {best.ticker} · {best.event_date}",
+                    f"상위 {len(matches)}개 사례 평균 주봉 {average_weekly:.2f}% · 평균 STO {average_sto:.2f}%",
+                    f"평균 30% 도달기간 {average_days:.1f}거래일 · 평균 최대상승 {average_surge:+.2f}%",
+                ]
+                if prediction is not None:
+                    reasons.extend(
+                        [
+                            f"Replay Prediction 등급 {prediction.grade}",
+                            f"7거래일 상승확률 {prediction.seven_day_up_probability:.2f}% · 기대수익 {prediction.seven_day_expected_return:+.2f}%",
+                            f"목표수익 {prediction.target_return:+.2f}% · 참고 손절폭 {prediction.stop_return:.2f}% · 권장 보유 {prediction.holding_days}일",
+                        ]
+                    )
+
                 recommendation = EventRecommendation(
                     market=market,
                     ticker=ticker,
@@ -461,16 +497,9 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     matched_max_return=best.max_return,
                     matched_max_drawdown=None,
                     decision="RECOMMEND",
-                    reasons=[
-                        "현재 최근 120거래일을 과거 실제 급등 직전 120거래일과 비교",
-                        f"추천 순위 점수는 주봉 유사도 단일 기준: {best_score:.2f}%",
-                        f"STO는 최소 {min_sto_similarity:.1f}% 통과 필터이며 대표 사례 STO는 {best.sto_similarity:.2f}%",
-                        f"가장 유사한 과거 사례: {best.ticker} · {best.event_date}",
-                        f"상위 {len(matches)}개 사례 평균 주봉 {average_weekly:.2f}% · 평균 STO {average_sto:.2f}%",
-                        f"평균 30% 도달기간 {average_days:.1f}거래일 · 평균 최대상승 {average_surge:+.2f}%",
-                    ],
+                    reasons=reasons,
                     replay_matches=matches,
-                    prediction=None,
+                    prediction=prediction,
                 )
                 ranked_results.append((best.weekly_similarity, average_weekly, recommendation))
 
@@ -509,6 +538,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         recommendations = [item[2] for item in ranked_results[:top_n]]
         diagnostics["final_recommendations"] = len(recommendations)
         diagnostics["duration_total_seconds"] = round(perf_counter() - started, 3)
+        prediction_engine.close()
         log(
             "timing "
             f"pattern_query={diagnostics['duration_pattern_query_seconds']}s "
@@ -521,6 +551,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             f"feature_cache_write={diagnostics['duration_feature_cache_write_seconds']}s "
             f"weekly_compare={diagnostics['duration_weekly_compare_seconds']}s "
             f"sto_compare={diagnostics['duration_sto_compare_seconds']}s "
+            f"prediction={diagnostics['duration_prediction_seconds']}s "
             f"sort={diagnostics['duration_sort_seconds']}s "
             f"match={diagnostics['duration_match_seconds']}s "
             f"total={diagnostics['duration_total_seconds']}s"
@@ -529,6 +560,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             f"feature_cache hit={diagnostics['feature_cache_hit']} "
             f"miss={diagnostics['feature_cache_miss']} version={FEATURE_CACHE_VERSION}"
         )
+        log(f"prediction created={diagnostics['predictions_created']}")
         for rank, item in enumerate(slowest_symbols, start=1):
             log(
                 "slow_symbol "

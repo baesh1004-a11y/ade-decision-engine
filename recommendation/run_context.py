@@ -25,6 +25,49 @@ def _table_exists(conn: sqlite3.Connection, name: str) -> bool:
     ).fetchone() is not None
 
 
+def latest_run(conn: sqlite3.Connection, market: str | None = None) -> dict[str, Any] | None:
+    """Return the most recent run regardless of status or recommendation count."""
+    if not _table_exists(conn, "recommendation_runs"):
+        return None
+
+    market_filter = ""
+    params: list[object] = []
+    if market and _table_exists(conn, "daily_recommendations"):
+        market_filter = """
+        AND (
+            EXISTS(
+                SELECT 1 FROM daily_recommendations d
+                WHERE d.run_id=r.run_id AND d.market=?
+            )
+            OR NOT EXISTS(
+                SELECT 1 FROM daily_recommendations d2
+                WHERE d2.run_id=r.run_id
+            )
+        )
+        """
+        params.append(market)
+
+    row = conn.execute(
+        f"""
+        SELECT
+            r.*,
+            COALESCE((
+                SELECT COUNT(*)
+                FROM daily_recommendations d
+                WHERE d.run_id=r.run_id
+                {"AND d.market=?" if market and _table_exists(conn, "daily_recommendations") else ""}
+            ), 0) AS actual_recommendation_count
+        FROM recommendation_runs r
+        WHERE 1=1
+        {market_filter}
+        ORDER BY COALESCE(r.finished_at, r.started_at) DESC, r.started_at DESC
+        LIMIT 1
+        """,
+        tuple(([market] if market and _table_exists(conn, "daily_recommendations") else []) + params),
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def completed_runs(
     conn: sqlite3.Connection,
     market: str,

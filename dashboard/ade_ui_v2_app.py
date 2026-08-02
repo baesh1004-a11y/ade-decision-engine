@@ -262,12 +262,17 @@ def _open_recommendation_order(market: str, ticker: str, symbol: str) -> None:
     st.rerun()
 
 
+@st.cache_data(ttl=20, show_spinner=False)
+def _load_recommendation_snapshot(market: str):
+    return base_ui._load_recommendations(market)
+
+
 def _render_recommendations_v2() -> None:
     market = base_ui._market_selector("ade_reco_market")
     if st.session_state.ade_recommendation_detail:
         base_ui._render_recommendation_detail(market, st.session_state.ade_recommendation_detail)
         return
-    recommendations, context = base_ui._load_recommendations(market)
+    recommendations, context = _load_recommendation_snapshot(market)
     render_recommendation_page(
         market=market,
         recommendations=recommendations,
@@ -278,11 +283,8 @@ def _render_recommendations_v2() -> None:
     )
 
 
-def _render_status_bar() -> None:
-    metrics, market_error = load_market_overview()
-    market_state = market_health(metrics, market_error)
+def _render_status_bar(*, lightweight: bool = False) -> None:
     db_state = database_health(get_market_profile("kr").db_path)
-    ws_state = shared_market_client().health_snapshot()
 
     if kis_paper_enabled():
         kis_text, kis_class = "KIS 모의투자 설정", "ade-ok"
@@ -293,6 +295,20 @@ def _render_status_bar() -> None:
 
     db_text = "DB 정상" if db_state.get("status") == "정상" else "DB 오류"
     db_class = "ade-ok" if db_state.get("status") == "정상" else ""
+
+    if lightweight:
+        st.markdown(
+            f'<div class="ade-statusbar"><span>AI 상태 미측정</span><span class="{db_class}">{db_text}</span>'
+            f'<span class="{kis_class}">{kis_text}</span><span>실시간 상태는 주문 화면에서 확인</span>'
+            f'<span>시장지표는 상황종합판에서 확인</span><span>추천·Replay·STO 규칙 유지</span></div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    metrics, market_error = load_market_overview()
+    market_state = market_health(metrics, market_error)
+    ws_state = shared_market_client().health_snapshot()
+
     if market_state.get("status") == "정상":
         market_text, market_class = "시장지표 검증됨", "ade-ok"
     elif market_state.get("status") == "주의":
@@ -339,7 +355,7 @@ def run() -> None:
     else:
         base_ui._release_live_lease()
         base_ui._render_jp_radar()
-    _render_status_bar()
+    _render_status_bar(lightweight=page == "추천결과")
 
 
 if __name__ == "__main__":

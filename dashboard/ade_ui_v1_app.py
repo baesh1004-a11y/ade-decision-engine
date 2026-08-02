@@ -475,6 +475,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     st.markdown("### 2. STO 구조와 Replay 패턴 비교")
     if pattern is not None and not historical.empty and not current.empty:
         historical_label = str(pattern["name"] or pattern["ticker"])
+        pattern_identity = str(pattern["pattern_id"] if "pattern_id" in pattern.keys() else historical_label)
         render_professional_sto_panel(
             current=current,
             historical=historical,
@@ -482,6 +483,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
             current_label=symbol,
             historical_label=historical_label,
             stored_similarity=sto,
+            chart_key_prefix=f"recommendation_sto_{market}_{ticker}_{pattern_identity}",
         )
     else:
         reasons = []

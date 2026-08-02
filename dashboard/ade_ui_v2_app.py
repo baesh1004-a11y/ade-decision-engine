@@ -153,27 +153,27 @@ def _render_market_news() -> None:
 
 def _render_market_overview() -> None:
     st.markdown("### 시장의 현재 정보")
-    fragment = getattr(st, "fragment", None)
-    if fragment is None:
-        _render_market_metrics()
-    else:
-        @fragment(run_every=f"{MARKET_REFRESH_SECONDS}s")
-        def _fragment_body() -> None:
-            _render_market_metrics()
+    _render_market_metrics()
 
-        _fragment_body()
+    if st.button("주요 이벤트 불러오기", key="load_overview_events", use_container_width=True):
+        st.session_state.ade_show_overview_events = True
+    if st.session_state.get("ade_show_overview_events", False):
+        st.markdown("#### 주요 이벤트")
+        _render_event_table(compact=True)
 
-    st.markdown("#### 주요 이벤트")
-    _render_event_table(compact=True)
+    if st.button("국내 섹터 강도 불러오기", key="load_overview_sectors", use_container_width=True):
+        st.session_state.ade_show_overview_sectors = True
+    if st.session_state.get("ade_show_overview_sectors", False):
+        st.markdown("#### 국내 섹터 강도")
+        _render_sector_strength()
 
-    st.markdown("#### 국내 섹터 강도")
-    _render_sector_strength()
+    if st.button("최신 시장 뉴스 불러오기", key="load_overview_news", use_container_width=True):
+        st.session_state.ade_show_overview_news = True
+    if st.session_state.get("ade_show_overview_news", False):
+        st.markdown("#### 최신 시장 뉴스")
+        _render_market_news()
 
-    st.markdown("#### 최신 시장 뉴스")
-    _render_market_news()
-
-    with st.expander("데이터 연결 진단"):
-        st.caption("진단 패널을 펼친 경우에만 추가 상태 조회를 수행합니다.")
+    if st.button("데이터 연결 진단 실행", key="run_overview_diagnostics", use_container_width=True):
         metrics, market_error = _cached_market_overview()
         market_state = market_health(metrics, market_error)
         db_state = database_health(get_market_profile("kr").db_path)
@@ -327,31 +327,10 @@ def _render_status_bar(*, lightweight: bool = False) -> None:
         )
         return
 
-    metrics, market_error = _cached_market_overview()
-    market_state = market_health(metrics, market_error)
-    ws_state = shared_market_client().health_snapshot()
-
-    if market_state.get("status") == "정상":
-        market_text, market_class = "시장지표 검증됨", "ade-ok"
-    elif market_state.get("status") == "주의":
-        market_text, market_class = "시장지표 검증 필요", ""
-    else:
-        market_text, market_class = "시장지표 오류", ""
-
-    latest_received_at = ws_state.get("latest_received_at")
-    if ws_state.get("connected") and latest_received_at:
-        age = time.time() - float(latest_received_at)
-        ws_text = "실시간 정상" if age <= 3 else ("실시간 지연" if age <= 10 else "실시간 오래됨")
-        ws_class = "ade-ok" if age <= 3 else ""
-    elif ws_state.get("connected"):
-        ws_text, ws_class = "실시간 연결·수신대기", ""
-    else:
-        ws_text, ws_class = "실시간 대기", ""
-
     st.markdown(
         f'<div class="ade-statusbar"><span>AI 상태 미측정</span><span class="{db_class}">{db_text}</span>'
-        f'<span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span>'
-        f'<span class="{market_class}">{market_text}</span><span>추천·Replay·STO 규칙 유지</span></div>',
+        f'<span class="{kis_class}">{kis_text}</span><span>외부 시장 조회는 현재 화면에서만 실행</span>'
+        f'<span>실시간 상태는 주문 화면에서 확인</span><span>추천·Replay·STO 규칙 유지</span></div>',
         unsafe_allow_html=True,
     )
 

@@ -69,6 +69,7 @@ _LAST_SUCCESS_AT: float | None = None
 _LAST_ERROR: str | None = None
 _SECTOR_CACHE: tuple[float, list[dict[str, Any]], str | None] | None = None
 _SECTOR_CACHE_TTL_SECONDS = 300.0
+_SECTOR_FAILURE_CACHE_TTL_SECONDS = 20.0
 
 
 def _market_state(symbol: str, now: float) -> str:
@@ -240,7 +241,7 @@ def _load_sector_strength_from_db(path: Path, limit: int) -> tuple[list[dict[str
 def _candidate_business_dates() -> list[str]:
     seoul_now = datetime.now(ZoneInfo("Asia/Seoul"))
     dates: list[str] = []
-    for offset in range(0, 10):
+    for offset in range(0, 15):
         candidate = seoul_now.date() - pd.Timedelta(days=offset)
         if candidate.weekday() < 5:
             dates.append(candidate.strftime("%Y%m%d"))
@@ -262,6 +263,7 @@ def _normalize_index_frame(frame: pd.DataFrame) -> pd.DataFrame:
         normalized.columns = [str(item[-1]) for item in normalized.columns.to_flat_index()]
     else:
         normalized.columns = [str(item) for item in normalized.columns]
+    normalized.index = normalized.index.map(str)
     return normalized
 
 
@@ -282,9 +284,21 @@ def _load_index_frame(business_date: str, market: str) -> pd.DataFrame:
     return pd.DataFrame()
 
 
+def _previous_business_date(business_date: str) -> str | None:
+    target = pd.Timestamp(business_date)
+    for offset in range(1, 8):
+        candidate = target - pd.Timedelta(days=offset)
+        if candidate.weekday() < 5:
+            return candidate.strftime("%Y%m%d")
+    return None
+
+
 def _previous_index_close(business_date: str, ticker: str) -> float:
+    previous_date = _previous_business_date(business_date)
+    if not previous_date:
+        return 0.0
     try:
-        history = pykrx_stock.get_index_ohlcv_by_date(business_date, business_date, ticker)
+        history = pykrx_stock.get_index_ohlcv_by_date(previous_date, previous_date, ticker)
         if history is None or history.empty:
             return 0.0
         history = _normalize_index_frame(history)
@@ -296,8 +310,11 @@ def _previous_index_close(business_date: str, ticker: str) -> float:
 def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], str | None]:
     global _SECTOR_CACHE
     now = time.time()
-    if _SECTOR_CACHE and now - _SECTOR_CACHE[0] <= _SECTOR_CACHE_TTL_SECONDS:
-        return _SECTOR_CACHE[1][:limit], _SECTOR_CACHE[2]
+    if _SECTOR_CACHE:
+        cached_at, cached_rows, cached_warning = _SECTOR_CACHE
+        ttl = _SECTOR_CACHE_TTL_SECONDS if cached_rows else _SECTOR_FAILURE_CACHE_TTL_SECONDS
+        if now - cached_at <= ttl:
+            return cached_rows[:limit], cached_warning
     if pykrx_stock is None:
         return [], "국내 섹터 데이터 모듈을 불러오지 못했습니다."
 
@@ -309,7 +326,7 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
             try:
                 frame = _load_index_frame(business_date, market)
                 for ticker, series in frame.iterrows():
-                    ticker_text = str(ticker)
+                    ticker_text = str(ticker).zfill(4)
                     name = str(pykrx_stock.get_index_ticker_name(ticker_text) or ticker_text)
                     close = _pick_numeric(series, "종가", "현재가", "지수", "현재지수")
                     change_rate = _pick_numeric(series, "등락률", "변동률")
@@ -342,7 +359,7 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
             break
 
     rows.sort(key=lambda item: (float(item.get("relative_strength") or 0), float(item.get("turnover") or 0)), reverse=True)
-    warning = f"기준일 {used_date}" if used_date else "국내 섹터 데이터를 불러오는 중입니다. 잠시 후 다시 확인해 주세요."
+    warning = f"기준일 {used_date}" if used_date else "국내 섹터 데이터를 아직 가져오지 못했습니다. 잠시 후 다시 시도합니다."
     _SECTOR_CACHE = (now, rows, warning)
     return rows[:limit], warning
 
@@ -357,4 +374,4 @@ def load_sector_strength(db_path: str | Path, *, limit: int = 10, refresh: bool 
     live_rows, live_error = _calculate_live_sector_strength(limit)
     if live_rows:
         return live_rows, live_error
-    return [], live_error or db_error or "국내 섹터 데이터를 불러오는 중입니다. 잠시 후 다시 확인해 주세요."
+    return [], live_error or db_error or "국내 섹터 데이터를 아직 가져오지 못했습니다. 잠시 후 다시 시도합니다."

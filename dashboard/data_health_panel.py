@@ -12,6 +12,24 @@ def _status_label(ok: bool, waiting: bool = False) -> str:
     return "정상" if ok else "오류"
 
 
+def _disclosure_status(
+    *,
+    market: str,
+    disclosure_count: int,
+    news_warning: str | None,
+) -> tuple[str, str]:
+    if market != "kr":
+        return "대기", "국내 종목만 DART 공시를 확인합니다."
+    warning = str(news_warning or "").strip()
+    if "DART_API_KEY 미설정" in warning:
+        return "미연결", "DART_API_KEY 미설정"
+    if "DART 조회 실패" in warning or "DART " in warning:
+        return "오류", warning
+    if disclosure_count > 0:
+        return "정상", f"{disclosure_count}건"
+    return "정상", "DART 정상 조회 · 최근 공시 0건"
+
+
 def build_data_health_rows(
     *,
     current: pd.DataFrame,
@@ -22,12 +40,33 @@ def build_data_health_rows(
     replay_count: int,
     news_count: int,
     disclosure_count: int,
+    news_warning: str | None,
     validation: Any,
+    validation_attempted: bool,
+    validation_error: str | None,
     market: str,
 ) -> list[dict[str, str]]:
     current_ok = current is not None and not current.empty
     historical_ok = historical is not None and not historical.empty and pattern is not None
     sto_ready = current_ok and historical_ok
+    disclosure_status, disclosure_detail = _disclosure_status(
+        market=market,
+        disclosure_count=disclosure_count,
+        news_warning=news_warning,
+    )
+    if validation is not None:
+        validation_status = "정상"
+        validation_detail = "검증 결과 있음"
+    elif validation_error:
+        validation_status = "오류"
+        validation_detail = validation_error
+    elif validation_attempted:
+        validation_status = "대기"
+        validation_detail = "자동 계산 후 결과 재조회 필요"
+    else:
+        validation_status = "대기"
+        validation_detail = "자동 계산 대기"
+
     rows = [
         {
             "영역": "가격",
@@ -62,14 +101,14 @@ def build_data_health_rows(
         {
             "영역": "콘텐츠",
             "데이터": "공시",
-            "상태": _status_label(disclosure_count > 0, waiting=market != "kr"),
-            "세부": f"{disclosure_count}건" if disclosure_count > 0 else ("국내 종목만 확인" if market != "kr" else "없음 또는 DART 미설정"),
+            "상태": disclosure_status,
+            "세부": disclosure_detail,
         },
         {
             "영역": "검증",
             "데이터": "시장·업종 환경",
-            "상태": _status_label(validation is not None),
-            "세부": "검증 결과 있음" if validation is not None else "아직 계산되지 않음",
+            "상태": validation_status,
+            "세부": validation_detail,
         },
         {
             "영역": "수급",

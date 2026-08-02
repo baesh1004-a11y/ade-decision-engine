@@ -115,6 +115,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "duration_pattern_query_seconds": round(duration_pattern_query, 3),
             "duration_prepare_seconds": 0.0,
             "duration_symbol_list_seconds": 0.0,
+            "duration_bulk_price_load_seconds": 0.0,
             "duration_price_load_seconds": 0.0,
             "duration_feature_extract_seconds": 0.0,
             "duration_weekly_compare_seconds": 0.0,
@@ -148,6 +149,19 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         symbols = self._active_symbols(market)
         diagnostics["duration_symbol_list_seconds"] = round(perf_counter() - symbol_list_started, 3)
         diagnostics["symbols_total"] = len(symbols)
+
+        bulk_started = perf_counter()
+        try:
+            bulk_prices = self.price_repo.fetch_latest_by_ticker(market, limit_per_ticker=120, source=source)
+        except Exception as exc:
+            log(f"bulk_price_error type={type(exc).__name__} message={exc}")
+            bulk_prices = {}
+        diagnostics["duration_bulk_price_load_seconds"] = round(perf_counter() - bulk_started, 3)
+        log(
+            f"bulk_price_load symbols={len(bulk_prices)} "
+            f"duration={diagnostics['duration_bulk_price_load_seconds']}s"
+        )
+
         ranked_results: list[tuple[float, float, EventRecommendation]] = []
         match_started = perf_counter()
         slowest_symbols: list[dict[str, object]] = []
@@ -166,8 +180,11 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
 
             price_started = perf_counter()
             try:
-                data = self.price_repo.fetch_dataframe(market, ticker, source=source)
-                if data.empty:
+                data = bulk_prices.get(ticker)
+                if data is None:
+                    diagnostics["symbols_db_miss"] = int(diagnostics["symbols_db_miss"]) + 1
+                    data = pd.DataFrame()
+                elif data.empty:
                     diagnostics["symbols_db_miss"] = int(diagnostics["symbols_db_miss"]) + 1
                 else:
                     diagnostics["symbols_db_hit"] = int(diagnostics["symbols_db_hit"]) + 1
@@ -339,17 +356,17 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             key=lambda item: (item[0], item[1], item[2].sto_similarity),
             reverse=True,
         )
-        diagnostics["duration_sort_seconds"] = round(perf_counter() - sort_started, 3)
         recommendations = [item[2] for item in ranked_results[:top_n]]
+        diagnostics["duration_sort_seconds"] = round(perf_counter() - sort_started, 3)
         diagnostics["final_recommendations"] = len(recommendations)
         diagnostics["duration_total_seconds"] = round(perf_counter() - started, 3)
         diagnostics["slowest_symbols"] = slowest_symbols
-
         log(
             "timing "
             f"pattern_query={diagnostics['duration_pattern_query_seconds']}s "
             f"prepare={diagnostics['duration_prepare_seconds']}s "
             f"symbol_list={diagnostics['duration_symbol_list_seconds']}s "
+            f"bulk_price_load={diagnostics['duration_bulk_price_load_seconds']}s "
             f"price_load={diagnostics['duration_price_load_seconds']}s "
             f"feature_extract={diagnostics['duration_feature_extract_seconds']}s "
             f"weekly_compare={diagnostics['duration_weekly_compare_seconds']}s "
@@ -363,8 +380,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                 "slow_symbol "
                 f"rank={rank} ticker={item['ticker']} total={item['total_seconds']}s "
                 f"price={item['price_seconds']}s feature={item['feature_seconds']}s "
-                f"weekly={item['weekly_seconds']}s sto={item['sto_seconds']}s "
-                f"status={item['status']}"
+                f"weekly={item['weekly_seconds']}s sto={item['sto_seconds']}s status={item['status']}"
             )
         log(
             "complete "

@@ -221,17 +221,15 @@ def _load_bls_csv(text: str) -> list[EconomicEvent]:
 
 
 def _load_bls_events() -> list[EconomicEvent]:
-    errors: list[str] = []
     for url in _BLS_ICS_URLS:
         try:
             text = _fetch_text(url, accept="text/calendar,text/csv,text/plain,*/*")
             rows = _load_bls_csv(text) if url.endswith(".csv") else _load_bls_ics(text)
             if rows:
                 return rows
-            errors.append(f"{url.rsplit('/', 1)[-1]}: 일정 없음")
-        except Exception as exc:
-            errors.append(f"{url.rsplit('/', 1)[-1]}: {exc}")
-    raise RuntimeError("; ".join(errors))
+        except Exception:
+            continue
+    return []
 
 
 def _load_bea_events() -> list[EconomicEvent]:
@@ -266,12 +264,13 @@ def _load_bok_events(year: int) -> list[EconomicEvent]:
 def _load_official_events(years: set[int]) -> tuple[list[EconomicEvent], list[str]]:
     events: list[EconomicEvent] = []
     errors: list[str] = []
-    loaders = (("Fed", _load_fomc_events), ("BLS", _load_bls_events), ("BEA", _load_bea_events))
+    loaders = (("Fed", _load_fomc_events), ("BEA", _load_bea_events))
     for name, loader in loaders:
         try:
             events.extend(loader())
         except Exception as exc:
             errors.append(f"{name}: {exc}")
+    events.extend(_load_bls_events())
     for year in sorted(years):
         try:
             events.extend(_load_bok_events(year))

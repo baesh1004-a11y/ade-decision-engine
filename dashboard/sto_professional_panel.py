@@ -248,6 +248,7 @@ def render_professional_sto_panel(
     current_label: str,
     historical_label: str,
     stored_similarity: float | None = None,
+    chart_key_prefix: str | None = None,
 ) -> None:
     import streamlit as st
 
@@ -287,13 +288,16 @@ def render_professional_sto_panel(
 
     st.dataframe(_analysis_rows(current_structure, historical_structure, scores), hide_index=True, use_container_width=True)
 
+    prefix = chart_key_prefix or f"sto_panel_{current_label}_{historical_label}"
     st.plotly_chart(
         build_sto_trajectory_figure(current_structure, historical_structure, current_label, historical_label),
+        key=f"{prefix}_trajectory",
         use_container_width=True,
         config={"displaylogo": False, "responsive": True},
     )
     st.plotly_chart(
         build_price_comparison_figure(normalized_current, normalized_historical, current_label, historical_label),
+        key=f"{prefix}_price_volume",
         use_container_width=True,
         config={"displaylogo": False, "responsive": True},
     )

@@ -11,6 +11,7 @@ from typing import Iterator
 
 LOCK_PATH = Path("output/ade_job.lock")
 STATUS_PATH = Path("output/ade_job_status.json")
+STALE_LOCK_SECONDS = 120
 
 
 class JobBusyError(RuntimeError):
@@ -35,6 +36,7 @@ class ADEJobManager:
         started = time.monotonic()
         self.lock_path.parent.mkdir(parents=True, exist_ok=True)
         self.status_path.parent.mkdir(parents=True, exist_ok=True)
+        self._recover_stale_metadata()
         handle = self.lock_path.open("a+", encoding="utf-8")
         self._handle = handle
 
@@ -83,6 +85,52 @@ class ADEJobManager:
             return json.loads(self.status_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             return None
+
+    def _recover_stale_metadata(self) -> None:
+        status = self.current_status() or {}
+        if str(status.get("state") or "") != "RUNNING":
+            return
+
+        updated_at = status.get("updated_at")
+        pid = status.get("pid")
+        age_seconds = self._status_age_seconds(updated_at)
+        process_alive = self._pid_is_alive(pid)
+
+        if process_alive is True:
+            return
+        if process_alive is None and (age_seconds is None or age_seconds <= STALE_LOCK_SECONDS):
+            return
+        if process_alive is False or (age_seconds is not None and age_seconds > STALE_LOCK_SECONDS):
+            self._write_status(
+                state="STALE",
+                job_name=str(status.get("job_name") or "unknown"),
+                message="Recovered stale job metadata before acquiring a new lock",
+            )
+
+    @staticmethod
+    def _status_age_seconds(updated_at: object) -> float | None:
+        try:
+            return max(0.0, (datetime.now() - datetime.fromisoformat(str(updated_at))).total_seconds())
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _pid_is_alive(pid: object) -> bool | None:
+        try:
+            value = int(pid)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return False
+        try:
+            os.kill(value, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        except OSError:
+            return None
+        return True
 
     def _busy_message(self, requested_job: str, timed_out: bool = False) -> str:
         status = self.current_status() or {}

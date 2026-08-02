@@ -127,7 +127,22 @@ class DailyRecommendationService:
         if not self._process_lock.acquire(blocking=False):
             raise RuntimeError("Another recommendation job is already running")
 
+        def emit(stage: str, message: str, progress: float = 0.0, **extra: object) -> None:
+            if progress_callback is None:
+                return
+            payload: dict[str, object] = {
+                "stage": stage,
+                "message": message,
+                "progress": progress,
+                "current": int(extra.pop("current", 0) or 0),
+                "total": int(extra.pop("total", 0) or 0),
+                "diagnostics": dict(extra.pop("diagnostics", {}) or {}),
+            }
+            payload.update(extra)
+            progress_callback(payload)
+
         try:
+            emit("ENGINE_DB", "추천 실행 기록을 생성하고 있습니다.")
             run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{normalized_type}-{uuid.uuid4().hex[:8]}"
             started = datetime.now()
             parameters = {
@@ -170,8 +185,10 @@ class DailyRecommendationService:
             diagnostics: dict[str, object] = {}
             report_path: Path | None = None
             try:
+                emit("ENGINE_INIT", "추천 엔진 객체를 생성하고 있습니다.")
                 engine = InteractiveSurgePatternRecommender(self.db_path)
                 try:
+                    emit("ENGINE_RECOMMEND", "시장 데이터와 과거 패턴을 불러오기 시작했습니다.")
                     recommendations, diagnostics = engine.recommend_interactive(
                         candidate_years=candidate_years,
                         lookback_months=lookback_months,
@@ -189,12 +206,14 @@ class DailyRecommendationService:
                 finally:
                     engine.close()
 
+                emit("REPORT", "추천 결과 보고서를 생성하고 있습니다.")
                 report_path = runtime_path("daily_recommendations", f"{run_id}.html")
                 report_path = render_recommendation_html(
                     recommendations,
                     report_path,
                     lookback_months=lookback_months,
                 )
+                emit("SAVE", "추천 결과를 데이터베이스에 저장하고 있습니다.")
                 recommendation_rows = []
                 for rank_no, item in enumerate(recommendations, start=1):
                     prediction = item.prediction

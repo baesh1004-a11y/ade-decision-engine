@@ -658,14 +658,62 @@ def _render_orders() -> None:
         st.caption(error)
 
 
+def _search_order_symbols(market: str, query: str, limit: int = 20) -> list[dict[str, str]]:
+    text = str(query or "").strip()
+    if not text:
+        return []
+    profile = get_market_profile(market)
+    if not profile.db_path.exists():
+        return []
+    with sqlite3.connect(str(profile.db_path), timeout=5) as conn:
+        conn.row_factory = sqlite3.Row
+        name_map = build_name_map(conn, profile.code)
+    lowered = text.casefold()
+    normalized_code = _normalize_kr_ticker(text) if market == "kr" else text.upper()
+    rows: list[dict[str, str]] = []
+    for ticker, name in name_map.items():
+        ticker_text = normalize_ticker(ticker, market)
+        name_text = str(name or ticker_text).strip()
+        ticker_match = bool(normalized_code) and ticker_text == normalized_code
+        partial_code_match = text.casefold() in ticker_text.casefold()
+        name_match = lowered in name_text.casefold()
+        if ticker_match or partial_code_match or name_match:
+            rows.append({"ticker": ticker_text, "symbol": name_text})
+    rows.sort(
+        key=lambda item: (
+            0 if item["ticker"] == normalized_code else 1,
+            0 if item["symbol"].casefold() == lowered else 1,
+            0 if item["symbol"].casefold().startswith(lowered) else 1,
+            item["symbol"].casefold(),
+            item["ticker"],
+        )
+    )
+    return rows[:limit]
+
+
 def _render_candidate_controls(market: str) -> None:
-    query = st.text_input("종목 검색", placeholder="국내 종목코드 6자리")
-    normalized_query = _normalize_kr_ticker(query) if market == "kr" else query.strip().upper()
-    if query and not normalized_query:
-        st.caption("국내 주문은 6자리 숫자 종목코드를 입력하세요.")
-    if normalized_query and st.button("주문후보에 추가", type="primary"):
+    query = st.text_input(
+        "종목 검색",
+        placeholder="종목명 또는 종목코드 입력",
+        key=f"order_symbol_query_{market}",
+    )
+    matches = _search_order_symbols(market, query) if query else []
+    selected_match: dict[str, str] | None = None
+    if matches:
+        labels = {row["ticker"]: f"{row['symbol']} · {row['ticker']}" for row in matches}
+        selected_ticker = st.selectbox(
+            "검색 결과",
+            options=[row["ticker"] for row in matches],
+            format_func=lambda value: labels[value],
+            key=f"order_symbol_result_{market}",
+        )
+        selected_match = next((row for row in matches if row["ticker"] == selected_ticker), None)
+    elif query:
+        st.caption("일치하는 종목을 찾지 못했습니다.")
+
+    if selected_match and st.button("주문후보에 추가", type="primary", key=f"add_order_candidate_{market}"):
         try:
-            _add_order_candidate(market, normalized_query, normalized_query)
+            _add_order_candidate(market, selected_match["ticker"], selected_match["symbol"])
             st.rerun()
         except OrderCandidateStoreError as exc:
             st.error(str(exc))

@@ -1,11 +1,54 @@
 from __future__ import annotations
 
+import sqlite3
+from pathlib import Path
 from typing import Any, Callable
 
 import streamlit as st
 
 from dashboard.recommendation_controls import render_recommendation_controls
 from markets.profiles import get_market_profile
+from recommendation.run_context import latest_run
+
+
+def _load_latest_run_status(db_path: str | Path, market: str) -> dict[str, Any] | None:
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            return latest_run(conn, market)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def _render_run_status(latest: dict[str, Any] | None, context: Any | None) -> None:
+    if latest is None:
+        return
+
+    latest_run_id = str(latest.get("run_id") or "-")
+    latest_status = str(latest.get("status") or "UNKNOWN")
+    latest_count = int(latest.get("recommendation_count") or 0)
+    latest_time = str(latest.get("finished_at") or latest.get("started_at") or "-")[:19]
+    latest_error = str(latest.get("error_message") or "").strip()
+
+    displayed_run_id = str(getattr(context, "run_id", "") or "")
+    showing_previous = bool(displayed_run_id and displayed_run_id != latest_run_id)
+
+    status_cols = st.columns(4)
+    status_cols[0].metric("최근 실행 상태", latest_status)
+    status_cols[1].metric("최근 실행 추천", f"{latest_count}개")
+    status_cols[2].metric("최근 실행 시각", latest_time)
+    status_cols[3].metric("표시 결과", "이전 성공 결과" if showing_previous else "최근 실행 결과")
+
+    st.caption(f"최근 실행 ID: {latest_run_id}")
+    if latest_error:
+        st.warning(f"최근 실행 오류: {latest_error}")
+    elif latest_status == "COMPLETED" and latest_count == 0:
+        st.info("최근 실행은 완료됐지만 추천 종목이 0개입니다. 이전 성공 결과를 계속 표시할 수 있습니다.")
+    elif latest_status in {"FAILED", "CANCELLED", "STALE", "RUNNING"} and showing_previous:
+        st.info("최근 실행에 표시할 추천 결과가 없어 이전 성공 결과를 유지하고 있습니다.")
 
 
 def render_recommendation_page(
@@ -21,9 +64,12 @@ def render_recommendation_page(
     st.markdown(f"### {'국내' if market == 'kr' else '미국'} 추천종목")
     render_recommendation_controls(profile)
 
+    latest = _load_latest_run_status(profile.db_path, market)
+    _render_run_status(latest, context)
+
     if context is not None:
         st.caption(
-            f"실행ID {context.run_id} · 생성 {str(context.finished_at or '-')[:19]} · "
+            f"현재 표시 결과 · 실행ID {context.run_id} · 생성 {str(context.finished_at or '-')[:19]} · "
             f"추천 {context.recommendation_count}개"
         )
 

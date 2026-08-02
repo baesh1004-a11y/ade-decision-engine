@@ -82,9 +82,63 @@ class PriceRepository:
         # yfinance bars, so retry without a source only when the requested source has no rows.
         if not rows and source is not None:
             rows = self._fetch_rows(market, ticker, start_date, end_date, None)
+        return self._rows_to_dataframe(rows)
+
+    def fetch_latest_by_ticker(
+        self,
+        market: str,
+        *,
+        limit_per_ticker: int = 120,
+        source: str | None = None,
+    ) -> dict[str, pd.DataFrame]:
+        """Load the latest rows for every ticker in one SQL query.
+
+        SQLite window functions avoid thousands of per-ticker round trips while preserving
+        the same source fallback behavior as ``fetch_dataframe``.
+        """
+        limit_per_ticker = max(1, int(limit_per_ticker))
+        where = ["market = ?"]
+        params: list[object] = [market]
+        if source:
+            where.append("source = ?")
+            params.append(source)
+        params.append(limit_per_ticker)
+        rows = self.conn.execute(
+            f"""
+            SELECT ticker, trade_date, open, high, low, close, volume, adjusted_close
+            FROM (
+                SELECT ticker, trade_date, open, high, low, close, volume, adjusted_close,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY ticker
+                           ORDER BY trade_date DESC
+                       ) AS row_no
+                FROM price_bars
+                WHERE {' AND '.join(where)}
+            )
+            WHERE row_no <= ?
+            ORDER BY ticker, trade_date
+            """,
+            params,
+        ).fetchall()
+        if not rows and source is not None:
+            return self.fetch_latest_by_ticker(
+                market,
+                limit_per_ticker=limit_per_ticker,
+                source=None,
+            )
+
+        grouped: dict[str, list[sqlite3.Row]] = {}
+        for row in rows:
+            grouped.setdefault(str(row["ticker"]), []).append(row)
+        return {ticker: self._rows_to_dataframe(items) for ticker, items in grouped.items()}
+
+    @staticmethod
+    def _rows_to_dataframe(rows: list[sqlite3.Row]) -> pd.DataFrame:
         df = pd.DataFrame([dict(row) for row in rows])
         if df.empty:
             return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume", "Adj Close"])
+        if "ticker" in df.columns:
+            df = df.drop(columns=["ticker"])
         return df.rename(
             columns={
                 "trade_date": "Date", "open": "Open", "high": "High",

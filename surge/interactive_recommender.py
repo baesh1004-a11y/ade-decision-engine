@@ -98,6 +98,9 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "patterns_prepared": 0,
             "patterns_rejected": 0,
             "symbols_total": 0,
+            "symbols_db_hit": 0,
+            "symbols_db_miss": 0,
+            "symbols_external_fetch": 0,
             "symbols_price_error": 0,
             "symbols_with_120d": 0,
             "symbols_without_120d": 0,
@@ -144,6 +147,10 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             ticker = str(symbol["ticker"])
             try:
                 data = self.price_repo.fetch_dataframe(market, ticker, source=source)
+                if data.empty:
+                    diagnostics["symbols_db_miss"] = int(diagnostics["symbols_db_miss"]) + 1
+                else:
+                    diagnostics["symbols_db_hit"] = int(diagnostics["symbols_db_hit"]) + 1
             except Exception as exc:
                 diagnostics["symbols_price_error"] = int(diagnostics["symbols_price_error"]) + 1
                 log(f"price_error ticker={ticker} type={type(exc).__name__} message={exc}")
@@ -263,9 +270,10 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
         log(
             "complete "
             f"recommendations={len(recommendations)} patterns={len(prepared)} symbols={len(symbols)} "
-            f"with_120d={diagnostics['symbols_with_120d']} weekly_pass={diagnostics['weekly_pass_comparisons']} "
-            f"sto_pass={diagnostics['sto_pass_comparisons']} matched={diagnostics['symbols_with_matches']} "
-            f"duration={diagnostics['duration_total_seconds']}s"
+            f"db_hit={diagnostics['symbols_db_hit']} db_miss={diagnostics['symbols_db_miss']} "
+            f"external_fetch={diagnostics['symbols_external_fetch']} with_120d={diagnostics['symbols_with_120d']} "
+            f"weekly_pass={diagnostics['weekly_pass_comparisons']} sto_pass={diagnostics['sto_pass_comparisons']} "
+            f"matched={diagnostics['symbols_with_matches']} duration={diagnostics['duration_total_seconds']}s"
         )
         publish("COMPLETE", 1, 1, "추천 분석이 완료되었습니다.", diagnostics=diagnostics.copy())
         return recommendations, diagnostics

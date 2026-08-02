@@ -85,18 +85,30 @@ def render_recommendation_controls(profile: Any) -> None:
         disabled=running,
         key=f"ade_run_recommendation_{profile.code}",
     ):
+        candidate_years = int(st.session_state[years_key])
+        weekly_pool_n = int(st.session_state[pool_key])
+        min_weekly_similarity = float(st.session_state[weekly_key])
+        min_sto_similarity = float(st.session_state[sto_key])
+        top_n = int(st.session_state[top_key])
+
         _persist_widget_state(st, profile.code)
+        print(
+            "[ADE][RECOMMEND][UI] "
+            f"market={profile.code} years={candidate_years} pattern_limit={weekly_pool_n} "
+            f"weekly_min={min_weekly_similarity:.1f} sto_min={min_sto_similarity:.1f} top_n={top_n}",
+            flush=True,
+        )
         request_id = start_job(
             profile.code,
             profile.db_path,
-            top_n=int(st.session_state[top_key]),
-            weekly_pool_n=int(st.session_state[pool_key]),
-            candidate_years=int(st.session_state[years_key]),
+            top_n=top_n,
+            weekly_pool_n=weekly_pool_n,
+            candidate_years=candidate_years,
             use_recent_replay=True,
             use_weekly_filter=True,
-            min_weekly_similarity=float(st.session_state[weekly_key]),
+            min_weekly_similarity=min_weekly_similarity,
             use_sto_filter=True,
-            min_sto_similarity=float(st.session_state[sto_key]),
+            min_sto_similarity=min_sto_similarity,
         )
         if request_id:
             st.session_state[request_key] = str(request_id)

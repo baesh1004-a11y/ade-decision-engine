@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from time import perf_counter
 
 import pandas as pd
 
@@ -18,17 +19,7 @@ class RecommendationCancelled(RuntimeError):
 
 
 class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
-    """Official ADE pre-surge recommender.
-
-    Ranking rule:
-    1. Compare every active symbol's latest 120 sessions with historical
-       120-session patterns immediately preceding a real +30% surge.
-    2. Require both weekly-shape and STO minimum thresholds.
-    3. Rank passed candidates only by weekly-shape similarity.
-
-    ``final_similarity`` remains in the stored model for schema compatibility,
-    but it now mirrors ``weekly_similarity`` and is not a composite score.
-    """
+    """Official ADE pre-surge recommender."""
 
     def recommend_interactive(
         self,
@@ -47,6 +38,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
     ) -> tuple[list[EventRecommendation], dict[str, object]]:
         del lookback_months, use_recent_replay, use_weekly_filter, use_sto_filter
 
+        started = perf_counter()
         candidate_years = max(1, int(candidate_years))
         pattern_limit = max(10, int(weekly_pool_n))
         replay_top_n = max(1, int(replay_top_n))
@@ -59,19 +51,17 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             return bool(cancel_check and cancel_check())
 
         def publish(stage: str, current: int, total: int, message: str, **extra: object) -> None:
-            log(f"stage={stage} current={current} total={total} message={message}")
-            if progress_callback is None:
-                return
-            progress_callback(
-                {
-                    "stage": stage,
-                    "current": current,
-                    "total": total,
-                    "progress": 0.0 if total <= 0 else min(1.0, max(0.0, current / total)),
-                    "message": message,
-                    **extra,
-                }
-            )
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "stage": stage,
+                        "current": current,
+                        "total": total,
+                        "progress": 0.0 if total <= 0 else min(1.0, max(0.0, current / total)),
+                        "message": message,
+                        **extra,
+                    }
+                )
 
         market, source = self._market_and_source()
         cutoff = (datetime.now().date() - timedelta(days=candidate_years * 365)).isoformat()
@@ -80,6 +70,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             f"pattern_limit={pattern_limit} weekly_min={min_weekly_similarity:.1f} "
             f"sto_min={min_sto_similarity:.1f} top_n={top_n}"
         )
+
         patterns = self.conn.execute(
             """
             SELECT *
@@ -90,32 +81,13 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             """,
             (market, MULTI_PATTERN_VERSION, cutoff, pattern_limit),
         ).fetchall()
-        log(f"patterns_loaded={len(patterns)} cutoff={cutoff}")
         if not patterns:
-            log("abort reason=no_recent_patterns")
             raise RuntimeError(
                 f"최근 {candidate_years}년 급등직전 패턴이 없습니다. 패턴 DB를 다시 구축하세요."
             )
 
-        publish("PREPARE", 0, len(patterns), "과거 급등직전 120일 패턴을 준비하고 있습니다.")
-        prepared: list[tuple[sqlite3.Row, object, object]] = []
-        for index, row in enumerate(patterns, start=1):
-            if cancelled():
-                log(f"cancelled stage=PREPARE index={index}")
-                raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
-            item = self._prepare_pattern(row)
-            if item is not None:
-                prepared.append(item)
-            if index == len(patterns) or index % 50 == 0:
-                publish("PREPARE", index, len(patterns), "과거 급등직전 120일 패턴을 준비하고 있습니다.")
-        log(f"patterns_prepared={len(prepared)}")
-
-        symbols = self._active_symbols(market)
-        log(f"symbols_total={len(symbols)}")
         diagnostics: dict[str, object] = {
-            "algorithm": "pre-surge-120d-weekly-rank-sto-filter-v2",
-            "ranking_score": "weekly_similarity",
-            "sto_role": "minimum-threshold-filter",
+            "algorithm": "pre-surge-120d-weekly-rank-sto-filter-v3",
             "market": market,
             "candidate_years": candidate_years,
             "replay_cutoff": cutoff,
@@ -123,51 +95,91 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
             "min_weekly_similarity": float(min_weekly_similarity),
             "min_sto_similarity": float(min_sto_similarity),
             "patterns_loaded": len(patterns),
-            "patterns_prepared": len(prepared),
-            "symbols_total": len(symbols),
+            "patterns_prepared": 0,
+            "patterns_rejected": 0,
+            "symbols_total": 0,
+            "symbols_price_error": 0,
             "symbols_with_120d": 0,
+            "symbols_without_120d": 0,
             "weekly_pass_comparisons": 0,
             "sto_pass_comparisons": 0,
+            "symbols_with_weekly_pass": 0,
+            "symbols_with_sto_pass": 0,
             "symbols_with_matches": 0,
             "final_recommendations": 0,
+            "duration_prepare_seconds": 0.0,
+            "duration_match_seconds": 0.0,
+            "duration_total_seconds": 0.0,
         }
+
+        prepare_started = perf_counter()
+        publish("PREPARE", 0, len(patterns), "과거 급등직전 120일 패턴을 준비하고 있습니다.", diagnostics=diagnostics.copy())
+        prepared: list[tuple[sqlite3.Row, object, object]] = []
+        for index, row in enumerate(patterns, start=1):
+            if cancelled():
+                raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
+            item = self._prepare_pattern(row)
+            if item is not None:
+                prepared.append(item)
+            else:
+                diagnostics["patterns_rejected"] = int(diagnostics["patterns_rejected"]) + 1
+            if index == len(patterns) or index % 50 == 0:
+                diagnostics["patterns_prepared"] = len(prepared)
+                publish("PREPARE", index, len(patterns), "과거 급등직전 120일 패턴을 준비하고 있습니다.", diagnostics=diagnostics.copy())
+        diagnostics["patterns_prepared"] = len(prepared)
+        diagnostics["duration_prepare_seconds"] = round(perf_counter() - prepare_started, 3)
+        if not prepared:
+            raise RuntimeError("조회된 급등직전 패턴을 비교 가능한 형태로 준비하지 못했습니다.")
+
+        symbols = self._active_symbols(market)
+        diagnostics["symbols_total"] = len(symbols)
         ranked_results: list[tuple[float, float, EventRecommendation]] = []
+        match_started = perf_counter()
 
         for symbol_index, symbol in enumerate(symbols, start=1):
             if cancelled():
                 diagnostics["cancelled_at_symbol"] = symbol_index
-                log(f"cancelled stage=MATCH symbol_index={symbol_index}")
                 raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
             ticker = str(symbol["ticker"])
-            data = self.price_repo.fetch_dataframe(market, ticker, source=source)
+            try:
+                data = self.price_repo.fetch_dataframe(market, ticker, source=source)
+            except Exception as exc:
+                diagnostics["symbols_price_error"] = int(diagnostics["symbols_price_error"]) + 1
+                log(f"price_error ticker={ticker} type={type(exc).__name__} message={exc}")
+                data = pd.DataFrame()
+
             current = data.tail(120).reset_index(drop=True)
             if len(current) < 120:
-                publish("MATCH", symbol_index, len(symbols), f"{ticker}: 120일 데이터 부족", diagnostics=diagnostics.copy())
+                diagnostics["symbols_without_120d"] = int(diagnostics["symbols_without_120d"]) + 1
+                if symbol_index == len(symbols) or symbol_index % 25 == 0:
+                    publish("MATCH", symbol_index, len(symbols), f"{ticker}: 120일 데이터 부족", ticker=ticker, diagnostics=diagnostics.copy())
                 continue
 
             diagnostics["symbols_with_120d"] = int(diagnostics["symbols_with_120d"]) + 1
             current_weekly = self.weekly_engine.extract(current)
             current_sto = self.sto_engine.extract(current)
             candidate_matches: list[tuple[float, sqlite3.Row, ReplayMatch]] = []
+            symbol_weekly_pass = False
+            symbol_sto_pass = False
 
             for pattern_index, (row, weekly, sto) in enumerate(prepared, start=1):
                 if pattern_index % 50 == 0 and cancelled():
                     diagnostics["cancelled_at_symbol"] = symbol_index
-                    log(f"cancelled stage=MATCH symbol_index={symbol_index} pattern_index={pattern_index}")
                     raise RecommendationCancelled("사용자가 추천 생성을 중단했습니다.")
 
                 weekly_score = self.weekly_engine.similarity(current_weekly, weekly)
                 if weekly_score < min_weekly_similarity:
                     continue
                 diagnostics["weekly_pass_comparisons"] = int(diagnostics["weekly_pass_comparisons"]) + 1
+                symbol_weekly_pass = True
 
                 sto_score = self.sto_engine.similarity(current_sto, sto)
                 if sto_score < min_sto_similarity:
                     continue
                 diagnostics["sto_pass_comparisons"] = int(diagnostics["sto_pass_comparisons"]) + 1
+                symbol_sto_pass = True
 
-                ranking_score = weekly_score
                 match = ReplayMatch(
                     event_id=str(row["pattern_id"]),
                     event_date=str(row["surge_start_date"]),
@@ -176,7 +188,7 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     name=row["name"],
                     weekly_similarity=weekly_score,
                     sto_similarity=sto_score,
-                    final_similarity=ranking_score,
+                    final_similarity=weekly_score,
                     max_return=float(row["surge_return_pct"]),
                     max_drawdown=None,
                     equivalent_week_index=25,
@@ -184,14 +196,15 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     weeks_compared=26,
                     future_weeks_available=max(1, int(row["surge_horizon_days"]) // 5),
                 )
-                candidate_matches.append((ranking_score, row, match))
+                candidate_matches.append((weekly_score, row, match))
+
+            if symbol_weekly_pass:
+                diagnostics["symbols_with_weekly_pass"] = int(diagnostics["symbols_with_weekly_pass"]) + 1
+            if symbol_sto_pass:
+                diagnostics["symbols_with_sto_pass"] = int(diagnostics["symbols_with_sto_pass"]) + 1
 
             candidate_matches.sort(
-                key=lambda item: (
-                    item[0],
-                    item[2].sto_similarity,
-                    item[2].max_return or 0.0,
-                ),
+                key=lambda item: (item[0], item[2].sto_similarity, item[2].max_return or 0.0),
                 reverse=True,
             )
             selected = candidate_matches[:replay_top_n]
@@ -207,14 +220,6 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     for _, row, _ in selected
                 ) / len(selected)
 
-                reasons = [
-                    "현재 최근 120거래일을 과거 실제 급등 직전 120거래일과 비교",
-                    f"추천 순위 점수는 주봉 유사도 단일 기준: {best_score:.2f}%",
-                    f"STO는 최소 {min_sto_similarity:.1f}% 통과 필터이며 대표 사례 STO는 {best.sto_similarity:.2f}%",
-                    f"가장 유사한 과거 사례: {best.ticker} · {best.event_date}",
-                    f"상위 {len(matches)}개 사례 평균 주봉 {average_weekly:.2f}% · 평균 STO {average_sto:.2f}%",
-                    f"평균 30% 도달기간 {average_days:.1f}거래일 · 평균 최대상승 {average_surge:+.2f}%",
-                ]
                 recommendation = EventRecommendation(
                     market=market,
                     ticker=ticker,
@@ -229,42 +234,38 @@ class InteractiveSurgePatternRecommender(MultiHorizonSurgePatternRecommender):
                     matched_max_return=best.max_return,
                     matched_max_drawdown=None,
                     decision="RECOMMEND",
-                    reasons=reasons,
+                    reasons=[
+                        "현재 최근 120거래일을 과거 실제 급등 직전 120거래일과 비교",
+                        f"추천 순위 점수는 주봉 유사도 단일 기준: {best_score:.2f}%",
+                        f"STO는 최소 {min_sto_similarity:.1f}% 통과 필터이며 대표 사례 STO는 {best.sto_similarity:.2f}%",
+                        f"가장 유사한 과거 사례: {best.ticker} · {best.event_date}",
+                        f"상위 {len(matches)}개 사례 평균 주봉 {average_weekly:.2f}% · 평균 STO {average_sto:.2f}%",
+                        f"평균 30% 도달기간 {average_days:.1f}거래일 · 평균 최대상승 {average_surge:+.2f}%",
+                    ],
                     replay_matches=matches,
                     prediction=None,
                 )
                 ranked_results.append((best.weekly_similarity, average_weekly, recommendation))
 
             if symbol_index == len(symbols) or symbol_index % 25 == 0:
-                log(
-                    "progress "
-                    f"symbols={symbol_index}/{len(symbols)} "
-                    f"with_120d={diagnostics['symbols_with_120d']} "
-                    f"weekly_pass={diagnostics['weekly_pass_comparisons']} "
-                    f"sto_pass={diagnostics['sto_pass_comparisons']} "
-                    f"matched={diagnostics['symbols_with_matches']}"
-                )
-            publish("MATCH", symbol_index, len(symbols), f"{ticker} 분석 완료", ticker=ticker, diagnostics=diagnostics.copy())
+                diagnostics["duration_match_seconds"] = round(perf_counter() - match_started, 3)
+                publish("MATCH", symbol_index, len(symbols), f"{ticker} 분석 완료", ticker=ticker, diagnostics=diagnostics.copy())
 
+        diagnostics["duration_match_seconds"] = round(perf_counter() - match_started, 3)
         publish("RANK", 0, 1, "주봉 유사도가 높은 종목 순으로 정렬하고 있습니다.", diagnostics=diagnostics.copy())
         ranked_results.sort(
-            key=lambda item: (
-                item[0],
-                item[1],
-                item[2].sto_similarity,
-            ),
+            key=lambda item: (item[0], item[1], item[2].sto_similarity),
             reverse=True,
         )
         recommendations = [item[2] for item in ranked_results[:top_n]]
         diagnostics["final_recommendations"] = len(recommendations)
+        diagnostics["duration_total_seconds"] = round(perf_counter() - started, 3)
         log(
             "complete "
-            f"recommendations={len(recommendations)} "
-            f"patterns={len(prepared)} symbols={len(symbols)} "
-            f"with_120d={diagnostics['symbols_with_120d']} "
-            f"weekly_pass={diagnostics['weekly_pass_comparisons']} "
-            f"sto_pass={diagnostics['sto_pass_comparisons']} "
-            f"matched={diagnostics['symbols_with_matches']}"
+            f"recommendations={len(recommendations)} patterns={len(prepared)} symbols={len(symbols)} "
+            f"with_120d={diagnostics['symbols_with_120d']} weekly_pass={diagnostics['weekly_pass_comparisons']} "
+            f"sto_pass={diagnostics['sto_pass_comparisons']} matched={diagnostics['symbols_with_matches']} "
+            f"duration={diagnostics['duration_total_seconds']}s"
         )
         publish("COMPLETE", 1, 1, "추천 분석이 완료되었습니다.", diagnostics=diagnostics.copy())
         return recommendations, diagnostics

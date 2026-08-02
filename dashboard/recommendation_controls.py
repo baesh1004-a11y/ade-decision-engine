@@ -30,6 +30,16 @@ def _clear_recommendation_cache() -> None:
     except Exception:
         pass
 
+    try:
+        from dashboard import ade_ui_v2_app as v2_ui
+
+        loader = getattr(v2_ui, "_load_recommendation_snapshot", None)
+        clear = getattr(loader, "clear", None)
+        if callable(clear):
+            clear()
+    except Exception:
+        pass
+
 
 def render_recommendation_controls(profile: Any) -> None:
     request_key = f"ade_recommendation_request_id_{profile.code}"
@@ -91,6 +101,7 @@ def render_recommendation_controls(profile: Any) -> None:
         if request_id:
             st.session_state[request_key] = str(request_id)
             st.session_state.pop(completed_key, None)
+            st.session_state.ade_primary_page = "추천결과"
             st.rerun()
         else:
             st.warning("같은 시장의 추천 작업이 이미 실행 중입니다.")
@@ -101,6 +112,8 @@ def render_recommendation_controls(profile: Any) -> None:
         key=f"ade_refresh_recommendation_{profile.code}",
     ):
         _clear_recommendation_cache()
+        st.session_state.ade_primary_page = "추천결과"
+        st.session_state.ade_recommendation_detail = None
         st.rerun()
 
     with action_cols[2].expander("추천 실행 설정", expanded=False):

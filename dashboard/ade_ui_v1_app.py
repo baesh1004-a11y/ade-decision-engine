@@ -31,6 +31,7 @@ from dashboard.kis_zero_base_bridge import (
 )
 from dashboard.market_price_fallback import load_external_daily_bars
 from dashboard.news_disclosure_service import load_security_news
+from dashboard.supply_demand_service import load_supply_demand_health
 from dashboard.order_candidate_store import (
     OrderCandidateStoreError,
     clear_candidates,
@@ -442,6 +443,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     news_rows, news_warning = _cached_security_news(ticker, symbol, 16)
     news_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "뉴스")
     disclosure_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "공시")
+    supply_health = load_supply_demand_health(normalized_ticker, market=market)
 
     risk_score = None
     environment_score = None
@@ -482,6 +484,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         validation_attempted=validation_attempted,
         validation_error=validation_error,
         market=market,
+        supply_health=supply_health,
     )
     render_data_health_panel(health_rows)
 
@@ -620,7 +623,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
             {"데이터": "환경 조언", "상태": "있음" if validation is not None else "없음"},
             {"데이터": "뉴스", "상태": f"{news_count}건" if news_count else "없음"},
             {"데이터": "공시", "상태": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
-            {"데이터": "외국인·기관 수급", "상태": "미연결"},
+            {"데이터": "외국인·기관 수급", "상태": str((supply_health.get("investor") or {}).get("detail") or "없음")},
         ]
         st.dataframe(pd.DataFrame(availability), hide_index=True, use_container_width=True)
 

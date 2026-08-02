@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Callable
@@ -96,6 +97,67 @@ def _render_run_status(latest: dict[str, Any] | None, context: Any | None) -> No
         st.info("최근 실행에 표시할 추천 결과가 없어 이전 성공 결과를 유지하고 있습니다.")
 
 
+def _prediction_summary(row: dict[str, Any]) -> tuple[str, str] | None:
+    payload: dict[str, Any] = {}
+    raw_payload = row.get("payload_json")
+    if isinstance(raw_payload, str) and raw_payload.strip():
+        try:
+            parsed = json.loads(raw_payload)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except json.JSONDecodeError:
+            payload = {}
+    prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
+
+    grade = str(row.get("prediction_grade") or prediction.get("grade") or "").strip()
+    probability = row.get("seven_day_up_probability")
+    expected = row.get("seven_day_expected_return")
+    target = row.get("target_return")
+    stop = row.get("stop_return")
+    holding = prediction.get("holding_days")
+
+    try:
+        probability_value = float(probability if probability is not None else prediction.get("seven_day_up_probability"))
+    except (TypeError, ValueError):
+        probability_value = None
+    try:
+        expected_value = float(expected if expected is not None else prediction.get("seven_day_expected_return"))
+    except (TypeError, ValueError):
+        expected_value = None
+    try:
+        target_value = float(target if target is not None else prediction.get("target_return"))
+    except (TypeError, ValueError):
+        target_value = None
+    try:
+        stop_value = float(stop if stop is not None else prediction.get("stop_return"))
+    except (TypeError, ValueError):
+        stop_value = None
+    try:
+        holding_value = int(holding) if holding is not None else None
+    except (TypeError, ValueError):
+        holding_value = None
+
+    if not grade and probability_value is None and expected_value is None:
+        return None
+
+    headline_parts = []
+    if grade:
+        headline_parts.append(f"등급 {grade}")
+    if probability_value is not None:
+        headline_parts.append(f"7일 상승확률 {probability_value:.1f}%")
+    if expected_value is not None:
+        headline_parts.append(f"기대수익 {expected_value:+.1f}%")
+
+    detail_parts = []
+    if target_value is not None:
+        detail_parts.append(f"목표 {target_value:+.1f}%")
+    if stop_value is not None:
+        detail_parts.append(f"손절 {stop_value:.1f}%")
+    if holding_value is not None:
+        detail_parts.append(f"보유 {holding_value}일")
+    return " · ".join(headline_parts), " · ".join(detail_parts)
+
+
 def render_recommendation_page(
     *,
     market: str,
@@ -145,4 +207,13 @@ def render_recommendation_page(
             use_container_width=True,
         ):
             open_order(ticker, symbol)
+
+        summary = _prediction_summary(row)
+        if summary is not None:
+            headline, detail = summary
+            st.markdown(f"**Replay Prediction** · {headline}")
+            if detail:
+                st.caption(detail + " · 종목을 클릭하면 전문가용 차트와 상세 설명을 확인할 수 있습니다.")
+        else:
+            st.caption("Replay Prediction 미산출 · 다음 추천 실행부터 적용됩니다.")
         st.divider()

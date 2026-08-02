@@ -133,6 +133,8 @@ def _init_state() -> None:
         "ade_candidate_clear_market": None,
         "ade_ui_workspace": DEFAULT_WORKSPACE_KEY,
         "ade_ui_workspace_confirmed": False,
+        "ade_validation_attempted": {},
+        "ade_validation_errors": {},
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -376,12 +378,16 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         st.warning("선택 종목을 찾을 수 없습니다.")
         return
     profile = get_market_profile(market)
+    normalized_ticker = normalize_ticker(ticker, market)
     payload = _safe_json(selected.get("payload_json"))
-    validation = context.validations.get(normalize_ticker(ticker, market)) if context else None
+    validation = context.validations.get(normalized_ticker) if context else None
+    validation_key = f"{context.run_id if context else '-'}:{market}:{normalized_ticker}"
+    validation_attempted = bool(st.session_state.ade_validation_attempted.get(validation_key))
+    validation_error = st.session_state.ade_validation_errors.get(validation_key)
     with sqlite3.connect(str(profile.db_path), timeout=5) as conn:
         conn.row_factory = sqlite3.Row
         pattern = _pattern_from_replay(conn, payload)
-        current, current_source, current_warning = _load_current_bars_resilient(conn, market, normalize_ticker(ticker, market), profile.price_source)
+        current, current_source, current_warning = _load_current_bars_resilient(conn, market, normalized_ticker, profile.price_source)
         historical = recommendation_base._pattern_bars(conn, pattern)
         table_counts = {
             "surge_patterns": conn.execute("SELECT COUNT(*) FROM surge_patterns").fetchone()[0] if recommendation_base._table_exists(conn, "surge_patterns") else 0,
@@ -438,7 +444,10 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         replay_count=replay_count,
         news_count=news_count,
         disclosure_count=disclosure_count,
+        news_warning=news_warning,
         validation=validation,
+        validation_attempted=validation_attempted,
+        validation_error=validation_error,
         market=market,
     )
     render_data_health_panel(health_rows)
@@ -592,8 +601,15 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         else:
             st.caption("추천 순위는 바꾸지 않고, 선택 종목의 시장·업종 환경을 추가 확인합니다.")
             if st.button("환경 조언 계산", key=f"detail_validate_{run_id}_{ticker}", use_container_width=True):
-                recommendation_base._run_selected_validation(profile.db_path, run_id, selected, payload)
-                st.success("환경 조언을 저장했습니다.")
+                st.session_state.ade_validation_attempted[validation_key] = True
+                st.session_state.ade_validation_errors.pop(validation_key, None)
+                try:
+                    recommendation_base._run_selected_validation(profile.db_path, run_id, selected, payload)
+                    st.success("환경 조언을 저장했습니다.")
+                except Exception as exc:
+                    LOGGER.exception("Environment validation failed run_id=%s ticker=%s", run_id, ticker)
+                    st.session_state.ade_validation_errors[validation_key] = f"환경 검증 실패: {exc}"
+                    st.error("환경 조언 계산에 실패했습니다.")
                 st.rerun()
 
     st.markdown("### 5. 최신 뉴스·공시")

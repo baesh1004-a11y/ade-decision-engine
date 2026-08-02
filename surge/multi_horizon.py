@@ -24,14 +24,7 @@ SURGE_CLASSES = (
 
 
 class MultiHorizonSurgePatternBuilder:
-    """Build pre-surge patterns classified by the first 30% target horizon.
-
-    Classification is exclusive:
-    FAST      : target first reached in sessions 1-5
-    QUICK     : target first reached in sessions 6-10
-    SWING     : target first reached in sessions 11-15
-    POSITION  : target first reached in sessions 16-20
-    """
+    """Build pre-surge patterns classified by the first 30% target horizon."""
 
     def __init__(
         self,
@@ -61,10 +54,7 @@ class MultiHorizonSurgePatternBuilder:
         self.repo.close()
 
     def _migrate_schema(self) -> None:
-        columns = {
-            str(row[1])
-            for row in self.repo.conn.execute("PRAGMA table_info(surge_patterns)").fetchall()
-        }
+        columns = {str(row[1]) for row in self.repo.conn.execute("PRAGMA table_info(surge_patterns)").fetchall()}
         additions = {
             "surge_class": "TEXT NOT NULL DEFAULT 'FAST'",
             "surge_horizon_days": "INTEGER NOT NULL DEFAULT 5",
@@ -78,12 +68,9 @@ class MultiHorizonSurgePatternBuilder:
         }
         for name, definition in additions.items():
             if name not in columns:
-                self.repo.conn.execute(
-                    f"ALTER TABLE surge_patterns ADD COLUMN {name} {definition}"
-                )
+                self.repo.conn.execute(f"ALTER TABLE surge_patterns ADD COLUMN {name} {definition}")
         self.repo.conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_surge_pattern_class "
-            "ON surge_patterns(market, surge_class, surge_return_pct DESC)"
+            "CREATE INDEX IF NOT EXISTS idx_surge_pattern_class ON surge_patterns(market, surge_class, surge_return_pct DESC)"
         )
         self.repo.conn.commit()
 
@@ -105,9 +92,7 @@ class MultiHorizonSurgePatternBuilder:
         patterns = 0
         pattern_bars = 0
         for index, event in enumerate(events, start=1):
-            data = self.price_repo.fetch_dataframe(
-                market, str(event["ticker"]), source=self.price_source
-            )
+            data = self.price_repo.fetch_dataframe(market, str(event["ticker"]), source=self.price_source)
             df = self._prepare(data)
             event_index = self._date_index(df, str(event["event_date"]))
             if event_index is None:
@@ -245,9 +230,7 @@ class MultiHorizonSurgePatternBuilder:
         df["Date"] = pd.to_datetime(df["Date"])
         for column in ["Open", "High", "Low", "Close", "Volume"]:
             df[column] = pd.to_numeric(df[column], errors="coerce")
-        return df.dropna(
-            subset=["Date", "Open", "High", "Low", "Close", "Volume"]
-        ).sort_values("Date").reset_index(drop=True)
+        return df.dropna(subset=["Date", "Open", "High", "Low", "Close", "Volume"]).sort_values("Date").reset_index(drop=True)
 
     @staticmethod
     def _date_index(df: pd.DataFrame, date_text: str) -> int | None:
@@ -291,9 +274,7 @@ class MultiHorizonSurgePatternRecommender:
             (market, MULTI_PATTERN_VERSION, max(500, weekly_pool_n * 20)),
         ).fetchall()
         if not patterns:
-            raise RuntimeError(
-                "STO 궤적 비교용 급등직전 패턴 DB가 없습니다. run_build_surge_patterns.py --full을 다시 실행하세요."
-            )
+            raise RuntimeError("STO 궤적 비교용 급등직전 패턴 DB가 없습니다. run_build_surge_patterns.py --full을 다시 실행하세요.")
         prepared = [self._prepare_pattern(row) for row in patterns]
         prepared = [item for item in prepared if item is not None]
         ranked_results: list[tuple[float, EventRecommendation]] = []
@@ -334,12 +315,7 @@ class MultiHorizonSurgePatternRecommender:
                 candidate_matches.append((weighted_score, row, match))
 
             candidate_matches.sort(
-                key=lambda item: (
-                    item[0],
-                    item[2].weekly_similarity,
-                    item[2].sto_similarity,
-                    item[2].max_return or 0.0,
-                ),
+                key=lambda item: (item[0], item[2].weekly_similarity, item[2].sto_similarity, item[2].max_return or 0.0),
                 reverse=True,
             )
             selected = candidate_matches[:replay_top_n]
@@ -359,9 +335,7 @@ class MultiHorizonSurgePatternRecommender:
                 weighted_days += float(row["target_hit_day"] or row["surge_horizon_days"]) * weight
                 total_weight += weight
             expected_days = weighted_days / total_weight if total_weight else 0.0
-            distribution = " · ".join(
-                f"{name} {class_counts.get(name, 0)}" for name, _, _ in SURGE_CLASSES
-            )
+            distribution = " · ".join(f"{name} {class_counts.get(name, 0)}" for name, _, _ in SURGE_CLASSES)
             reasons = [
                 "현재 최근 120거래일을 과거 다중기간 급등직전 120일 패턴과 비교",
                 f"차트 유사도 {best.weekly_similarity:.2f}% · STO 3계층 궤적 유사도 {best.sto_similarity:.2f}%",
@@ -393,23 +367,27 @@ class MultiHorizonSurgePatternRecommender:
             ranked_results.append((ranking_score, recommendation))
 
         ranked_results.sort(
-            key=lambda item: (
-                item[0],
-                item[1].final_similarity,
-                len(item[1].replay_matches),
-                item[1].matched_max_return or 0.0,
-            ),
+            key=lambda item: (item[0], item[1].final_similarity, len(item[1].replay_matches), item[1].matched_max_return or 0.0),
             reverse=True,
         )
         return [item[1] for item in ranked_results[:top_n]]
 
-    def _market_and_source(self) -> tuple[str, str]:
+    def _market_and_source(self) -> tuple[str, str | None]:
         row = self.conn.execute(
-            "SELECT market, source FROM price_bars GROUP BY market, source ORDER BY COUNT(*) DESC LIMIT 1"
+            """
+            SELECT market
+            FROM price_bars
+            GROUP BY market
+            ORDER BY COUNT(*) DESC
+            LIMIT 1
+            """
         ).fetchone()
         if row is None:
             raise RuntimeError("가격 데이터가 없습니다.")
-        return str(row["market"]), str(row["source"])
+        # Recommendation runs must be fully offline and deterministic.
+        # Passing source=None makes PriceRepository read any locally stored source
+        # from SQLite and prevents provider-specific fallbacks or network access.
+        return str(row["market"]), None
 
     def _active_symbols(self, market: str) -> list[dict[str, str | None]]:
         if market == "us" and self._table_exists("us_universe"):
@@ -424,9 +402,7 @@ class MultiHorizonSurgePatternRecommender:
         return [dict(row) for row in rows]
 
     def _table_exists(self, name: str) -> bool:
-        return self.conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)
-        ).fetchone() is not None
+        return self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,)).fetchone() is not None
 
     @staticmethod
     def _prepare_pattern(row: sqlite3.Row) -> tuple[sqlite3.Row, WeeklyShape, STOStructure] | None:

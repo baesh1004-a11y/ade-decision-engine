@@ -11,9 +11,10 @@ from markets.profiles import get_market_profile
 from recommendation.run_context import latest_run
 
 
-def _load_latest_run_status(db_path: str | Path, market: str) -> dict[str, Any] | None:
+@st.cache_data(ttl=20, show_spinner=False)
+def _load_latest_run_status(db_path: str, market: str) -> dict[str, Any] | None:
     try:
-        conn = sqlite3.connect(str(db_path))
+        conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
         try:
             return latest_run(conn, market)
@@ -21,6 +22,47 @@ def _load_latest_run_status(db_path: str | Path, market: str) -> dict[str, Any] 
             conn.close()
     except sqlite3.Error:
         return None
+
+
+def _zero_result_summary(latest: dict[str, Any]) -> tuple[str, list[dict[str, str]]]:
+    diagnostics = dict(latest.get("diagnostics") or {})
+    patterns_loaded = int(diagnostics.get("patterns_loaded") or 0)
+    patterns_prepared = int(diagnostics.get("patterns_prepared") or 0)
+    symbols_total = int(diagnostics.get("symbols_total") or 0)
+    symbols_with_120d = int(diagnostics.get("symbols_with_120d") or 0)
+    weekly_pass = int(diagnostics.get("weekly_pass_comparisons") or 0)
+    sto_pass = int(diagnostics.get("sto_pass_comparisons") or 0)
+    matched_symbols = int(diagnostics.get("symbols_with_matches") or 0)
+    final_recommendations = int(diagnostics.get("final_recommendations") or 0)
+
+    rows = [
+        {"단계": "급등 패턴 조회", "통과": f"{patterns_loaded:,}개"},
+        {"단계": "패턴 준비", "통과": f"{patterns_prepared:,}개"},
+        {"단계": "분석 대상 종목", "통과": f"{symbols_total:,}개"},
+        {"단계": "120일 데이터 확보", "통과": f"{symbols_with_120d:,}개"},
+        {"단계": "주봉 기준 통과 비교", "통과": f"{weekly_pass:,}건"},
+        {"단계": "STO 기준 통과 비교", "통과": f"{sto_pass:,}건"},
+        {"단계": "매칭 성공 종목", "통과": f"{matched_symbols:,}개"},
+        {"단계": "최종 추천", "통과": f"{final_recommendations:,}개"},
+    ]
+
+    if patterns_loaded == 0:
+        reason = "최근 기간의 급등 직전 패턴이 없습니다. 패턴 DB 구축 상태를 확인해야 합니다."
+    elif patterns_prepared == 0:
+        reason = "조회된 패턴을 비교 가능한 형태로 준비하지 못했습니다."
+    elif symbols_total == 0:
+        reason = "분석할 활성 종목 목록이 없습니다."
+    elif symbols_with_120d == 0:
+        reason = "120거래일 데이터가 확보된 종목이 없습니다."
+    elif weekly_pass == 0:
+        reason = "모든 비교가 최소 주봉 유사도 기준에서 탈락했습니다."
+    elif sto_pass == 0:
+        reason = "주봉 기준 통과 후 모든 비교가 STO 기준에서 탈락했습니다."
+    elif matched_symbols == 0:
+        reason = "필터를 통과한 비교는 있었지만 최종 매칭 종목을 만들지 못했습니다."
+    else:
+        reason = "매칭 후보는 있었지만 최종 추천 목록이 0개입니다. 순위·저장 구간을 확인해야 합니다."
+    return reason, rows
 
 
 def _render_run_status(latest: dict[str, Any] | None, context: Any | None) -> None:
@@ -46,7 +88,10 @@ def _render_run_status(latest: dict[str, Any] | None, context: Any | None) -> No
     if latest_error:
         st.warning(f"최근 실행 오류: {latest_error}")
     elif latest_status == "COMPLETED" and latest_count == 0:
-        st.info("최근 실행은 완료됐지만 추천 종목이 0개입니다. 이전 성공 결과를 계속 표시할 수 있습니다.")
+        reason, rows = _zero_result_summary(latest)
+        st.warning(f"최근 실행은 완료됐지만 추천 종목이 0개입니다. 원인 추정: {reason}")
+        with st.expander("추천 0건 단계별 진단", expanded=False):
+            st.dataframe(rows, hide_index=True, use_container_width=True)
     elif latest_status in {"FAILED", "CANCELLED", "STALE", "RUNNING"} and showing_previous:
         st.info("최근 실행에 표시할 추천 결과가 없어 이전 성공 결과를 유지하고 있습니다.")
 
@@ -64,7 +109,7 @@ def render_recommendation_page(
     st.markdown(f"### {'국내' if market == 'kr' else '미국'} 추천종목")
     render_recommendation_controls(profile)
 
-    latest = _load_latest_run_status(profile.db_path, market)
+    latest = _load_latest_run_status(str(profile.db_path), market)
     _render_run_status(latest, context)
 
     if context is not None:

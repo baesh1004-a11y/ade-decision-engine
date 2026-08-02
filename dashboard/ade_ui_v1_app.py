@@ -135,6 +135,7 @@ def _init_state() -> None:
         "ade_ui_workspace_confirmed": False,
         "ade_validation_attempted": {},
         "ade_validation_errors": {},
+        "ade_show_heavy_charts": False,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -177,6 +178,7 @@ def _render_top_navigation() -> None:
         if col.button(label, type="primary" if st.session_state.ade_primary_page == label else "secondary", use_container_width=True):
             st.session_state.ade_primary_page = label
             st.session_state.ade_recommendation_detail = None
+            st.session_state.ade_show_heavy_charts = False
             st.rerun()
     with c5:
         st.markdown('<div class="ade-jp-separator">&nbsp;</div>', unsafe_allow_html=True)
@@ -224,9 +226,19 @@ def _kis_data(refresh: bool = False):
     return load_kis_snapshot(get_market_profile("kr").db_path, refresh=refresh, max_age_seconds=60)
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_kis_snapshot():
+    return load_kis_snapshot(get_market_profile("kr").db_path, refresh=False, max_age_seconds=60)
+
+
 def _render_portfolio_overview() -> None:
     st.markdown("### 내 투자 현황")
-    account, positions, error = _kis_data(refresh=st.button("KIS 계좌 새로고침", key="kis_portfolio_refresh"))
+    refresh = st.button("KIS 계좌 새로고침", key="kis_portfolio_refresh")
+    if refresh:
+        _cached_kis_snapshot.clear()
+        account, positions, error = _kis_data(True)
+    else:
+        account, positions, error = _cached_kis_snapshot()
     if account is None:
         st.info(error or "KIS 계좌 스냅샷이 없습니다.")
         return
@@ -263,6 +275,7 @@ def _render_recommendations() -> None:
         cols[0].markdown(f"**#{int(row.get('rank_no', 0))}**")
         if cols[1].button(f"{symbol}\n\n{ticker}", key=f"detail_{market}_{ticker}", use_container_width=True):
             st.session_state.ade_recommendation_detail = ticker
+            st.session_state.ade_show_heavy_charts = False
             st.rerun()
         score = float(row.get("score") or row.get("final_similarity") or row.get("weekly_similarity") or 0)
         cols[2].metric("추천점수", f"{score:.1f}")
@@ -371,6 +384,7 @@ def _pattern_from_replay(conn: sqlite3.Connection, payload: dict[str, Any]):
 def _render_recommendation_detail(market: str, ticker: str) -> None:
     if st.button("← 추천종목으로 돌아가기"):
         st.session_state.ade_recommendation_detail = None
+        st.session_state.ade_show_heavy_charts = False
         st.rerun()
     recommendations, context = _load_recommendations(market)
     selected = next((r for r in recommendations if str(r.get("ticker")) == ticker), None)
@@ -406,7 +420,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     if not current.empty and date_column:
         current_end = str(pd.to_datetime(current[date_column].iloc[-1], errors="coerce"))[:19]
 
-    news_rows, news_warning = load_security_news(ticker, symbol, limit=16)
+    news_rows, news_warning = _cached_security_news(ticker, symbol, 16)
     news_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "뉴스")
     disclosure_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "공시")
 
@@ -451,6 +465,13 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         market=market,
     )
     render_data_health_panel(health_rows)
+
+    if not st.session_state.ade_show_heavy_charts:
+        st.info("상세 차트는 필요할 때 불러오도록 변경했습니다. 아래 버튼을 누르면 차트가 생성됩니다.")
+        if st.button("상세 차트 불러오기", key=f"load_detail_charts_{market}_{ticker}", type="primary", use_container_width=True):
+            st.session_state.ade_show_heavy_charts = True
+            st.rerun()
+        return
 
     st.markdown("### 1. 가격·거래량과 종합 판단")
     if current.empty:
@@ -605,6 +626,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
                 st.session_state.ade_validation_errors.pop(validation_key, None)
                 try:
                     recommendation_base._run_selected_validation(profile.db_path, run_id, selected, payload)
+                    _load_recommendations.clear()
                     st.success("환경 조언을 저장했습니다.")
                 except Exception as exc:
                     LOGGER.exception("Environment validation failed run_id=%s ticker=%s", run_id, ticker)
@@ -636,7 +658,15 @@ def _render_orders() -> None:
         return
     _release_live_lease()
     st.markdown("### 주문")
-    account, positions, error = _kis_data(refresh=st.button("KIS 계좌 새로고침", key="kis_orders_refresh") if market == "kr" else False) if market == "kr" else (None, [], None)
+    if market == "kr":
+        refresh = st.button("KIS 계좌 새로고침", key="kis_orders_refresh")
+        if refresh:
+            _cached_kis_snapshot.clear()
+            account, positions, error = _kis_data(True)
+        else:
+            account, positions, error = _cached_kis_snapshot()
+    else:
+        account, positions, error = None, [], None
     tabs = st.tabs(["주문후보", "보유종목", "미체결", "당일 체결"])
     with tabs[0]:
         _render_candidate_controls(market)
@@ -658,16 +688,21 @@ def _render_orders() -> None:
         st.caption(error)
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_name_map(market: str) -> dict[str, str]:
+    profile = get_market_profile(market)
+    if not profile.db_path.exists():
+        return {}
+    with sqlite3.connect(str(profile.db_path), timeout=5) as conn:
+        conn.row_factory = sqlite3.Row
+        return dict(build_name_map(conn, profile.code))
+
+
 def _search_order_symbols(market: str, query: str, limit: int = 20) -> list[dict[str, str]]:
     text = str(query or "").strip()
     if not text:
         return []
-    profile = get_market_profile(market)
-    if not profile.db_path.exists():
-        return []
-    with sqlite3.connect(str(profile.db_path), timeout=5) as conn:
-        conn.row_factory = sqlite3.Row
-        name_map = build_name_map(conn, profile.code)
+    name_map = _cached_name_map(market)
     lowered = text.casefold()
     normalized_code = _normalize_kr_ticker(text) if market == "kr" else text.upper()
     rows: list[dict[str, str]] = []
@@ -1019,7 +1054,7 @@ def _render_order_ticket(market: str, ticker: str) -> None:
         st.error("국내 주문은 6자리 숫자 종목코드만 지원합니다.")
         return
     ticker = normalized_ticker or ticker
-    account, positions, error = _kis_data(False) if market == "kr" else (None, [], None)
+    account, positions, error = _cached_kis_snapshot() if market == "kr" else (None, [], None)
     holding = next((p for p in positions if str(p.get("ticker")) == str(ticker)), None)
     quote, quote_error = load_kis_quote(ticker) if market == "kr" else (None, None)
     market_client = shared_market_client()
@@ -1116,6 +1151,7 @@ def _render_order_ticket(market: str, ticker: str) -> None:
                     st.session_state.ade_order_flash = {"level": "success", "message": f"접수 완료 · 주문번호 {result.order_id or '-'} · 요청ID {request_id[:8]}"}
                     _reset_order_confirmation()
                     refresh_order_views()
+                    _cached_kis_snapshot.clear()
                     _kis_data(True)
                     st.rerun()
                 st.session_state.ade_order_submit_state = "failed"
@@ -1134,18 +1170,23 @@ def _render_order_ticket(market: str, ticker: str) -> None:
             st.caption("일부 데이터 연결 상태를 확인하세요.")
 
 
+@st.cache_data(ttl=120, show_spinner=False)
+def _cached_jp_radar(ticker: str):
+    return JPStockRadarEngine().analyze(ticker, intraday_period="5d", intraday_interval="5m")
+
+
 def _render_jp_radar() -> None:
     st.markdown("## JP Radar")
     market = _market_selector("ade_jp_market")
     ticker = st.text_input("종목코드", value=st.session_state.ade_jp_ticker or ("005930" if market == "kr" else "AAPL"))
     try:
-        result = JPStockRadarEngine().analyze(ticker, intraday_period="5d", intraday_interval="5m")
+        result = _cached_jp_radar(ticker)
     except Exception:
         correlation_id = uuid.uuid4().hex[:8]
         LOGGER.exception("JP Radar failed correlation_id=%s", correlation_id)
         st.error(f"JP Radar 분석에 실패했습니다. 요청ID {correlation_id}")
         return
-    st.plotly_chart(make_live_radar_chart(result, mobile=False, period_days=365), use_container_width=True, config={"displaylogo": False,"scrollZoom": True,"responsive": True})
+    st.plotly_chart(make_live_radar_chart(result, mobile=False, period_days=365), key=f"jp_radar_{market}_{ticker}", use_container_width=True, config={"displaylogo": False,"scrollZoom": True,"responsive": True})
 
 
 def _market_selector(key: str) -> str:
@@ -1153,6 +1194,7 @@ def _market_selector(key: str) -> str:
     return str(value or "kr")
 
 
+@st.cache_data(ttl=30, show_spinner=False)
 def _load_recommendations(market: str):
     profile = get_market_profile(market)
     if not profile.db_path.exists():
@@ -1171,6 +1213,11 @@ def _load_recommendations(market: str):
             row["symbol"] = name_map.get(ticker) or row.get("name") or ticker
             rows.append(row)
         return rows, context
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_security_news(ticker: str, symbol: str, limit: int):
+    return load_security_news(ticker, symbol, limit=limit)
 
 
 def _normalize_kr_ticker(value: str) -> str:

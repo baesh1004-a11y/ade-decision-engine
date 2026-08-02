@@ -93,8 +93,6 @@ def _decorate_health(
     if state in _ACTIVE_STATES:
         heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= _STALE_AFTER_SECONDS
         if thread_alive is None:
-            # A restarted Streamlit process cannot see the original Python thread.
-            # In that case the lock plus a fresh heartbeat is the verifiable evidence.
             alive = lock_exists and heartbeat_fresh
         else:
             alive = thread_alive and lock_exists and heartbeat_fresh
@@ -187,6 +185,7 @@ def start_job(
             "current_ticker": None,
             "message": "추천 작업을 준비하고 있습니다.",
             "diagnostics": {},
+            "stage_durations": {},
             "started_at": started_at,
             "heartbeat_at": started_at,
         }
@@ -214,14 +213,36 @@ def start_job(
                 lock_path=_lock_path(market_code),
                 status_path=_job_status_path(market_code),
             )
+            stage_started_at = monotonic()
+            last_stage: str | None = None
+            stage_durations: dict[str, float] = {}
 
             def on_progress(progress: dict[str, object]) -> None:
+                nonlocal stage_started_at, last_stage
                 stage = str(progress.get("stage") or "RUNNING")
+                now_mono = monotonic()
+                if last_stage is None:
+                    last_stage = stage
+                    stage_started_at = now_mono
+                elif stage != last_stage:
+                    stage_durations[last_stage] = round(
+                        stage_durations.get(last_stage, 0.0) + (now_mono - stage_started_at),
+                        3,
+                    )
+                    last_stage = stage
+                    stage_started_at = now_mono
+
                 current = int(progress.get("current") or 0)
                 total = int(progress.get("total") or 0)
                 stage_progress = float(progress.get("progress") or 0.0)
                 diagnostics = dict(progress.get("diagnostics") or {})
                 ticker = progress.get("ticker")
+                live_stage_durations = dict(stage_durations)
+                if last_stage:
+                    live_stage_durations[last_stage] = round(
+                        live_stage_durations.get(last_stage, 0.0) + (now_mono - stage_started_at),
+                        3,
+                    )
                 status = {
                     "state": "RUNNING",
                     "running": True,
@@ -237,6 +258,7 @@ def start_job(
                     "remaining_symbols": max(0, total - current) if stage == "MATCH" else None,
                     "current_ticker": ticker,
                     "matched_symbols": diagnostics.get("symbols_with_matches", 0),
+                    "stage_durations": live_stage_durations,
                     "started_at": started_at,
                     "heartbeat_at": _now(),
                     "elapsed_seconds": _seconds_since(started_at) or 0.0,
@@ -261,6 +283,12 @@ def start_job(
                         progress_callback=on_progress,
                         cancel_check=cancel_event.is_set,
                     )
+                finished_mono = monotonic()
+                if last_stage:
+                    stage_durations[last_stage] = round(
+                        stage_durations.get(last_stage, 0.0) + (finished_mono - stage_started_at),
+                        3,
+                    )
                 final = {
                     "state": result.status,
                     "running": False,
@@ -273,6 +301,7 @@ def start_job(
                     "run_id": result.run_id,
                     "recommendation_count": result.recommendation_count,
                     "elapsed_seconds": result.elapsed_seconds,
+                    "stage_durations": stage_durations,
                     "report_path": result.report_path,
                     "diagnostics": result.diagnostics or {},
                     "error_message": result.error_message,
@@ -280,6 +309,12 @@ def start_job(
                     "heartbeat_at": _now(),
                 }
             except Exception as exc:
+                finished_mono = monotonic()
+                if last_stage:
+                    stage_durations[last_stage] = round(
+                        stage_durations.get(last_stage, 0.0) + (finished_mono - stage_started_at),
+                        3,
+                    )
                 final = {
                     "state": "FAILED",
                     "running": False,
@@ -291,6 +326,7 @@ def start_job(
                     "message": "추천 생성에 실패했습니다.",
                     "error_message": str(exc),
                     "diagnostics": {},
+                    "stage_durations": stage_durations,
                     "started_at": started_at,
                     "heartbeat_at": _now(),
                     "elapsed_seconds": _seconds_since(started_at) or 0.0,

@@ -28,11 +28,7 @@ def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
 
 
 def _match_ids(match: dict[str, Any]) -> list[str]:
-    values = [
-        match.get("source_event_id"),
-        match.get("event_id"),
-        match.get("pattern_id"),
-    ]
+    values = [match.get("source_event_id"), match.get("event_id"), match.get("pattern_id")]
     return [str(value).strip() for value in values if str(value or "").strip()]
 
 
@@ -113,6 +109,52 @@ def _future_paths(conn: sqlite3.Connection, replay_matches: list[dict[str, Any]]
     return frame
 
 
+def _format_pct(value: object) -> str:
+    numeric = _number(value)
+    return "-" if numeric is None else f"{numeric:+.2f}%"
+
+
+def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
+    st.markdown("### Replay 전문 비교 요약")
+    if not replay_matches:
+        st.info("표시할 Replay 사례가 없습니다.")
+        return
+    frame = pd.DataFrame(
+        [
+            {
+                "weekly": _number(match.get("weekly_similarity")),
+                "sto": _number(match.get("sto_similarity")),
+                "max_return": _number(match.get("max_return")),
+                "max_drawdown": _number(match.get("max_drawdown")),
+            }
+            for match in replay_matches[:10]
+        ]
+    )
+    metrics = st.columns(6)
+    metrics[0].metric("표본", f"{len(frame)}건")
+    metrics[1].metric("평균 주봉 유사도", f"{frame['weekly'].mean():.2f}%")
+    metrics[2].metric("평균 STO 유사도", f"{frame['sto'].mean():.2f}%")
+    metrics[3].metric("평균 최대상승", f"{frame['max_return'].mean():+.2f}%")
+    metrics[4].metric("최악 최대낙폭", _format_pct(frame['max_drawdown'].min()))
+    metrics[5].metric("상승 사례 비율", f"{frame['max_return'].gt(0).mean() * 100:.1f}%")
+
+    chart = go.Figure()
+    names = [str(match.get("name") or match.get("ticker") or f"사례 {index}") for index, match in enumerate(replay_matches[:10], start=1)]
+    chart.add_trace(go.Bar(name="주봉 유사도", x=names, y=[_number(match.get("weekly_similarity")) for match in replay_matches[:10]]))
+    chart.add_trace(go.Bar(name="STO 유사도", x=names, y=[_number(match.get("sto_similarity")) for match in replay_matches[:10]]))
+    chart.update_layout(
+        barmode="group",
+        title="Top N 유사도 비교",
+        xaxis_title="과거 사례",
+        yaxis_title="유사도(%)",
+        yaxis=dict(range=[0, 100]),
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(l=20, r=20, t=70, b=20),
+        height=390,
+    )
+    st.plotly_chart(chart, use_container_width=True, config=CHART_CONFIG)
+
+
 def _render_prediction(prediction: dict[str, Any]) -> None:
     st.markdown("### 전체 사례 종합 Replay Prediction")
     horizons = prediction.get("horizons") or []
@@ -130,14 +172,24 @@ def _render_prediction(prediction: dict[str, Any]) -> None:
             }
         )
     if not rows:
-        st.info("다중 기간 예측 데이터가 없습니다. 다음 추천 실행부터 생성됩니다.")
+        st.info("Prediction 데이터가 아직 없습니다. 다음 추천 실행부터 다중 기간 확률·수익 분석이 생성됩니다.")
         return
     frame = pd.DataFrame(rows)
     st.dataframe(frame, hide_index=True, use_container_width=True)
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=[int(str(item["기간"]).replace("일", "")) for item in rows], y=[item["상승확률(%)"] for item in rows], mode="lines+markers", name="상승확률", yaxis="y1"))
-    fig.add_trace(go.Scatter(x=[int(str(item["기간"]).replace("일", "")) for item in rows], y=[item["기대수익(%)"] for item in rows], mode="lines+markers", name="기대수익", yaxis="y2"))
-    fig.update_layout(xaxis_title="거래일", yaxis=dict(title="상승확률(%)", range=[0, 100]), yaxis2=dict(title="기대수익(%)", overlaying="y", side="right"), legend=dict(orientation="h"), margin=dict(l=10, r=10, t=30, b=10), height=360)
+    days = [int(str(item["기간"]).replace("일", "")) for item in rows]
+    fig.add_trace(go.Scatter(x=days, y=[item["상승확률(%)"] for item in rows], mode="lines+markers", name="상승확률", yaxis="y1"))
+    fig.add_trace(go.Scatter(x=days, y=[item["기대수익(%)"] for item in rows], mode="lines+markers", name="기대수익", yaxis="y2"))
+    fig.add_trace(go.Scatter(x=days, y=[item["중앙값수익(%)"] for item in rows], mode="lines+markers", name="중앙값수익", yaxis="y2"))
+    fig.update_layout(
+        title="기간별 확률·기대수익 곡선",
+        xaxis_title="거래일",
+        yaxis=dict(title="상승확률(%)", range=[0, 100]),
+        yaxis2=dict(title="수익률(%)", overlaying="y", side="right"),
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(l=20, r=20, t=70, b=20),
+        height=400,
+    )
     st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
     summary = st.columns(6)
     summary[0].metric("예측등급", str(prediction.get("grade") or "-"))
@@ -152,7 +204,20 @@ def _render_replay_table(replay_matches: list[dict[str, Any]]) -> None:
     st.markdown("### Replay 유사사례 Top N")
     rows = []
     for index, match in enumerate(replay_matches[:10], start=1):
-        rows.append({"순위": index, "종목": match.get("name") or match.get("ticker") or "-", "기준일": match.get("event_date") or "-", "주봉유사도(%)": _number(match.get("weekly_similarity")), "STO유사도(%)": _number(match.get("sto_similarity")), "최대상승(%)": _number(match.get("max_return")), "최대낙폭(%)": _number(match.get("max_drawdown")), "대응주차": int(match.get("equivalent_week_index") or 0), "비교주수": int(match.get("weeks_compared") or 0), "향후주수": int(match.get("future_weeks_available") or 0)})
+        rows.append(
+            {
+                "순위": index,
+                "종목": match.get("name") or match.get("ticker") or "-",
+                "기준일": match.get("event_date") or "-",
+                "주봉유사도(%)": _number(match.get("weekly_similarity")),
+                "STO유사도(%)": _number(match.get("sto_similarity")),
+                "최대상승(%)": _number(match.get("max_return")),
+                "최대낙폭(%)": _number(match.get("max_drawdown")),
+                "대응주차": int(match.get("equivalent_week_index") or 0),
+                "비교주수": int(match.get("weeks_compared") or 0),
+                "향후주수": int(match.get("future_weeks_available") or 0),
+            }
+        )
     if rows:
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
@@ -173,77 +238,121 @@ def _selected_case(replay_matches: list[dict[str, Any]], key_prefix: str) -> tup
 
 
 def _render_selected_compare(conn: sqlite3.Connection, current: pd.DataFrame, current_label: str, selected_index: int, match: dict[str, Any], key_prefix: str) -> None:
-    st.markdown("### 선택 Replay 사례 분석")
+    st.markdown("### 현재 종목 vs 선택 Replay 사례")
     pattern = _pattern_for_match(conn, match)
     historical = _pattern_bars(conn, pattern)
-    details = st.columns(5)
+    details = st.columns(6)
     details[0].metric("주봉 유사도", f"{float(match.get('weekly_similarity') or 0):.2f}%")
     details[1].metric("STO 유사도", f"{float(match.get('sto_similarity') or 0):.2f}%")
-    details[2].metric("현재 대응", f"{int(match.get('equivalent_week_index') or 0)}주차")
-    details[3].metric("비교 구간", f"{int(match.get('weeks_compared') or 0)}주")
-    details[4].metric("향후 확인", f"{int(match.get('future_weeks_available') or 0)}주")
+    details[2].metric("과거 최대상승", _format_pct(match.get("max_return")))
+    details[3].metric("과거 최대낙폭", _format_pct(match.get("max_drawdown")))
+    details[4].metric("현재 대응", f"{int(match.get('equivalent_week_index') or 0)}주차")
+    details[5].metric("비교 구간", f"{int(match.get('weeks_compared') or 0)}주")
     if current.empty or pattern is None or historical.empty:
-        st.caption("선택한 사례의 저장 차트 데이터를 찾지 못했습니다.")
+        st.warning("선택 사례의 원본 봉 데이터를 찾지 못해 비교 차트를 표시할 수 없습니다.")
         return
     historical_label = str(pattern["name"] or pattern["ticker"])
-    st.plotly_chart(build_pattern_compare_chart(current, historical, current_label, historical_label), use_container_width=True, config=CHART_CONFIG, key=f"{key_prefix}_replay_compare_{selected_index}")
+    st.plotly_chart(
+        build_pattern_compare_chart(current, historical, current_label, historical_label),
+        use_container_width=True,
+        config=CHART_CONFIG,
+        key=f"{key_prefix}_replay_compare_{selected_index}",
+    )
 
 
 def _render_selected_future_path(conn: sqlite3.Connection, match: dict[str, Any]) -> None:
+    st.markdown("### 선택 사례 미래 20거래일 경로")
     paths = _future_paths(conn, [match])
     if paths.empty:
         st.caption("선택 사례의 미래 경로 원본이 없습니다.")
         return
     column = paths.columns[0]
-    fig = go.Figure(go.Scatter(x=paths.index, y=paths[column], mode="lines+markers", name=str(column)))
+    series = paths[column].dropna()
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=series.index, y=series.values, mode="lines+markers", name=str(column)))
     fig.add_hline(y=0)
-    fig.update_layout(xaxis_title="매칭 이후 거래일", yaxis_title="누적수익률(%)", margin=dict(l=10, r=10, t=30, b=10), height=330)
+    fig.add_hline(y=10, line_dash="dot", annotation_text="+10%")
+    fig.add_hline(y=-10, line_dash="dot", annotation_text="-10%")
+    fig.update_layout(
+        title="선택 사례 매칭 이후 누적수익률",
+        xaxis_title="매칭 이후 거래일",
+        yaxis_title="누적수익률(%)",
+        margin=dict(l=20, r=20, t=70, b=20),
+        height=370,
+    )
     st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
+    path_metrics = st.columns(4)
+    path_metrics[0].metric("최종수익", f"{series.iloc[-1]:+.2f}%")
+    path_metrics[1].metric("최대상승", f"{series.max():+.2f}%")
+    path_metrics[2].metric("최대하락", f"{series.min():+.2f}%")
+    path_metrics[3].metric("고점 도달일", f"{int(series.idxmax())}일")
 
 
 def _render_future_distribution(conn: sqlite3.Connection, replay_matches: list[dict[str, Any]]) -> None:
-    st.markdown("### 전체 Top N 미래 20거래일 경로 분포")
+    st.markdown("### Top N 미래 20거래일 경로 분포")
     paths = _future_paths(conn, replay_matches)
     if paths.empty:
         st.info("미래 경로 원본이 없어 분포 차트를 생성하지 못했습니다.")
         return
-    fig = go.Figure()
-    for column in paths.columns:
-        fig.add_trace(go.Scatter(x=paths.index, y=paths[column], mode="lines", name=str(column), opacity=0.35))
     mean_path = paths.mean(axis=1, skipna=True)
     median_path = paths.median(axis=1, skipna=True)
+    q25 = paths.quantile(0.25, axis=1)
+    q75 = paths.quantile(0.75, axis=1)
     min_path = paths.min(axis=1, skipna=True)
     max_path = paths.max(axis=1, skipna=True)
+
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=paths.index, y=q75, mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"))
+    fig.add_trace(go.Scatter(x=paths.index, y=q25, mode="lines", fill="tonexty", name="25~75% 범위", line=dict(width=0)))
+    for column in paths.columns:
+        fig.add_trace(go.Scatter(x=paths.index, y=paths[column], mode="lines", name=str(column), opacity=0.22, line=dict(width=1), showlegend=False))
     fig.add_trace(go.Scatter(x=paths.index, y=mean_path, mode="lines+markers", name="평균 경로", line=dict(width=4)))
     fig.add_trace(go.Scatter(x=paths.index, y=median_path, mode="lines", name="중앙값 경로", line=dict(width=3, dash="dash")))
-    fig.add_trace(go.Scatter(x=paths.index, y=max_path, mode="lines", name="최고 범위", line=dict(width=1, dash="dot")))
-    fig.add_trace(go.Scatter(x=paths.index, y=min_path, mode="lines", name="최저 범위", line=dict(width=1, dash="dot")))
+    fig.add_trace(go.Scatter(x=paths.index, y=max_path, mode="lines", name="최고 경로", line=dict(width=1, dash="dot")))
+    fig.add_trace(go.Scatter(x=paths.index, y=min_path, mode="lines", name="최저 경로", line=dict(width=1, dash="dot")))
     fig.add_hline(y=0)
-    fig.update_layout(xaxis_title="매칭 이후 거래일", yaxis_title="누적수익률(%)", legend=dict(orientation="h"), margin=dict(l=10, r=10, t=30, b=10), height=440)
+    fig.add_hline(y=10, line_dash="dot", annotation_text="+10%")
+    fig.add_hline(y=-10, line_dash="dot", annotation_text="-10%")
+    fig.update_layout(
+        title="Top N 경로 분포·중앙 경로·리스크 범위",
+        xaxis_title="매칭 이후 거래일",
+        yaxis_title="누적수익률(%)",
+        legend=dict(orientation="h", y=1.12),
+        margin=dict(l=20, r=20, t=80, b=20),
+        height=500,
+    )
     st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
     full20 = paths.iloc[20].dropna() if len(paths.index) > 20 else pd.Series(dtype=float)
     last_valid = paths.apply(lambda series: series.dropna().iloc[-1] if not series.dropna().empty else None).dropna()
-    rows = [{"지표": "전체 경로", "값": f"{len(paths.columns)}건"}, {"지표": "20일 완전 표본", "값": f"{len(full20)}건"}]
-    if not full20.empty:
-        rows.extend([
-            {"지표": "20일 평균수익", "값": f"{full20.mean():+.2f}%"},
-            {"지표": "20일 중앙값", "값": f"{full20.median():+.2f}%"},
-            {"지표": "20일 최고 사례", "값": f"{full20.max():+.2f}%"},
-            {"지표": "20일 최저 사례", "값": f"{full20.min():+.2f}%"},
-            {"지표": "20일 상승 사례 비율", "값": f"{(full20.gt(0).mean() * 100):.1f}%"},
-        ])
-    if len(last_valid) > len(full20):
-        rows.extend([
-            {"지표": "마지막 확보일 참고 표본", "값": f"{len(last_valid)}건"},
-            {"지표": "마지막 확보일 평균", "값": f"{last_valid.mean():+.2f}%"},
-        ])
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    stats_source = full20 if not full20.empty else last_valid
+    stat_cols = st.columns(6)
+    stat_cols[0].metric("전체 경로", f"{len(paths.columns)}건")
+    stat_cols[1].metric("20일 완전 표본", f"{len(full20)}건")
+    stat_cols[2].metric("평균수익", f"{stats_source.mean():+.2f}%" if not stats_source.empty else "-")
+    stat_cols[3].metric("중앙값", f"{stats_source.median():+.2f}%" if not stats_source.empty else "-")
+    stat_cols[4].metric("상승확률", f"{stats_source.gt(0).mean() * 100:.1f}%" if not stats_source.empty else "-")
+    stat_cols[5].metric("손익비", f"{abs(stats_source[stats_source > 0].mean() / stats_source[stats_source < 0].mean()):.2f}" if (stats_source.gt(0).any() and stats_source.lt(0).any()) else "-")
+
+    interpretation = []
+    if not stats_source.empty:
+        interpretation.append(f"표본 {len(stats_source)}건 기준 평균수익은 {stats_source.mean():+.2f}%, 중앙값은 {stats_source.median():+.2f}%입니다.")
+        interpretation.append(f"상승 사례 비율은 {stats_source.gt(0).mean() * 100:.1f}%이며 최고·최저 결과는 {stats_source.max():+.2f}% / {stats_source.min():+.2f}%입니다.")
+        if stats_source.mean() > 0 and stats_source.median() > 0:
+            interpretation.append("평균과 중앙값이 모두 양수여서 과거 경로의 중심은 상승 쪽에 있습니다.")
+        elif stats_source.mean() > 0 >= stats_source.median():
+            interpretation.append("일부 강한 상승 사례가 평균을 끌어올린 구조로, 사례 간 편차가 큽니다.")
+        else:
+            interpretation.append("과거 경로 중심이 보수적이므로 기대수익보다 하방 리스크 관리가 우선입니다.")
+    st.markdown("#### 정량 해석")
+    for sentence in interpretation:
+        st.write(f"- {sentence}")
 
 
 def render_replay_analysis_panel(*, db_path: str, payload: dict[str, Any], current: pd.DataFrame, current_label: str, key_prefix: str, include_heavy: bool = True) -> None:
     replay_matches = [item for item in (payload.get("replay_matches") or []) if isinstance(item, dict)]
     prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
+    _render_replay_overview(replay_matches)
     _render_replay_table(replay_matches)
     _render_prediction(prediction)
     if not replay_matches:
@@ -254,6 +363,5 @@ def render_replay_analysis_panel(*, db_path: str, payload: dict[str, Any], curre
     with sqlite3.connect(db_path, timeout=5) as conn:
         conn.row_factory = sqlite3.Row
         _render_selected_compare(conn, current, current_label, selected_index, match, key_prefix)
-        if include_heavy:
-            _render_selected_future_path(conn, match)
-            _render_future_distribution(conn, replay_matches)
+        _render_selected_future_path(conn, match)
+        _render_future_distribution(conn, replay_matches)

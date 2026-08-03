@@ -41,7 +41,6 @@ def run(db_path: str = "datahub/market.db") -> None:
     try:
         recommendations = service.latest_recommendations(50)
         requests = service.pending_approval_requests()
-        current_run_id = str(recommendations[0]["run_id"]) if recommendations else ""
         pending_count = len(requests)
         _style(st)
         _render_status_header(st, env, live_enabled, len(recommendations), pending_count)
@@ -145,10 +144,7 @@ def _watch_label(row: dict) -> str:
     rank = int(row.get("rank_no") or 0)
     weekly = float(row.get("weekly_similarity") or 0.0)
     sto = float(row.get("sto_similarity") or 0.0)
-    return (
-        f"{marker} #{rank} {name} · {_decision_label(decision)}\n"
-        f"주봉 {weekly:.1f}%  ·  STO {sto:.1f}%"
-    )
+    return f"{marker} #{rank} {name} · {_decision_label(decision)}\n주봉 {weekly:.1f}%  ·  STO {sto:.1f}%"
 
 
 def _render_selected_summary(st, selected: dict, label: str) -> None:
@@ -234,19 +230,18 @@ def _ai_confidence(selected: dict, radar) -> tuple[int | None, str, str, str, li
         opinion = "현재 데이터는 적극적인 매수 검토가 가능한 구간을 가리킵니다. 주문 전 차트와 검증 조언을 함께 확인하세요."
     elif score >= 65:
         level, tone = "높음", "good"
-        opinion = "긍정 신호가 우세하지만 일부 조건 확인이 필요합니다. 분할 접근과 위험 기준 확인이 적절합니다."
+        opinion = "긍정 신호가 우세하지만 일부 조건은 추가 확인이 필요합니다. 분할 접근과 손절 기준 설정이 적절합니다."
     elif score >= 45:
         level, tone = "보통", "neutral"
-        opinion = "신호가 혼재되어 있습니다. 추가 검증 전에는 관찰 중심 접근이 적절합니다."
+        opinion = "신호가 혼재합니다. 추격 매수보다 관찰과 추가 확인이 적절합니다."
     else:
         level, tone = "낮음", "low"
-        opinion = "위험 또는 약한 신호가 우세합니다. 현재는 관망과 재검증을 우선하는 편이 안전합니다."
+        opinion = "현재 데이터의 신뢰도가 낮습니다. 신규 매수보다 보류 또는 제외 판단을 우선 검토하세요."
 
-    environment_values = [value for value in (market, sector) if value is not None]
-    environment = sum(environment_values) / len(environment_values) if environment_values else None
+    environment = None if market is None and sector is None else sum(v for v in (market, sector) if v is not None) / sum(v is not None for v in (market, sector))
     factors = [
-        ("주봉 유사도", _score_text(weekly, "%"), _signal_class(weekly)),
-        ("STO", _score_text(sto, "%"), _signal_class(sto)),
+        ("주봉 유사도", _score_text(weekly, "점"), _signal_class(weekly)),
+        ("STO", _score_text(sto, "점"), _signal_class(sto)),
         ("JP Radar", radar_label, _signal_class(radar_score)),
         ("시장·업종", _score_text(environment, "점"), _signal_class(environment)),
         ("리스크", _risk_label(risk) if risk is not None else "미확인", _signal_class(risk)),
@@ -267,13 +262,6 @@ def _score_text(value: float | None, suffix: str) -> str:
     return "미확인" if value is None else f"{value:.0f}{suffix}"
 
 
-def _clamp_score(value, default: float = 0.0) -> float:
-    try:
-        return max(0.0, min(100.0, float(value)))
-    except (TypeError, ValueError):
-        return default
-
-
 def _signal_class(score: float | None) -> str:
     if score is None:
         return "unknown"
@@ -282,6 +270,32 @@ def _signal_class(score: float | None) -> str:
 
 def _confidence_icon(tone: str) -> str:
     return {"high": "🟢", "good": "🔵", "neutral": "🟠", "low": "🔴"}.get(tone, "⚪")
+
+
+def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
+    left, right = st.columns(2)
+    if left.button("JP Radar 실행", key=f"jp_radar_{ticker}"):
+        try:
+            advisor = EnvironmentAdvisor()
+            st.session_state[f"jp_radar_result_{ticker}"] = advisor.advise(selected)
+        except Exception as exc:
+            st.error(f"JP Radar 실행 실패: {exc}")
+    if right.button("추천 검증 조언 열기", key=f"validation_{ticker}"):
+        st.session_state[f"validation_open_{ticker}"] = True
+
+    radar = st.session_state.get(f"jp_radar_result_{ticker}")
+    if radar is not None:
+        a, b = st.columns(2)
+        a.metric("전체 시장 JP Radar", str(radar.market_signal))
+        b.metric("해당 업종 JP Radar", str(radar.sector_signal))
+
+    if st.session_state.get(f"validation_open_{ticker}"):
+        decision = str(selected.get("decision") or "UNVALIDATED")
+        st.markdown(f"**추천 검증 조언:** {_decision_label(decision)}")
+        cols = st.columns(3)
+        cols[0].metric("전체 시장", _score_label(selected.get("market_score")))
+        cols[1].metric("해당 업종", _score_label(selected.get("sector_score")))
+        cols[2].metric("종목 위험", _risk_label(selected.get("risk_score")))
 
 
 def _render_live_chart(st, db_path: str, ticker: str, label: str) -> None:
@@ -346,7 +360,14 @@ def _yahoo_tickers(ticker: str) -> list[str]:
 
 def _yahoo_ticker(ticker: str) -> str:
     """Compatibility helper for callers that only need the first candidate."""
-   �m�G����ƭy�sion in ELIGIBLE_DECISIONS
+    return _yahoo_tickers(ticker)[0]
+
+
+def _render_order_form(st, service, selected: dict, ticker: str, label: str, run_id: str) -> None:
+    st.markdown("### 일반 주문")
+    decision = str(selected.get("decision") or "UNVALIDATED")
+    validated = bool(selected.get("validation_available"))
+    eligible = decision in ELIGIBLE_DECISIONS
     st.markdown(f"**선택 종목:** {label}")
     side_labels = {"매수": "BUY", "매도": "SELL"}
     order_type_labels = {"시장가": "MARKET", "지정가": "LIMIT"}
@@ -414,10 +435,9 @@ def _render_pending_approval(st, service, recommendations: list[dict]) -> None:
         range(len(pending)),
         format_func=lambda i: (
             ("현재 실행 · " if str(pending[i].get("source_run_id") or "") == current_run_id else "이전 실행 · ")
-            +
-            f"{display_symbol(pending[i].get('name'), pending[i]['ticker'], 'kr')} · "
-            f"{normalize_ticker(pending[i]['ticker'], 'kr')} {pending[i]['side']} {pending[i]['quantity']}주 · "
-            f"{_kst_text(pending[i].get('created_at'))}"
+            + f"{display_symbol(pending[i].get('name'), pending[i]['ticker'], 'kr')} · "
+            + f"{normalize_ticker(pending[i]['ticker'], 'kr')} {pending[i]['side']} {pending[i]['quantity']}주 · "
+            + f"{_kst_text(pending[i].get('created_at'))}"
         ),
     )
     row = pending[request_index]
@@ -483,16 +503,7 @@ def _render_execution_and_history(st, service) -> None:
             "created_at", "source_run_id", "source_rank", "종목", "종목코드", "side", "quantity",
             "order_type", "limit_price", "status", "broker_order_id", "broker_message", "error_message",
         ] if c in history.columns]
-        st.dataframe(
-            history[keep], width="stretch", hide_index=True, row_height=40,
-            column_config={
-                "종목": st.column_config.TextColumn("종목", pinned=True),
-                "status": st.column_config.TextColumn("상태", pinned=True),
-                "quantity": st.column_config.NumberColumn("수량", format="%d주"),
-                "limit_price": st.column_config.NumberColumn("지정가", format="%,.0f원"),
-                "created_at": st.column_config.TextColumn("생성 시각"),
-            },
-        )
+        st.dataframe(history[keep], width="stretch", hide_index=True, row_height=40)
 
     st.markdown("### 체결 이력")
     executions = pd.DataFrame(service.latest_executions(100))
@@ -504,16 +515,7 @@ def _render_execution_and_history(st, service) -> None:
             "captured_at", "broker_order_id", "종목코드", "side", "ordered_quantity",
             "filled_quantity", "filled_price", "status",
         ] if c in executions.columns]
-        st.dataframe(
-            executions[keep], width="stretch", hide_index=True, row_height=40,
-            column_config={
-                "종목코드": st.column_config.TextColumn("종목", pinned=True),
-                "status": st.column_config.TextColumn("상태", pinned=True),
-                "ordered_quantity": st.column_config.NumberColumn("주문", format="%d주"),
-                "filled_quantity": st.column_config.NumberColumn("체결", format="%d주"),
-                "filled_price": st.column_config.NumberColumn("체결가", format="%,.0f원"),
-            },
-        )
+        st.dataframe(executions[keep], width="stretch", hide_index=True, row_height=40)
 
     if not history.empty:
         st.markdown("### 선택 주문 진행 과정")
@@ -576,33 +578,15 @@ def _style(st) -> None:
         .status-hero h1{margin:2px 0;font-size:32px;font-weight:600}.status-hero p{margin:8px 0 0;color:#64748B;font-size:15px}.eyebrow{font-size:12px;letter-spacing:.12em;font-weight:600;color:#1D4ED8}
         .status-cluster{display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap}
         .status-badge{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;border:1px solid transparent}
-        .status-badge.safe{color:#137044;background:#e9f8f0;border-color:#bde8cf}
-        .status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}
-        .status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}
-        .status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
+        .status-badge.safe{color:#137044;background:#e9f8f0;border-color:#bde8cf}.status-badge.warning{color:#986314;background:#fff6dd;border-color:#f0d58e}.status-badge.danger{color:#b42318;background:#fff0ef;border-color:#f3bbb6}.status-badge.neutral{color:#36516b;background:#f2f7fb;border-color:#d6e3ed}
         .confidence-card{margin:16px 0;padding:20px;border-radius:12px;background:#FFFFFF;border:1px solid #D9E0EA;box-shadow:0 2px 8px rgba(23,32,51,.04)}
         .confidence-card.high{border-left:6px solid #26a269}.confidence-card.good{border-left:6px solid #3479b9}.confidence-card.neutral{border-left:6px solid #d28b26}.confidence-card.low{border-left:6px solid #c43d36}
-        .confidence-head{display:flex;align-items:center;justify-content:space-between;gap:18px}
-        .confidence-eyebrow{font-size:.76rem;font-weight:800;letter-spacing:.09em;color:#6a8095;text-transform:uppercase}
-        .confidence-title{margin-top:2px;font-size:18px;font-weight:600;color:#172033}
-        .confidence-score{font-size:30px;font-weight:600;line-height:1;color:#172033;font-variant-numeric:tabular-nums}.confidence-score span{font-size:13px;margin-left:2px;color:#64748B}
-        .confidence-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:14px 0 10px}
-        .confidence-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px;padding:9px 10px;border-radius:11px;background:#f5f9fc;font-size:.84rem;color:#5b7186}
-        .confidence-row strong{color:#203a54}.signal.high{color:#26a269}.signal.mid{color:#d28b26}.signal.low{color:#c43d36}.signal.unknown{color:#9aa9b6}
-        .confidence-opinion{padding:11px 13px;border-radius:12px;background:#eef6fc;color:#314d67;line-height:1.5}
-        .confidence-note{margin-top:7px;font-size:.75rem;color:#7d8fa0}
-        .order-summary{margin:16px 0 20px;padding:20px;border-radius:12px;background:#FFFFFF;border:1px solid #D9E0EA;box-shadow:0 2px 8px rgba(23,32,51,.04)}
-        .order-summary-label{font-size:.78rem;font-weight:800;letter-spacing:.08em;color:#3479b9;text-transform:uppercase;margin-bottom:5px}
-        .order-summary-main{font-size:18px;font-weight:600;color:#172033;font-variant-numeric:tabular-nums}
-        .order-summary-risk{margin-top:8px;color:#64748B;font-size:13px}
-        div[role="radiogroup"]{gap:.45rem}
-        div[role="radiogroup"] label{padding:12px;border:1px solid #D9E0EA;border-radius:12px;background:#FFFFFF;line-height:1.4}
-        div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}
-        div.stButton > button{min-height:2.75rem;text-align:left;border-radius:14px}
-        div.stButton > button:focus-visible{outline:3px solid #2563eb;outline-offset:2px}
-        [data-testid="stCaptionContainer"]{color:#51677d}
-        @media(max-width:1100px){.confidence-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-        @media(max-width:900px){.block-container{padding:16px 14px 72px}.status-hero{align-items:flex-start;flex-direction:column;padding:16px}.status-hero h1{font-size:26px}.status-cluster{justify-content:flex-start}}
+        .confidence-head{display:flex;align-items:center;justify-content:space-between;gap:18px}.confidence-eyebrow{font-size:.76rem;font-weight:800;letter-spacing:.09em;color:#6a8095;text-transform:uppercase}.confidence-title{margin-top:2px;font-size:18px;font-weight:600;color:#172033}.confidence-score{font-size:30px;font-weight:600;line-height:1;color:#172033}.confidence-score span{font-size:13px;margin-left:2px;color:#64748B}
+        .confidence-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:14px 0 10px}.confidence-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px;padding:9px 10px;border-radius:11px;background:#f5f9fc;font-size:.84rem;color:#5b7186}.confidence-row strong{color:#203a54}.signal.high{color:#26a269}.signal.mid{color:#d28b26}.signal.low{color:#c43d36}.signal.unknown{color:#9aa9b6}
+        .confidence-opinion{padding:11px 13px;border-radius:12px;background:#eef6fc;color:#314d67;line-height:1.5}.confidence-note{margin-top:7px;font-size:.75rem;color:#7d8fa0}
+        div[role="radiogroup"]{gap:.45rem}div[role="radiogroup"] label{padding:12px;border:1px solid #D9E0EA;border-radius:12px;background:#FFFFFF;line-height:1.4}div[role="radiogroup"] label:hover{border-color:rgba(52,121,185,.48);background:rgba(239,248,255,.96)}
+        div.stButton > button{min-height:2.75rem;text-align:left;border-radius:14px}[data-testid="stCaptionContainer"]{color:#51677d}
+        @media(max-width:1100px){.confidence-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:900px){.block-container{padding:16px 14px 72px}.status-hero{align-items:flex-start;flex-direction:column;padding:16px}.status-hero h1{font-size:26px}.status-cluster{justify-content:flex-start}}
         </style>
         """,
         unsafe_allow_html=True,

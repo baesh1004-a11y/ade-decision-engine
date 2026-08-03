@@ -42,11 +42,7 @@ class ReplayPrediction:
 
 
 class ReplayPredictionEngine:
-    """Estimate forward returns from matched Replay paths.
-
-    Each Replay path starts immediately after the matched equivalent week.
-    Similarity is used as the sample weight, so closer matches contribute more.
-    """
+    """Estimate forward returns from matched Replay paths."""
 
     HORIZONS = (3, 5, 7, 10, 20)
 
@@ -61,12 +57,16 @@ class ReplayPredictionEngine:
     def predict(self, replay_matches: Iterable[object]) -> ReplayPrediction | None:
         samples: list[dict[str, object]] = []
         for match in replay_matches:
-            event_id = str(getattr(match, "event_id", "") or "")
-            if not event_id:
+            event_ids = self._event_ids(match)
+            if not event_ids:
                 continue
             future_week = int(getattr(match, "future_start_week_index", 0) or 0)
             similarity = float(getattr(match, "final_similarity", 0.0) or 0.0)
-            sample = self._load_future_sample(event_id, future_week, similarity)
+            sample = None
+            for event_id in event_ids:
+                sample = self._load_future_sample(event_id, future_week, similarity)
+                if sample is not None:
+                    break
             if sample is not None:
                 samples.append(sample)
 
@@ -101,14 +101,32 @@ class ReplayPredictionEngine:
             grade=grade,
         )
 
+    def _event_ids(self, match: object) -> list[str]:
+        values = [
+            getattr(match, "source_event_id", None),
+            getattr(match, "event_id", None),
+            getattr(match, "pattern_id", None),
+        ]
+        result = [str(value).strip() for value in values if str(value or "").strip()]
+        event_id = result[0] if result else ""
+        if event_id:
+            try:
+                row = self.conn.execute(
+                    "SELECT source_event_id, pattern_id FROM surge_patterns WHERE source_event_id=? OR pattern_id=? ORDER BY surge_start_date DESC LIMIT 1",
+                    (event_id, event_id),
+                ).fetchone()
+            except sqlite3.Error:
+                row = None
+            if row is not None:
+                for key in ("source_event_id", "pattern_id"):
+                    value = str(row[key] or "").strip()
+                    if value and value not in result:
+                        result.insert(0 if key == "source_event_id" else len(result), value)
+        return result
+
     def _load_future_sample(self, event_id: str, future_start_week_index: int, similarity: float) -> dict[str, object] | None:
         rows = self.conn.execute(
-            """
-            SELECT day_index, close
-            FROM replay_event_flow
-            WHERE event_id=?
-            ORDER BY day_index
-            """,
+            "SELECT day_index, close FROM replay_event_flow WHERE event_id=? ORDER BY day_index",
             (event_id,),
         ).fetchall()
         if not rows:
@@ -155,13 +173,7 @@ class ReplayPredictionEngine:
         total_weight = sum(weights) or 1.0
         up_weight = sum(weight for value, weight in zip(values, weights) if value > 0)
         expected = sum(value * weight for value, weight in zip(values, weights)) / total_weight
-        return HorizonPrediction(
-            days=days,
-            sample_count=len(values),
-            up_probability=round(up_weight / total_weight * 100.0, 2),
-            expected_return=round(expected, 2),
-            median_return=round(median(values), 2),
-        )
+        return HorizonPrediction(days=days, sample_count=len(values), up_probability=round(up_weight / total_weight * 100.0, 2), expected_return=round(expected, 2), median_return=round(median(values), 2))
 
     @staticmethod
     def _weighted_mean(samples: list[dict[str, object]], key: str) -> float:

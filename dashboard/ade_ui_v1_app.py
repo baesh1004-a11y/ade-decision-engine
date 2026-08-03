@@ -44,7 +44,7 @@ from dashboard.order_candidate_store import (
     upsert_candidate,
 )
 from dashboard.professional_components import render_workspace_card, render_workspace_intro
-from dashboard.recommendation_detail_enhancements import(render_recommendation_detail_enahncement,)
+from dashboard.recommendation_detail_enhancements import(render_recommendation_detail_enahncements,)
 from dashboard.sto_professional_panel import render_professional_sto_panel
 from dashboard.ui_workspace import DEFAULT_WORKSPACE_KEY, WORKSPACES, get_workspace
 from jp_radar.live_chart import make_live_radar_chart

@@ -42,7 +42,11 @@ class ReplayPrediction:
 
 
 class ReplayPredictionEngine:
-    """Estimate forward returns from matched Replay paths."""
+    """Estimate forward returns from matched Replay paths.
+
+    Event metadata and future paths are cached in memory. Call ``preload`` once with
+    the run's candidate event identifiers to avoid per-match SQLite queries.
+    """
 
     HORIZONS = (3, 5, 7, 10, 20)
 
@@ -50,13 +54,82 @@ class ReplayPredictionEngine:
         self.db_path = Path(db_path)
         self.conn = sqlite3.connect(str(self.db_path))
         self.conn.row_factory = sqlite3.Row
+        self._aliases: dict[str, tuple[str, ...]] = {}
+        self._flow_cache: dict[str, tuple[tuple[int, float], ...]] = {}
 
     def close(self) -> None:
+        self._aliases.clear()
+        self._flow_cache.clear()
         self.conn.close()
 
+    @staticmethod
+    def _chunks(values: list[str], size: int = 800):
+        for index in range(0, len(values), size):
+            yield values[index:index + size]
+
+    def preload(self, event_ids: Iterable[object]) -> None:
+        requested = list(dict.fromkeys(str(value).strip() for value in event_ids if str(value or "").strip()))
+        unresolved = [value for value in requested if value not in self._aliases]
+        if unresolved:
+            for chunk in self._chunks(unresolved):
+                placeholders = ",".join("?" for _ in chunk)
+                rows = self.conn.execute(
+                    f"""
+                    SELECT source_event_id, pattern_id
+                    FROM surge_patterns
+                    WHERE source_event_id IN ({placeholders}) OR pattern_id IN ({placeholders})
+                    """,
+                    (*chunk, *chunk),
+                ).fetchall()
+                for row in rows:
+                    aliases = tuple(dict.fromkeys(
+                        value for value in (
+                            str(row["source_event_id"] or "").strip(),
+                            str(row["pattern_id"] or "").strip(),
+                        ) if value
+                    ))
+                    for alias in aliases:
+                        self._aliases[alias] = aliases
+            for value in unresolved:
+                self._aliases.setdefault(value, (value,))
+
+        needed_flows = list(dict.fromkeys(
+            alias
+            for value in requested
+            for alias in self._aliases.get(value, (value,))
+            if alias not in self._flow_cache
+        ))
+        for chunk in self._chunks(needed_flows):
+            placeholders = ",".join("?" for _ in chunk)
+            rows = self.conn.execute(
+                f"""
+                SELECT event_id, day_index, close
+                FROM replay_event_flow
+                WHERE event_id IN ({placeholders})
+                ORDER BY event_id, day_index
+                """,
+                tuple(chunk),
+            ).fetchall()
+            grouped: dict[str, list[tuple[int, float]]] = {value: [] for value in chunk}
+            for row in rows:
+                grouped[str(row["event_id"])].append((int(row["day_index"]), float(row["close"] or 0.0)))
+            for event_id, values in grouped.items():
+                self._flow_cache[event_id] = tuple(values)
+
     def predict(self, replay_matches: Iterable[object]) -> ReplayPrediction | None:
+        matches = list(replay_matches)
+        self.preload(
+            value
+            for match in matches
+            for value in (
+                getattr(match, "source_event_id", None),
+                getattr(match, "event_id", None),
+                getattr(match, "pattern_id", None),
+            )
+        )
+
         samples: list[dict[str, object]] = []
-        for match in replay_matches:
+        for match in matches:
             event_ids = self._event_ids(match)
             if not event_ids:
                 continue
@@ -107,41 +180,31 @@ class ReplayPredictionEngine:
             getattr(match, "event_id", None),
             getattr(match, "pattern_id", None),
         ]
-        result = [str(value).strip() for value in values if str(value or "").strip()]
-        event_id = result[0] if result else ""
-        if event_id:
-            try:
-                row = self.conn.execute(
-                    "SELECT source_event_id, pattern_id FROM surge_patterns WHERE source_event_id=? OR pattern_id=? ORDER BY surge_start_date DESC LIMIT 1",
-                    (event_id, event_id),
-                ).fetchone()
-            except sqlite3.Error:
-                row = None
-            if row is not None:
-                for key in ("source_event_id", "pattern_id"):
-                    value = str(row[key] or "").strip()
-                    if value and value not in result:
-                        result.insert(0 if key == "source_event_id" else len(result), value)
+        result: list[str] = []
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            for alias in self._aliases.get(text, (text,)):
+                if alias not in result:
+                    result.append(alias)
         return result
 
     def _load_future_sample(self, event_id: str, future_start_week_index: int, similarity: float) -> dict[str, object] | None:
-        rows = self.conn.execute(
-            "SELECT day_index, close FROM replay_event_flow WHERE event_id=? ORDER BY day_index",
-            (event_id,),
-        ).fetchall()
+        rows = self._flow_cache.get(event_id, ())
         if not rows:
             return None
 
         start_day = max(0, future_start_week_index * 5)
-        future = [row for row in rows if int(row["day_index"]) >= start_day]
+        future = [row for row in rows if row[0] >= start_day]
         if len(future) < 4:
             return None
 
-        entry = float(future[0]["close"])
+        entry = float(future[0][1])
         if entry <= 0:
             return None
 
-        closes = [float(row["close"]) for row in future[:21]]
+        closes = [float(row[1]) for row in future[:21]]
         returns = [(close / entry - 1.0) * 100.0 for close in closes]
         weight = max(0.01, similarity / 100.0)
 

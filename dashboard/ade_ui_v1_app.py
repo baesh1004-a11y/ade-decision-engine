@@ -44,6 +44,7 @@ from dashboard.order_candidate_store import (
     upsert_candidate,
 )
 from dashboard.professional_components import render_workspace_card, render_workspace_intro
+from dashboard.recommendation_detail_enhancements import(render_recommendation_detail_enahncement,)
 from dashboard.sto_professional_panel import render_professional_sto_panel
 from dashboard.ui_workspace import DEFAULT_WORKSPACE_KEY, WORKSPACES, get_workspace
 from jp_radar.live_chart import make_live_radar_chart
@@ -487,6 +488,17 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         supply_health=supply_health,
     )
     render_data_health_panel(health_rows)
+
+    render_recommendation_detail_enhancements(
+        db_path=str(profile.db_path),
+        payload=payload,
+        selected=selected,
+        market=market,
+        ticker=normalized_ticker,
+        current=current,
+        current_label=symbol,
+        include_heavy=bool(st.session_state.ade_show_heavy_charts),
+    )
 
     if not st.session_state.ade_show_heavy_charts:
         st.info("상세 차트는 필요할 때 불러오도록 변경했습니다. 아래 버튼을 누르면 차트가 생성됩니다.")

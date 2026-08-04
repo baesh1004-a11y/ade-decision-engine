@@ -19,7 +19,8 @@ def _number(value: Any) -> float | None:
     try:
         if value is None or str(value) == "":
             return None
-        return float(value)
+        numeric = float(value)
+        return numeric if pd.notna(numeric) else None
     except (TypeError, ValueError):
         return None
 
@@ -31,22 +32,12 @@ def render_recommendation_reason_button(
     market: str,
     ticker: str,
 ) -> None:
-    """Render engine-native recommendation reasons behind an explicit detail button."""
+    """Render engine-native recommendation reasons without forcing a page rerun."""
     reasons = _as_text_list(payload.get("reasons"))
     prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
     replay_matches = payload.get("replay_matches") if isinstance(payload.get("replay_matches"), list) else []
 
-    state_key = f"ade_show_recommendation_reasons_{market}_{ticker}"
-    st.session_state.setdefault(state_key, False)
-    label = "추천근거 접기" if st.session_state[state_key] else "추천근거 보기"
-    if st.button(label, key=f"recommendation_reason_button_{market}_{ticker}", use_container_width=True):
-        st.session_state[state_key] = not st.session_state[state_key]
-        st.rerun()
-
-    if not st.session_state[state_key]:
-        return
-
-    with st.container(border=True):
+    with st.expander("추천근거 보기", expanded=False):
         st.markdown("### 추천근거")
         if reasons:
             for index, reason in enumerate(reasons, start=1):

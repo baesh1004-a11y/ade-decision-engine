@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import sqlite3
 from typing import Any
 
@@ -14,9 +15,26 @@ def _number(value: object) -> float | None:
     try:
         if value is None or str(value) == "":
             return None
-        return float(value)
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
     except (TypeError, ValueError):
         return None
+
+
+def _dedupe_replay_matches(replay_matches: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for match in replay_matches:
+        ids = _match_ids(match)
+        identity = ids[0] if ids else ""
+        ticker = str(match.get("ticker") or match.get("name") or "").strip()
+        event_date = str(match.get("event_date") or "").strip()
+        key = (identity, ticker, event_date)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(match)
+    return unique
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
@@ -114,10 +132,16 @@ def _format_pct(value: object) -> str:
     return "-" if numeric is None else f"{numeric:+.2f}%"
 
 
+def _mean_pct(series: pd.Series) -> str:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    return "-" if clean.empty else f"{clean.mean():+.2f}%"
+
+
 def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
-    st.markdown("### Replay 전문 비교 요약")
+    st.markdown("### 과거 유사사례 성과 요약")
+    st.caption("현재 종목과 비슷했던 과거 사례들의 유사도와 이후 성과를 요약합니다. 유사도는 닮은 정도이고, 과거 성과는 미래 수익을 보장하지 않습니다.")
     if not replay_matches:
-        st.info("표시할 Replay 사례가 없습니다.")
+        st.info("표시할 과거 유사사례가 없습니다.")
         return
     frame = pd.DataFrame(
         [
@@ -130,21 +154,23 @@ def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
             for match in replay_matches[:10]
         ]
     )
+    drawdowns = pd.to_numeric(frame["max_drawdown"], errors="coerce").dropna()
+    returns = pd.to_numeric(frame["max_return"], errors="coerce").dropna()
     metrics = st.columns(6)
-    metrics[0].metric("표본", f"{len(frame)}건")
-    metrics[1].metric("평균 주봉 유사도", f"{frame['weekly'].mean():.2f}%")
-    metrics[2].metric("평균 STO 유사도", f"{frame['sto'].mean():.2f}%")
-    metrics[3].metric("평균 최대상승", f"{frame['max_return'].mean():+.2f}%")
-    metrics[4].metric("최악 최대낙폭", _format_pct(frame['max_drawdown'].min()))
-    metrics[5].metric("상승 사례 비율", f"{frame['max_return'].gt(0).mean() * 100:.1f}%")
+    metrics[0].metric("유효 사례", f"{len(frame)}건")
+    metrics[1].metric("평균 주봉 유사도", _mean_pct(frame["weekly"]))
+    metrics[2].metric("평균 STO 유사도", _mean_pct(frame["sto"]))
+    metrics[3].metric("평균 최고수익", _mean_pct(frame["max_return"]))
+    metrics[4].metric("과거 사례 중 최대 하락", _format_pct(drawdowns.min() if not drawdowns.empty else None))
+    metrics[5].metric("상승 사례 비율", f"{returns.gt(0).mean() * 100:.1f}%" if not returns.empty else "-")
 
     chart = go.Figure()
-    names = [str(match.get("name") or match.get("ticker") or f"사례 {index}") for index, match in enumerate(replay_matches[:10], start=1)]
+    names = [f"#{index} {str(match.get('name') or match.get('ticker') or '사례')}" for index, match in enumerate(replay_matches[:10], start=1)]
     chart.add_trace(go.Bar(name="주봉 유사도", x=names, y=[_number(match.get("weekly_similarity")) for match in replay_matches[:10]]))
     chart.add_trace(go.Bar(name="STO 유사도", x=names, y=[_number(match.get("sto_similarity")) for match in replay_matches[:10]]))
     chart.update_layout(
         barmode="group",
-        title="Top N 유사도 비교",
+        title="과거 사례별 패턴 유사도 비교",
         xaxis_title="과거 사례",
         yaxis_title="유사도(%)",
         yaxis=dict(range=[0, 100]),
@@ -153,6 +179,7 @@ def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
         height=390,
     )
     st.plotly_chart(chart, use_container_width=True, config=CHART_CONFIG)
+    st.caption("파란 막대는 주봉 가격 흐름 유사도, 빨간 막대는 STO 기술지표 흐름 유사도입니다.")
 
 
 def _render_prediction(prediction: dict[str, Any]) -> None:
@@ -172,7 +199,7 @@ def _render_prediction(prediction: dict[str, Any]) -> None:
             }
         )
     if not rows:
-        st.info("Prediction 데이터가 아직 없습니다. 다음 추천 실행부터 다중 기간 확률·수익 분석이 생성됩니다.")
+        st.info("Prediction 데이터가 아직 없습니다. 새 추천 실행 후 다중 기간 확률·수익 분석이 생성됩니다.")
         return
     frame = pd.DataFrame(rows)
     st.dataframe(frame, hide_index=True, use_container_width=True)
@@ -194,14 +221,15 @@ def _render_prediction(prediction: dict[str, Any]) -> None:
     summary = st.columns(6)
     summary[0].metric("예측등급", str(prediction.get("grade") or "-"))
     summary[1].metric("표본수", f"{int(prediction.get('sample_count') or 0)}건")
-    summary[2].metric("7일 최대수익", f"{float(prediction.get('expected_max_return_7d') or 0):+.2f}%")
-    summary[3].metric("20일 최대수익", f"{float(prediction.get('expected_max_return_20d') or 0):+.2f}%")
-    summary[4].metric("7일 최대낙폭", f"{float(prediction.get('expected_mdd_7d') or 0):+.2f}%")
-    summary[5].metric("예상 고점", f"{float(prediction.get('expected_peak_day') or 0):.1f}일")
+    summary[2].metric("7일 최대수익", _format_pct(prediction.get("expected_max_return_7d")))
+    summary[3].metric("20일 최대수익", _format_pct(prediction.get("expected_max_return_20d")))
+    summary[4].metric("7일 최대낙폭", _format_pct(prediction.get("expected_mdd_7d")))
+    peak_day = _number(prediction.get("expected_peak_day"))
+    summary[5].metric("예상 고점", f"{peak_day:.1f}일" if peak_day is not None else "-")
 
 
 def _render_replay_table(replay_matches: list[dict[str, Any]]) -> None:
-    st.markdown("### Replay 유사사례 Top N")
+    st.markdown("### 과거 유사사례 Top N")
     rows = []
     for index, match in enumerate(replay_matches[:10], start=1):
         rows.append(
@@ -211,9 +239,9 @@ def _render_replay_table(replay_matches: list[dict[str, Any]]) -> None:
                 "기준일": match.get("event_date") or "-",
                 "주봉유사도(%)": _number(match.get("weekly_similarity")),
                 "STO유사도(%)": _number(match.get("sto_similarity")),
-                "최대상승(%)": _number(match.get("max_return")),
-                "최대낙폭(%)": _number(match.get("max_drawdown")),
-                "대응주차": int(match.get("equivalent_week_index") or 0),
+                "최고수익(%)": _number(match.get("max_return")),
+                "최대하락(%)": _number(match.get("max_drawdown")),
+                "현재 대응주차": int(match.get("equivalent_week_index") or 0),
                 "비교주수": int(match.get("weeks_compared") or 0),
                 "향후주수": int(match.get("future_weeks_available") or 0),
             }
@@ -221,7 +249,7 @@ def _render_replay_table(replay_matches: list[dict[str, Any]]) -> None:
     if rows:
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
     else:
-        st.info("표시할 Replay 사례가 없습니다.")
+        st.info("표시할 과거 유사사례가 없습니다.")
 
 
 def _selected_case(replay_matches: list[dict[str, Any]], key_prefix: str) -> tuple[int, dict[str, Any]] | tuple[None, None]:
@@ -229,7 +257,7 @@ def _selected_case(replay_matches: list[dict[str, Any]], key_prefix: str) -> tup
         return None, None
     options = list(range(min(10, len(replay_matches))))
     selected_index = st.selectbox(
-        "비교할 Replay 사례",
+        "비교할 과거 사례",
         options=options,
         format_func=lambda index: f"#{index + 1} {replay_matches[index].get('name') or replay_matches[index].get('ticker') or '-'} · {replay_matches[index].get('event_date') or '-'}",
         key=f"{key_prefix}_replay_case",
@@ -238,14 +266,14 @@ def _selected_case(replay_matches: list[dict[str, Any]], key_prefix: str) -> tup
 
 
 def _render_selected_compare(conn: sqlite3.Connection, current: pd.DataFrame, current_label: str, selected_index: int, match: dict[str, Any], key_prefix: str) -> None:
-    st.markdown("### 현재 종목 vs 선택 Replay 사례")
+    st.markdown("### 현재 종목 vs 선택 과거 사례")
     pattern = _pattern_for_match(conn, match)
     historical = _pattern_bars(conn, pattern)
     details = st.columns(6)
-    details[0].metric("주봉 유사도", f"{float(match.get('weekly_similarity') or 0):.2f}%")
-    details[1].metric("STO 유사도", f"{float(match.get('sto_similarity') or 0):.2f}%")
-    details[2].metric("과거 최대상승", _format_pct(match.get("max_return")))
-    details[3].metric("과거 최대낙폭", _format_pct(match.get("max_drawdown")))
+    details[0].metric("주봉 유사도", _format_pct(match.get("weekly_similarity")))
+    details[1].metric("STO 유사도", _format_pct(match.get("sto_similarity")))
+    details[2].metric("과거 최고수익", _format_pct(match.get("max_return")))
+    details[3].metric("과거 최대하락", _format_pct(match.get("max_drawdown")))
     details[4].metric("현재 대응", f"{int(match.get('equivalent_week_index') or 0)}주차")
     details[5].metric("비교 구간", f"{int(match.get('weeks_compared') or 0)}주")
     if current.empty or pattern is None or historical.empty:
@@ -261,10 +289,10 @@ def _render_selected_compare(conn: sqlite3.Connection, current: pd.DataFrame, cu
 
 
 def _render_selected_future_path(conn: sqlite3.Connection, match: dict[str, Any]) -> None:
-    st.markdown("### 선택 사례 미래 20거래일 경로")
+    st.markdown("### 선택 사례 이후 20거래일 경로")
     paths = _future_paths(conn, [match])
     if paths.empty:
-        st.caption("선택 사례의 미래 경로 원본이 없습니다.")
+        st.caption("선택 사례의 미래 경로 원본이 없습니다. Replay 원본 데이터 재생성이 필요합니다.")
         return
     column = paths.columns[0]
     series = paths[column].dropna()
@@ -289,10 +317,10 @@ def _render_selected_future_path(conn: sqlite3.Connection, match: dict[str, Any]
 
 
 def _render_future_distribution(conn: sqlite3.Connection, replay_matches: list[dict[str, Any]]) -> None:
-    st.markdown("### Top N 미래 20거래일 경로 분포")
+    st.markdown("### 유사사례 이후 20거래일 경로 분포")
     paths = _future_paths(conn, replay_matches)
     if paths.empty:
-        st.info("미래 경로 원본이 없어 분포 차트를 생성하지 못했습니다.")
+        st.info("미래 경로 원본이 없어 분포 차트를 생성하지 못했습니다. Replay 이벤트 흐름 데이터 재생성이 필요합니다.")
         return
     mean_path = paths.mean(axis=1, skipna=True)
     median_path = paths.median(axis=1, skipna=True)
@@ -314,7 +342,7 @@ def _render_future_distribution(conn: sqlite3.Connection, replay_matches: list[d
     fig.add_hline(y=10, line_dash="dot", annotation_text="+10%")
     fig.add_hline(y=-10, line_dash="dot", annotation_text="-10%")
     fig.update_layout(
-        title="Top N 경로 분포·중앙 경로·리스크 범위",
+        title="과거 유사사례의 매칭 이후 경로 분포",
         xaxis_title="매칭 이후 거래일",
         yaxis_title="누적수익률(%)",
         legend=dict(orientation="h", y=1.12),
@@ -350,8 +378,11 @@ def _render_future_distribution(conn: sqlite3.Connection, replay_matches: list[d
 
 
 def render_replay_analysis_panel(*, db_path: str, payload: dict[str, Any], current: pd.DataFrame, current_label: str, key_prefix: str, include_heavy: bool = True) -> None:
-    replay_matches = [item for item in (payload.get("replay_matches") or []) if isinstance(item, dict)]
+    raw_matches = [item for item in (payload.get("replay_matches") or []) if isinstance(item, dict)]
+    replay_matches = _dedupe_replay_matches(raw_matches)
     prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
+    if len(raw_matches) != len(replay_matches):
+        st.caption(f"중복 Replay 사례 {len(raw_matches) - len(replay_matches)}건을 제거했습니다.")
     _render_replay_overview(replay_matches)
     _render_replay_table(replay_matches)
     _render_prediction(prediction)

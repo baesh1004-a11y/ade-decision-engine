@@ -137,9 +137,39 @@ def _mean_pct(series: pd.Series) -> str:
     return "-" if clean.empty else f"{clean.mean():+.2f}%"
 
 
+def _classify_case(match: dict[str, Any]) -> str:
+    final_return = _number(match.get("final_return") or match.get("return_20d") or match.get("future_return"))
+    max_return = _number(match.get("max_return"))
+    max_drawdown = _number(match.get("max_drawdown"))
+    if final_return is not None:
+        if final_return >= 5:
+            return "성공"
+        if final_return <= -5:
+            return "실패"
+    if max_return is not None and max_return >= 10 and (max_drawdown is None or max_drawdown > -10):
+        return "성공"
+    if max_drawdown is not None and max_drawdown <= -10:
+        return "실패"
+    return "중립"
+
+
+def _render_validation_map(replay_matches: list[dict[str, Any]], prediction: dict[str, Any]) -> None:
+    st.markdown("### 알고리즘 판단과 원천 증거")
+    st.caption("프로그램 계산값과 실제 과거 데이터가 같은 이야기를 하는지 사람이 다시 확인하는 단계입니다.")
+    rows = []
+    weekly_values = [_number(item.get("weekly_similarity")) for item in replay_matches]
+    sto_values = [_number(item.get("sto_similarity")) for item in replay_matches]
+    rows.append({"알고리즘 판단": "주봉 패턴 유사도", "계산 결과": _mean_pct(pd.Series(weekly_values)), "사람이 확인할 원천 증거": "현재 주봉과 과거 사례의 가격·거래량 흐름"})
+    rows.append({"알고리즘 판단": "STO 유사도", "계산 결과": _mean_pct(pd.Series(sto_values)), "사람이 확인할 원천 증거": "현재와 과거의 STO 방향·전환 시점"})
+    rows.append({"알고리즘 판단": "Replay 표본", "계산 결과": f"{len(replay_matches)}건", "사람이 확인할 원천 증거": "매칭 이후 성공·중립·실패 경로"})
+    grade = str(prediction.get("grade") or "-") if prediction else "-"
+    rows.append({"알고리즘 판단": "Prediction", "계산 결과": grade, "사람이 확인할 원천 증거": "기간별 상승확률·기대수익·경로 분산"})
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+
 def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
     st.markdown("### 과거 유사사례 성과 요약")
-    st.caption("현재 종목과 비슷했던 과거 사례들의 유사도와 이후 성과를 요약합니다. 유사도는 닮은 정도이고, 과거 성과는 미래 수익을 보장하지 않습니다.")
+    st.caption("유사도 점수와 실제 사후 결과를 함께 봅니다. 유사도는 닮은 정도일 뿐 결과를 보장하지 않습니다.")
     if not replay_matches:
         st.info("표시할 과거 유사사례가 없습니다.")
         return
@@ -179,7 +209,43 @@ def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
         height=390,
     )
     st.plotly_chart(chart, use_container_width=True, config=CHART_CONFIG)
-    st.caption("파란 막대는 주봉 가격 흐름 유사도, 빨간 막대는 STO 기술지표 흐름 유사도입니다.")
+    st.caption("주봉 유사도와 STO 유사도를 함께 보고, 아래 원천 차트에서 실제 모양이 정말 닮았는지 다시 확인합니다.")
+
+
+def _render_outcome_groups(replay_matches: list[dict[str, Any]]) -> None:
+    st.markdown("### 유사사례 결과별 비교")
+    st.caption("유사했던 사례를 성공·중립·실패로 나눠, 무엇이 결과를 갈랐는지 확인합니다.")
+    rows = []
+    for match in replay_matches[:10]:
+        rows.append(
+            {
+                "결과": _classify_case(match),
+                "종목": match.get("name") or match.get("ticker") or "-",
+                "기준일": match.get("event_date") or "-",
+                "주봉유사도(%)": _number(match.get("weekly_similarity")),
+                "STO유사도(%)": _number(match.get("sto_similarity")),
+                "최고수익(%)": _number(match.get("max_return")),
+                "최대하락(%)": _number(match.get("max_drawdown")),
+                "현재 대응주차": int(match.get("equivalent_week_index") or 0),
+            }
+        )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        st.info("결과를 분류할 과거 사례가 없습니다.")
+        return
+    counts = frame["결과"].value_counts().to_dict()
+    cols = st.columns(3)
+    for col, label in zip(cols, ["성공", "중립", "실패"]):
+        col.metric(label, f"{int(counts.get(label, 0))}건")
+    tabs = st.tabs(["성공 사례", "중립 사례", "실패 사례"])
+    for tab, label in zip(tabs, ["성공", "중립", "실패"]):
+        with tab:
+            subset = frame[frame["결과"] == label]
+            if subset.empty:
+                st.caption(f"{label}로 분류된 사례가 없습니다.")
+            else:
+                st.dataframe(subset, hide_index=True, use_container_width=True)
+    st.caption("현재 분류는 저장된 사후수익·최대상승·최대하락 값으로 계산합니다. 향후 5·10·20일 수익이 저장되면 기준을 더 정교하게 확장할 수 있습니다.")
 
 
 def _render_prediction(prediction: dict[str, Any]) -> None:
@@ -237,6 +303,7 @@ def _render_replay_table(replay_matches: list[dict[str, Any]]) -> None:
                 "순위": index,
                 "종목": match.get("name") or match.get("ticker") or "-",
                 "기준일": match.get("event_date") or "-",
+                "결과": _classify_case(match),
                 "주봉유사도(%)": _number(match.get("weekly_similarity")),
                 "STO유사도(%)": _number(match.get("sto_similarity")),
                 "최고수익(%)": _number(match.get("max_return")),
@@ -259,14 +326,15 @@ def _selected_case(replay_matches: list[dict[str, Any]], key_prefix: str) -> tup
     selected_index = st.selectbox(
         "비교할 과거 사례",
         options=options,
-        format_func=lambda index: f"#{index + 1} {replay_matches[index].get('name') or replay_matches[index].get('ticker') or '-'} · {replay_matches[index].get('event_date') or '-'}",
+        format_func=lambda index: f"#{index + 1} {replay_matches[index].get('name') or replay_matches[index].get('ticker') or '-'} · {replay_matches[index].get('event_date') or '-'} · {_classify_case(replay_matches[index])}",
         key=f"{key_prefix}_replay_case",
     )
     return int(selected_index), replay_matches[int(selected_index)]
 
 
 def _render_selected_compare(conn: sqlite3.Connection, current: pd.DataFrame, current_label: str, selected_index: int, match: dict[str, Any], key_prefix: str) -> None:
-    st.markdown("### 현재 종목 vs 선택 과거 사례")
+    st.markdown("### 계산값 검증: 현재 종목 vs 선택 과거 사례")
+    st.caption("점수만 보지 말고 가격·거래량·STO의 실제 흐름이 정말 닮았는지 확인합니다. 매칭 이후 성과는 아래 별도 차트에서 봅니다.")
     pattern = _pattern_for_match(conn, match)
     historical = _pattern_bars(conn, pattern)
     details = st.columns(6)
@@ -286,10 +354,15 @@ def _render_selected_compare(conn: sqlite3.Connection, current: pd.DataFrame, cu
         config=CHART_CONFIG,
         key=f"{key_prefix}_replay_compare_{selected_index}",
     )
+    st.markdown("**사람이 확인할 항목**")
+    st.write("- 상승·조정의 순서가 실제로 같은가")
+    st.write("- 거래량이 확대되는 시점이 비슷한가")
+    st.write("- STO가 방향을 바꾸는 시점이 일치하는가")
+    st.write("- 현재 종목만의 비정상 급등·급락이 섞여 있지 않은가")
 
 
 def _render_selected_future_path(conn: sqlite3.Connection, match: dict[str, Any]) -> None:
-    st.markdown("### 선택 사례 이후 20거래일 경로")
+    st.markdown("### 선택 사례의 매칭 이후 20거래일")
     paths = _future_paths(conn, [match])
     if paths.empty:
         st.caption("선택 사례의 미래 경로 원본이 없습니다. Replay 원본 데이터 재생성이 필요합니다.")
@@ -383,7 +456,9 @@ def render_replay_analysis_panel(*, db_path: str, payload: dict[str, Any], curre
     prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
     if len(raw_matches) != len(replay_matches):
         st.caption(f"중복 Replay 사례 {len(raw_matches) - len(replay_matches)}건을 제거했습니다.")
+    _render_validation_map(replay_matches, prediction)
     _render_replay_overview(replay_matches)
+    _render_outcome_groups(replay_matches)
     _render_replay_table(replay_matches)
     _render_prediction(prediction)
     if not replay_matches:

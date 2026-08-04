@@ -4,7 +4,7 @@ services:
     runtime: python
     plan: starter
     buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: python -m datahub.db_sync && exec python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
+    startCommand: python -m datahub.db_sync && (python -m scripts.run_scheduled_orders &) && exec python -m streamlit run dashboard_app.py --server.address 0.0.0.0 --server.port $PORT
     autoDeploy: true
     envVars:
       - key: PYTHON_VERSION
@@ -31,3 +31,7 @@ services:
         value: https://openapivts.koreainvestment.com:29443
       - key: KIS_TIMEOUT_SECONDS
         value: "10"
+      - key: SCHEDULED_ORDER_POLL_SECONDS
+        value: "30"
+      - key: SCHEDULED_ORDER_REQUIRE_APPROVAL
+        value: "0"

@@ -30,6 +30,15 @@ def _disclosure_status(
     return "정상", "DART 정상 조회 · 최근 공시 0건"
 
 
+def _news_status(news_count: int, news_warning: str | None) -> tuple[str, str]:
+    warning = str(news_warning or "").strip()
+    if news_count > 0:
+        return "정상", f"{news_count}건"
+    if warning:
+        return "오류", warning
+    return "정상", "정상 조회 · 최근 뉴스 0건"
+
+
 def build_data_health_rows(
     *,
     current: pd.DataFrame,
@@ -55,6 +64,7 @@ def build_data_health_rows(
         disclosure_count=disclosure_count,
         news_warning=news_warning,
     )
+    news_status, news_detail = _news_status(news_count, news_warning)
     if validation is not None:
         validation_status = "정상"
         validation_detail = "검증 결과 있음"
@@ -106,8 +116,8 @@ def build_data_health_rows(
         {
             "영역": "콘텐츠",
             "데이터": "뉴스",
-            "상태": _status_label(news_count > 0),
-            "세부": f"{news_count}건" if news_count > 0 else "조회 결과 없음",
+            "상태": news_status,
+            "세부": news_detail,
         },
         {
             "영역": "콘텐츠",

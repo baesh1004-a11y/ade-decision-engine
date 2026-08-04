@@ -252,117 +252,12 @@ def _run_selected_validation(db_path, run_id, selected, payload) -> None:
     )
     _save_final_decisions(db_path, run_id, results)
     feedback = FeedbackEngine(db_path)
-    feedback.record_validation_results(run_id, results)
+    try:
+        feedback.register_meta_results(results)
+    finally:
+        feedback.close()
 
 
 def _render_validation_summary(st, validation) -> None:
     if validation is None:
         return
-    row = dict(validation)
-    final_score = float(row.get("final_score") or row.get("score") or 0.0)
-    risk_score = float(row.get("risk_score") or 0.0)
-    st.markdown(
-        f'<div class="validation-summary"><b>환경 점수 {final_score:.1f}</b>'
-        f'<span>위험도 {_risk_text(risk_score)} · 상태 {_status_text(final_score)}</span></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def _order_panel(st, selected, market, validation, context) -> None:
-    st.markdown(
-        f'<div class="order-card"><b>{selected["symbol"]}</b><span>{selected["ticker"]}</span></div>',
-        unsafe_allow_html=True,
-    )
-    if validation is not None:
-        st.caption("환경 조언이 저장된 종목입니다. 주문 전에 참고하세요.")
-    st.page_link(
-        "pages/9_Trading_Desk.py" if market == "kr" else "pages/12_US_Trading_Desk.py",
-        label="주문 화면",
-        icon="💳",
-        use_container_width=True,
-    )
-    st.page_link(
-        "pages/15_Scheduled_Orders.py",
-        label="예약 주문",
-        icon="🗓️",
-        use_container_width=True,
-    )
-    st.markdown(
-        f'<div class="order-count">현재 실행 주문 <b>{len(context.current_orders)}건</b></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def _selected_pattern(conn, payload):
-    pattern_id = payload.get("selected_pattern_id")
-    if not pattern_id:
-        return None
-    return conn.execute("SELECT * FROM surge_patterns WHERE pattern_id=?", (pattern_id,)).fetchone()
-
-
-def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
-    if not table_name:
-        return False
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-        (table_name,),
-    ).fetchone()
-    return row is not None
-
-
-def _resolve_price_source(conn: sqlite3.Connection, configured_source: str) -> str | None:
-    candidates = [configured_source, "ohlcv", "daily_prices", "price_daily", "prices"]
-    for candidate in candidates:
-        if candidate and _table_exists(conn, candidate):
-            return candidate
-    return None
-
-
-def _current_bars(conn, market, ticker, source):
-    resolved_source = _resolve_price_source(conn, str(source or ""))
-    if resolved_source is None:
-        return pd.DataFrame()
-    rows = conn.execute(
-        f'SELECT * FROM "{resolved_source}" WHERE ticker=? ORDER BY date DESC LIMIT 140',
-        (ticker,),
-    ).fetchall()
-    frame = pd.DataFrame([dict(row) for row in rows])
-    if not frame.empty and "date" in frame.columns:
-        frame = frame.sort_values("date")
-    return frame
-
-
-def _pattern_bars(conn, pattern):
-    if pattern is None or not _table_exists(conn, "surge_pattern_bars"):
-        return pd.DataFrame()
-    rows = conn.execute(
-        "SELECT * FROM surge_pattern_bars WHERE pattern_id=? ORDER BY day_index",
-        (pattern["pattern_id"],),
-    ).fetchall()
-    return pd.DataFrame([dict(row) for row in rows])
-
-
-def _safe_json(value):
-    try:
-        return json.loads(str(value))
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return {}
-
-
-def _status_text(score):
-    return "양호" if score >= 70 else "보통" if score >= 45 else "주의"
-
-
-def _risk_text(score):
-    return "낮음" if score >= 70 else "보통" if score >= 45 else "높음"
-
-
-def _step_title(st, number, title, description):
-    st.markdown(
-        f'<div class="step-title"><span>{number}</span><div><b>{title}</b><small>{description}</small></div></div>',
-        unsafe_allow_html=True,
-    )
-
-
-def _style(st):
-    st.markdown("<style></style>", unsafe_allow_html=True)

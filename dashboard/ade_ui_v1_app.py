@@ -285,9 +285,15 @@ def _table_columns(conn: sqlite3.Connection, table: str) -> list[str]:
 
 
 def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: str, configured_source: str) -> tuple[pd.DataFrame, str, str | None]:
-    direct = recommendation_base._current_bars(conn, market, ticker, configured_source)
-    if not direct.empty:
-        return direct, f"DB:{configured_source or '자동'}", None
+    loader = getattr(recommendation_base, "_current_bars", None)
+    if callable(loader):
+        try:
+            direct = loader(conn, market, ticker, configured_source)
+        except Exception as exc:
+            LOGGER.warning("Current bars loader failed; using local fallback: %s", exc)
+            direct = pd.DataFrame()
+        if isinstance(direct, pd.DataFrame) and not direct.empty:
+            return direct, f"DB:{configured_source or '자동'}", None
     candidate_tables = [configured_source, "ohlcv", "daily_prices", "price_daily", "prices", "price_bars"]
     existing = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     for table in [name for name in candidate_tables if name and name in existing]:
@@ -393,10 +399,12 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         conn.row_factory = sqlite3.Row
         pattern = _pattern_from_replay(conn, payload)
         current, current_source, current_warning = _load_current_bars_resilient(conn, market, normalized_ticker, profile.price_source)
-        historical = recommendation_base._pattern_bars(conn, pattern)
+        bars_loader = getattr(recommendation_base, "_pattern_bars", None)
+        historical = bars_loader(conn, pattern) if callable(bars_loader) else pd.DataFrame()
+        table_exists = getattr(recommendation_base, "_table_exists", None)
         table_counts = {
-            "surge_patterns": conn.execute("SELECT COUNT(*) FROM surge_patterns").fetchone()[0] if recommendation_base._table_exists(conn, "surge_patterns") else 0,
-            "surge_pattern_bars": conn.execute("SELECT COUNT(*) FROM surge_pattern_bars").fetchone()[0] if recommendation_base._table_exists(conn, "surge_pattern_bars") else 0,
+            "surge_patterns": conn.execute("SELECT COUNT(*) FROM surge_patterns").fetchone()[0] if callable(table_exists) and table_exists(conn, "surge_patterns") else 0,
+            "surge_pattern_bars": conn.execute("SELECT COUNT(*) FROM surge_pattern_bars").fetchone()[0] if callable(table_exists) and table_exists(conn, "surge_pattern_bars") else 0,
         }
     symbol = str(selected.get("symbol") or selected.get("name") or ticker)
     weekly = float(selected.get("weekly_similarity") or selected.get("score") or selected.get("final_similarity") or 0)

@@ -43,10 +43,9 @@ from dashboard.order_candidate_store import (
     store_health,
     upsert_candidate,
 )
-from dashboard.professional_components import render_workspace_card, render_workspace_intro
-from dashboard.recommendation_detail_enhancements import(render_recommendation_detail_enhancements,)
+from dashboard.recommendation_detail_enhancements import render_recommendation_detail_enhancements
 from dashboard.sto_professional_panel import render_professional_sto_panel
-from dashboard.ui_workspace import DEFAULT_WORKSPACE_KEY, WORKSPACES, get_workspace
+from dashboard.ui_workspace import DEFAULT_WORKSPACE_KEY, get_workspace
 from jp_radar.live_chart import make_live_radar_chart
 from jp_radar.stock_engine import JPStockRadarEngine
 from markets.profiles import get_market_profile
@@ -55,7 +54,14 @@ from recommendation.run_context import load_latest_context
 
 LOGGER = logging.getLogger(__name__)
 THEME_PATH = Path(__file__).with_name("ade_zero_base_theme.css")
-CUSTOM_CSS = """<style>[data-testid="stSidebar"],[data-testid="stSidebarNav"],section[data-testid="stSidebar"],div[data-testid="stSidebarNav"],[data-testid="collapsedControl"],button[kind="headerNoPadding"]{display:none!important}</style>"""
+CUSTOM_CSS = """
+<style>
+[data-testid="stSidebar"],[data-testid="stSidebarNav"],section[data-testid="stSidebar"],
+div[data-testid="stSidebarNav"],[data-testid="collapsedControl"],button[kind="headerNoPadding"]{display:none!important}
+.ade-top-shell{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:8px 0 14px;border-bottom:1px solid rgba(100,116,139,.18)}
+.ade-brand-block{display:flex;align-items:center;gap:12px}.ade-brand-mark{font-size:1.4rem;font-weight:800;letter-spacing:.08em}.ade-brand-copy{font-size:.78rem;color:#64748b;letter-spacing:.06em;text-transform:uppercase}
+</style>
+"""
 LIVE_REFRESH_SECONDS = 5
 LIVE_PRICE_MAX_AGE_SECONDS = 15
 LIVE_SESSION_TICKER_LIMIT = 5
@@ -72,24 +78,12 @@ def _apply_zero_base_theme() -> None:
 def _apply_workspace_theme() -> None:
     workspace = get_workspace(st.session_state.get("ade_ui_workspace"))
     st.markdown(f'<div id="ade-workspace-root" class="{workspace.theme_class}"></div>', unsafe_allow_html=True)
-    st.markdown(
-        f"""
-        <style>
-        .stApp {{ --ade-workspace-name: '{workspace.short_name}'; }}
-        body:has(#ade-workspace-root.{workspace.theme_class}) .stApp {{}}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 def run() -> None:
     st.set_page_config(page_title="ADE Decision Engine", page_icon="📈", layout="wide", initial_sidebar_state="collapsed")
     _apply_zero_base_theme()
     _init_state()
-    if not st.session_state.ade_ui_workspace_confirmed:
-        _render_workspace_selector()
-        return
     _apply_workspace_theme()
     _render_top_navigation()
     page = st.session_state.ade_primary_page
@@ -134,7 +128,6 @@ def _init_state() -> None:
         "ade_candidate_delete_target": None,
         "ade_candidate_clear_market": None,
         "ade_ui_workspace": DEFAULT_WORKSPACE_KEY,
-        "ade_ui_workspace_confirmed": False,
         "ade_validation_attempted": {},
         "ade_validation_errors": {},
         "ade_show_heavy_charts": False,
@@ -143,57 +136,23 @@ def _init_state() -> None:
         st.session_state.setdefault(key, value)
 
 
-def _render_workspace_selector() -> None:
-    render_workspace_intro()
-    selected = st.session_state.ade_ui_workspace
-    columns = st.columns(5)
-    for index, workspace in enumerate(WORKSPACES):
-        with columns[index]:
-            render_workspace_card(workspace, selected=selected == workspace.key)
-            if st.button(
-                "선택됨" if selected == workspace.key else "이 디자인 선택",
-                key=f"workspace_{workspace.key}",
-                type="primary" if selected == workspace.key else "secondary",
-                use_container_width=True,
-            ):
-                st.session_state.ade_ui_workspace = workspace.key
-                st.rerun()
-    st.divider()
-    workspace = get_workspace(selected)
-    st.markdown(f"**현재 선택:** {workspace.name}")
-    c1, c2 = st.columns([1, 1])
-    if c1.button("이 워크스페이스로 시작", type="primary", use_container_width=True):
-        st.session_state.ade_ui_workspace_confirmed = True
-        st.rerun()
-    if c2.button("추천 조합으로 시작", use_container_width=True):
-        st.session_state.ade_ui_workspace = "ai_copilot"
-        st.session_state.ade_ui_workspace_confirmed = True
-        st.rerun()
-
-
 def _render_top_navigation() -> None:
     workspace = get_workspace(st.session_state.ade_ui_workspace)
-    c1, c2, c3, c4, c5, c6, c7 = st.columns([1.8, 1.1, 1.1, 1, .28, 1.15, 1.1])
-    with c1:
-        st.markdown(f'<div class="ade-brand">ADE <span class="ade-subtle">{workspace.short_name}</span></div>', unsafe_allow_html=True)
-    for col, label in [(c2, "상황종합판"), (c3, "추천결과"), (c4, "주문")]:
+    st.markdown(
+        f'<div class="ade-top-shell"><div class="ade-brand-block"><div class="ade-brand-mark">ADE</div><div class="ade-brand-copy">Decision Engine · {workspace.short_name}</div></div></div>',
+        unsafe_allow_html=True,
+    )
+    c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.0, 1.2])
+    for col, label in [(c1, "상황종합판"), (c2, "추천결과"), (c3, "주문")]:
         if col.button(label, type="primary" if st.session_state.ade_primary_page == label else "secondary", use_container_width=True):
             st.session_state.ade_primary_page = label
             st.session_state.ade_recommendation_detail = None
             st.session_state.ade_show_heavy_charts = False
             st.rerun()
-    with c5:
-        st.markdown('<div class="ade-jp-separator">&nbsp;</div>', unsafe_allow_html=True)
-    with c6:
+    with c4:
         if st.button("JP Radar", type="primary" if st.session_state.ade_primary_page == "JP Radar" else "secondary", use_container_width=True):
             st.session_state.ade_primary_page = "JP Radar"
             st.rerun()
-    with c7:
-        if st.button("UI 변경", use_container_width=True):
-            _release_live_lease()
-            st.session_state.ade_ui_workspace_confirmed = False
-            st.rerun()
-    st.markdown('<div class="ade-divider"></div>', unsafe_allow_html=True)
 
 
 def _render_overview() -> None:
@@ -329,7 +288,6 @@ def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: 
     direct = recommendation_base._current_bars(conn, market, ticker, configured_source)
     if not direct.empty:
         return direct, f"DB:{configured_source or '자동'}", None
-
     candidate_tables = [configured_source, "ohlcv", "daily_prices", "price_daily", "prices", "price_bars"]
     existing = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
     for table in [name for name in candidate_tables if name and name in existing]:
@@ -353,7 +311,6 @@ def _load_current_bars_resilient(conn: sqlite3.Connection, market: str, ticker: 
         if not frame.empty:
             frame = frame.rename(columns={date_col: "date"}).sort_values("date")
             return frame, f"DB:{table}", None
-
     external, source, warning = load_external_daily_bars(market, ticker)
     if not external.empty:
         return external, f"외부:{source}", warning
@@ -370,7 +327,6 @@ def _pattern_from_replay(conn: sqlite3.Connection, payload: dict[str, Any]):
         else:
             if selected is not None:
                 return selected
-
     matches = payload.get("replay_matches") or []
     if not isinstance(matches, list):
         return None
@@ -442,7 +398,6 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
             "surge_patterns": conn.execute("SELECT COUNT(*) FROM surge_patterns").fetchone()[0] if recommendation_base._table_exists(conn, "surge_patterns") else 0,
             "surge_pattern_bars": conn.execute("SELECT COUNT(*) FROM surge_pattern_bars").fetchone()[0] if recommendation_base._table_exists(conn, "surge_pattern_bars") else 0,
         }
-
     symbol = str(selected.get("symbol") or selected.get("name") or ticker)
     weekly = float(selected.get("weekly_similarity") or selected.get("score") or selected.get("final_similarity") or 0)
     sto = float(selected.get("sto_similarity") or 0)
@@ -453,29 +408,24 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     date_column = next((name for name in ("Date", "date", "trade_date") if name in current.columns), None)
     if not current.empty and date_column:
         current_end = str(pd.to_datetime(current[date_column].iloc[-1], errors="coerce"))[:19]
-
     news_rows, news_warning = _cached_security_news(ticker, symbol, 16)
     news_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "뉴스")
     disclosure_count = sum(1 for row in news_rows if str(row.get("구분") or "") == "공시")
     supply_health = load_supply_demand_health(normalized_ticker, market=market)
-
     risk_score = None
     environment_score = None
     if validation is not None:
         row = dict(validation)
         risk_score = float(row.get("risk_score") or 0)
         environment_score = float(row.get("final_score") or row.get("score") or 0)
-
     target = _payload_number(payload, "target_price", "take_profit", "expected_price")
     stop = _payload_number(payload, "stop_loss", "stop_price")
     confidence = _payload_number(payload, "confidence", "confidence_score")
     summary = _payload_text(payload, "ai_summary", "summary", "reason", "recommendation_reason")
-
     st.markdown(f"## {symbol}")
     st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end} · 가격소스 {current_source}")
     if current_warning:
         st.caption(f"가격 보조 조회: {current_warning}")
-
     kpis = st.columns(6)
     kpis[0].metric("추천점수", f"{weekly:.1f}")
     kpis[1].metric("STO 유사도", f"{sto:.1f}%")
@@ -483,7 +433,6 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     kpis[3].metric("과거 유사사례", f"{replay_count}건")
     kpis[4].metric("환경점수", f"{environment_score:.1f}" if environment_score is not None else "미측정")
     kpis[5].metric("위험점수", f"{risk_score:.1f}" if risk_score is not None else "미측정")
-
     health_rows = build_data_health_rows(
         current=current,
         current_source=current_source,
@@ -501,7 +450,6 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         supply_health=supply_health,
     )
     render_data_health_panel(health_rows)
-
     render_recommendation_detail_enhancements(
         db_path=str(profile.db_path),
         payload=payload,
@@ -512,71 +460,47 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         current_label=symbol,
         include_heavy=bool(st.session_state.ade_show_heavy_charts),
     )
-
     if not st.session_state.ade_show_heavy_charts:
         st.info("상세 차트는 필요할 때 불러오도록 변경했습니다. 아래 버튼을 누르면 차트가 생성됩니다.")
         if st.button("상세 차트 불러오기", key=f"load_detail_charts_{market}_{ticker}", type="primary", use_container_width=True):
             st.session_state.ade_show_heavy_charts = True
             st.rerun()
         return
-
     st.markdown("### 1. 가격·거래량과 종합 판단")
     if current.empty:
         st.warning("현재 가격·거래량 원본을 찾지 못했습니다. 아래 진단정보로 누락 위치를 확인하세요.")
-        st.dataframe(
-            pd.DataFrame([
-                {"진단": "현재 가격 행", "값": 0},
-                {"진단": "가격 조회 소스", "값": current_source},
-                {"진단": "가격 보조 조회", "값": current_warning or "오류 정보 없음"},
-                {"진단": "Replay 저장 건수", "값": replay_count},
-                {"진단": "선택 과거 패턴", "값": "있음" if pattern is not None else "없음"},
-                {"진단": "과거 패턴 봉", "값": len(historical)},
-                {"진단": "전체 surge_patterns", "값": table_counts["surge_patterns"]},
-                {"진단": "전체 surge_pattern_bars", "값": table_counts["surge_pattern_bars"]},
-            ]),
-            hide_index=True,
-            use_container_width=True,
-        )
+        st.dataframe(pd.DataFrame([
+            {"진단": "현재 가격 행", "값": 0},
+            {"진단": "가격 조회 소스", "값": current_source},
+            {"진단": "가격 보조 조회", "값": current_warning or "오류 정보 없음"},
+            {"진단": "Replay 저장 건수", "값": replay_count},
+            {"진단": "선택 과거 패턴", "값": "있음" if pattern is not None else "없음"},
+            {"진단": "과거 패턴 봉", "값": len(historical)},
+            {"진단": "전체 surge_patterns", "값": table_counts["surge_patterns"]},
+            {"진단": "전체 surge_pattern_bars", "값": table_counts["surge_pattern_bars"]},
+        ]), hide_index=True, use_container_width=True)
     else:
         main_left, main_right = st.columns([1.55, 1], gap="large")
         with main_left:
-            st.plotly_chart(
-                build_trading_chart(current, symbol),
-                key=f"recommendation_main_chart_{market}_{ticker}",
-                use_container_width=True,
-                config=CHART_CONFIG,
-            )
+            st.plotly_chart(build_trading_chart(current, symbol), key=f"recommendation_main_chart_{market}_{ticker}", use_container_width=True, config=CHART_CONFIG)
         with main_right:
             st.markdown("#### AI 종합판단")
             if summary:
                 st.write(summary)
             else:
                 st.info("AI 요약 데이터가 아직 저장되지 않았습니다. 저장된 추천·패턴·뉴스 데이터를 기준으로 확인 중입니다.")
-            st.dataframe(
-                pd.DataFrame([
-                    {"항목": "목표가", "값": f"{target:,.0f}" if target is not None else "미산출"},
-                    {"항목": "손절가", "값": f"{stop:,.0f}" if stop is not None else "미산출"},
-                    {"항목": "신뢰도", "값": f"{confidence:.1f}" if confidence is not None else "미산출"},
-                    {"항목": "뉴스", "값": f"{news_count}건"},
-                    {"항목": "공시", "값": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
-                ]),
-                hide_index=True,
-                use_container_width=True,
-            )
-
+            st.dataframe(pd.DataFrame([
+                {"항목": "목표가", "값": f"{target:,.0f}" if target is not None else "미산출"},
+                {"항목": "손절가", "값": f"{stop:,.0f}" if stop is not None else "미산출"},
+                {"항목": "신뢰도", "값": f"{confidence:.1f}" if confidence is not None else "미산출"},
+                {"항목": "뉴스", "값": f"{news_count}건"},
+                {"항목": "공시", "값": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
+            ]), hide_index=True, use_container_width=True)
     st.markdown("### 2. STO 구조와 Replay 패턴 비교")
     if pattern is not None and not historical.empty and not current.empty:
         historical_label = str(pattern["name"] or pattern["ticker"])
         pattern_identity = str(pattern["pattern_id"] if "pattern_id" in pattern.keys() else historical_label)
-        render_professional_sto_panel(
-            current=current,
-            historical=historical,
-            pattern=pattern,
-            current_label=symbol,
-            historical_label=historical_label,
-            stored_similarity=sto,
-            chart_key_prefix=f"recommendation_sto_{market}_{ticker}_{pattern_identity}",
-        )
+        render_professional_sto_panel(current=current, historical=historical, pattern=pattern, current_label=symbol, historical_label=historical_label, stored_similarity=sto, chart_key_prefix=f"recommendation_sto_{market}_{ticker}_{pattern_identity}")
     else:
         reasons = []
         if current.empty:
@@ -586,46 +510,19 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         if historical.empty:
             reasons.append("과거 패턴 봉 0행")
         st.info("STO/Replay 차트 대기 · " + " · ".join(reasons))
-        if isinstance(replay_matches, list) and replay_matches:
-            preview_rows = []
-            for index, match in enumerate(replay_matches[:10], start=1):
-                if not isinstance(match, dict):
-                    continue
-                preview_rows.append({
-                    "순위": index,
-                    "종목": match.get("name") or match.get("ticker") or "-",
-                    "사례ID": match.get("event_id") or match.get("pattern_id") or "-",
-                    "유사도": match.get("similarity") or match.get("score") or "-",
-                    "기준일": match.get("date") or match.get("event_date") or "-",
-                    "이후수익률": match.get("return") or match.get("forward_return") or "-",
-                })
-            if preview_rows:
-                st.dataframe(pd.DataFrame(preview_rows), hide_index=True, use_container_width=True)
-
     st.markdown("### 3. 원본 패턴 검증")
     if not current.empty and pattern is not None and not historical.empty:
         compare_left, compare_right = st.columns([1, 1], gap="large")
         with compare_left:
             st.markdown("#### 현재 종목 원본 차트")
-            st.plotly_chart(
-                build_trading_chart(current, symbol),
-                key=f"recommendation_raw_chart_{market}_{ticker}",
-                use_container_width=True,
-                config=CHART_CONFIG,
-            )
+            st.plotly_chart(build_trading_chart(current, symbol), key=f"recommendation_raw_chart_{market}_{ticker}", use_container_width=True, config=CHART_CONFIG)
         with compare_right:
             historical_label = str(pattern["name"] or pattern["ticker"])
-            st.markdown(f"#### 과거 유사사례 · {historical_label}")
             pattern_identity = str(pattern["pattern_id"] if "pattern_id" in pattern.keys() else historical_label)
-            st.plotly_chart(
-                build_pattern_compare_chart(current, historical, symbol, historical_label),
-                key=f"recommendation_pattern_compare_{market}_{ticker}_{pattern_identity}",
-                use_container_width=True,
-                config=CHART_CONFIG,
-            )
+            st.markdown(f"#### 과거 유사사례 · {historical_label}")
+            st.plotly_chart(build_pattern_compare_chart(current, historical, symbol, historical_label), key=f"recommendation_pattern_compare_{market}_{ticker}_{pattern_identity}", use_container_width=True, config=CHART_CONFIG)
     else:
         st.caption("원본 비교 차트는 현재 가격과 과거 패턴 봉이 모두 준비되면 자동 표시됩니다.")
-
     st.markdown("### 4. 근거·리스크·시장 환경")
     left, right = st.columns([1.15, 1], gap="large")
     with left:
@@ -640,18 +537,6 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         if risk_score is not None:
             evidence_rows.append({"항목": "위험도", "값": f"{risk_score:.1f}", "상태": "낮을수록 유리"})
         st.dataframe(pd.DataFrame(evidence_rows), hide_index=True, use_container_width=True)
-
-        st.markdown("#### 데이터 가용성")
-        availability = [
-            {"데이터": "현재 가격·거래량", "상태": f"{len(current)}행 · {current_source}" if not current.empty else "없음"},
-            {"데이터": "과거 패턴", "상태": f"{len(historical)}행" if not historical.empty and pattern is not None else "없음"},
-            {"데이터": "환경 조언", "상태": "있음" if validation is not None else "없음"},
-            {"데이터": "뉴스", "상태": f"{news_count}건" if news_count else "없음"},
-            {"데이터": "공시", "상태": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
-            {"데이터": "외국인·기관 수급", "상태": str((supply_health.get("investor") or {}).get("detail") or "없음")},
-        ]
-        st.dataframe(pd.DataFrame(availability), hide_index=True, use_container_width=True)
-
     with right:
         st.markdown("#### 반대 근거·주의사항")
         cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
@@ -662,15 +547,6 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
                 st.warning(str(item))
         else:
             st.caption("저장된 반대 근거 데이터가 없습니다. 데이터가 없음을 긍정 신호로 해석하면 안 됩니다.")
-
-        st.markdown("#### 시장·업종 환경 조언")
-        if validation is not None:
-            st.success("시장·업종 환경 조언이 자동 계산되어 있습니다.")
-        elif validation_error:
-            st.error(validation_error)
-        else:
-            st.caption("시장·업종 환경 조언 자동 계산 결과를 기다리고 있습니다.")
-
     st.markdown("### 5. 최신 뉴스·공시")
     if news_rows:
         st.dataframe(news_rows, hide_index=True, use_container_width=True)
@@ -751,38 +627,20 @@ def _search_order_symbols(market: str, query: str, limit: int = 20) -> list[dict
         name_match = lowered in name_text.casefold()
         if ticker_match or partial_code_match or name_match:
             rows.append({"ticker": ticker_text, "symbol": name_text})
-    rows.sort(
-        key=lambda item: (
-            0 if item["ticker"] == normalized_code else 1,
-            0 if item["symbol"].casefold() == lowered else 1,
-            0 if item["symbol"].casefold().startswith(lowered) else 1,
-            item["symbol"].casefold(),
-            item["ticker"],
-        )
-    )
+    rows.sort(key=lambda item: (0 if item["ticker"] == normalized_code else 1, 0 if item["symbol"].casefold() == lowered else 1, 0 if item["symbol"].casefold().startswith(lowered) else 1, item["symbol"].casefold(), item["ticker"]))
     return rows[:limit]
 
 
 def _render_candidate_controls(market: str) -> None:
-    query = st.text_input(
-        "종목 검색",
-        placeholder="종목명 또는 종목코드 입력",
-        key=f"order_symbol_query_{market}",
-    )
+    query = st.text_input("종목 검색", placeholder="종목명 또는 종목코드 입력", key=f"order_symbol_query_{market}")
     matches = _search_order_symbols(market, query) if query else []
     selected_match: dict[str, str] | None = None
     if matches:
         labels = {row["ticker"]: f"{row['symbol']} · {row['ticker']}" for row in matches}
-        selected_ticker = st.selectbox(
-            "검색 결과",
-            options=[row["ticker"] for row in matches],
-            format_func=lambda value: labels[value],
-            key=f"order_symbol_result_{market}",
-        )
+        selected_ticker = st.selectbox("검색 결과", options=[row["ticker"] for row in matches], format_func=lambda value: labels[value], key=f"order_symbol_result_{market}")
         selected_match = next((row for row in matches if row["ticker"] == selected_ticker), None)
     elif query:
         st.caption("일치하는 종목을 찾지 못했습니다.")
-
     if selected_match and st.button("주문후보에 추가", type="primary", key=f"add_order_candidate_{market}"):
         try:
             _add_order_candidate(market, selected_match["ticker"], selected_match["symbol"])
@@ -840,10 +698,7 @@ def _render_candidate_controls(market: str) -> None:
 
 
 def _action_is_recent(signature: tuple[Any, ...]) -> bool:
-    return (
-        st.session_state.ade_last_order_action_signature == signature
-        and time.time() - float(st.session_state.ade_last_order_action_at or 0) < ORDER_ACTION_DUPLICATE_WINDOW_SECONDS
-    )
+    return st.session_state.ade_last_order_action_signature == signature and time.time() - float(st.session_state.ade_last_order_action_at or 0) < ORDER_ACTION_DUPLICATE_WINDOW_SECONDS
 
 
 def _render_pending_orders() -> None:

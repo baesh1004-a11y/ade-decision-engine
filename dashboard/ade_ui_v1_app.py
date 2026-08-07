@@ -434,13 +434,67 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end} · 가격소스 {current_source}")
     if current_warning:
         st.caption(f"가격 보조 조회: {current_warning}")
-    kpis = st.columns(6)
+
+    # Decision data first: the detailed evidence workspace is the primary screen.
+    kpis = st.columns(4)
     kpis[0].metric("추천점수", f"{weekly:.1f}")
     kpis[1].metric("STO 유사도", f"{sto:.1f}%")
-    kpis[2].metric("필터", "PASS")
-    kpis[3].metric("과거 유사사례", f"{replay_count}건")
-    kpis[4].metric("환경점수", f"{environment_score:.1f}" if environment_score is not None else "미측정")
-    kpis[5].metric("위험점수", f"{risk_score:.1f}" if risk_score is not None else "미측정")
+    kpis[2].metric("과거 유사사례", f"{replay_count}건")
+    prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
+    prediction_grade = str(prediction.get("grade") or "-")
+    kpis[3].metric("Prediction", prediction_grade)
+
+    render_recommendation_detail_enhancements(
+        db_path=str(profile.db_path),
+        payload=payload,
+        selected=selected,
+        market=market,
+        ticker=normalized_ticker,
+        current=current,
+        current_label=symbol,
+        include_heavy=bool(st.session_state.ade_show_heavy_charts),
+    )
+
+    if not st.session_state.ade_show_heavy_charts:
+        st.info("선택 사례의 사후 경로와 추가 차트는 필요할 때 불러오도록 했습니다.")
+        if st.button("추가 검증 차트 불러오기", key=f"load_detail_charts_{market}_{ticker}", type="primary", use_container_width=True):
+            st.session_state.ade_show_heavy_charts = True
+            st.rerun()
+
+    st.markdown("### 환경·리스크")
+    risk_left, risk_right = st.columns([1, 1], gap="large")
+    with risk_left:
+        st.markdown("#### 시장·업종 환경")
+        if validation is not None:
+            st.dataframe(pd.DataFrame([
+                {"항목": "환경점수", "값": f"{environment_score:.1f}" if environment_score is not None else "미측정"},
+                {"항목": "위험점수", "값": f"{risk_score:.1f}" if risk_score is not None else "미측정"},
+                {"항목": "수급", "값": str((supply_health.get("investor") or {}).get("detail") or "확인 필요")},
+            ]), hide_index=True, use_container_width=True)
+        elif validation_error:
+            st.warning(validation_error)
+        else:
+            st.caption("시장·업종 환경 검증 결과를 기다리고 있습니다.")
+    with risk_right:
+        st.markdown("#### 반대 근거·주의사항")
+        cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
+        if isinstance(cautions, str):
+            cautions = [cautions]
+        if cautions:
+            for item in cautions[:8]:
+                st.warning(str(item))
+        else:
+            st.caption("저장된 반대 근거 데이터가 없습니다. 데이터 부재를 긍정 신호로 해석하지 않습니다.")
+
+    st.markdown("### 최신 뉴스·공시")
+    if news_rows:
+        st.dataframe(news_rows, hide_index=True, use_container_width=True)
+    else:
+        st.info("표시할 최신 뉴스·공시가 없습니다.")
+    if news_warning:
+        st.caption(news_warning)
+
+    # Engineering diagnostics belong at the bottom and remain collapsed by default.
     health_rows = build_data_health_rows(
         current=current,
         current_source=current_source,
@@ -457,111 +511,9 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         market=market,
         supply_health=supply_health,
     )
-    render_data_health_panel(health_rows)
-    render_recommendation_detail_enhancements(
-        db_path=str(profile.db_path),
-        payload=payload,
-        selected=selected,
-        market=market,
-        ticker=normalized_ticker,
-        current=current,
-        current_label=symbol,
-        include_heavy=bool(st.session_state.ade_show_heavy_charts),
-    )
-    if not st.session_state.ade_show_heavy_charts:
-        st.info("상세 차트는 필요할 때 불러오도록 변경했습니다. 아래 버튼을 누르면 차트가 생성됩니다.")
-        if st.button("상세 차트 불러오기", key=f"load_detail_charts_{market}_{ticker}", type="primary", use_container_width=True):
-            st.session_state.ade_show_heavy_charts = True
-            st.rerun()
-        return
-    st.markdown("### 1. 가격·거래량과 종합 판단")
-    if current.empty:
-        st.warning("현재 가격·거래량 원본을 찾지 못했습니다. 아래 진단정보로 누락 위치를 확인하세요.")
-        st.dataframe(pd.DataFrame([
-            {"진단": "현재 가격 행", "값": 0},
-            {"진단": "가격 조회 소스", "값": current_source},
-            {"진단": "가격 보조 조회", "값": current_warning or "오류 정보 없음"},
-            {"진단": "Replay 저장 건수", "값": replay_count},
-            {"진단": "선택 과거 패턴", "값": "있음" if pattern is not None else "없음"},
-            {"진단": "과거 패턴 봉", "값": len(historical)},
-            {"진단": "전체 surge_patterns", "값": table_counts["surge_patterns"]},
-            {"진단": "전체 surge_pattern_bars", "값": table_counts["surge_pattern_bars"]},
-        ]), hide_index=True, use_container_width=True)
-    else:
-        main_left, main_right = st.columns([1.55, 1], gap="large")
-        with main_left:
-            st.plotly_chart(build_trading_chart(current, symbol), key=f"recommendation_main_chart_{market}_{ticker}", use_container_width=True, config=CHART_CONFIG)
-        with main_right:
-            st.markdown("#### AI 종합판단")
-            if summary:
-                st.write(summary)
-            else:
-                st.info("AI 요약 데이터가 아직 저장되지 않았습니다. 저장된 추천·패턴·뉴스 데이터를 기준으로 확인 중입니다.")
-            st.dataframe(pd.DataFrame([
-                {"항목": "목표가", "값": f"{target:,.0f}" if target is not None else "미산출"},
-                {"항목": "손절가", "값": f"{stop:,.0f}" if stop is not None else "미산출"},
-                {"항목": "신뢰도", "값": f"{confidence:.1f}" if confidence is not None else "미산출"},
-                {"항목": "뉴스", "값": f"{news_count}건"},
-                {"항목": "공시", "값": f"{disclosure_count}건" if disclosure_count else "없음/미설정"},
-            ]), hide_index=True, use_container_width=True)
-    st.markdown("### 2. STO 구조와 Replay 패턴 비교")
-    if pattern is not None and not historical.empty and not current.empty:
-        historical_label = str(pattern["name"] or pattern["ticker"])
-        pattern_identity = str(pattern["pattern_id"] if "pattern_id" in pattern.keys() else historical_label)
-        render_professional_sto_panel(current=current, historical=historical, pattern=pattern, current_label=symbol, historical_label=historical_label, stored_similarity=sto, chart_key_prefix=f"recommendation_sto_{market}_{ticker}_{pattern_identity}")
-    else:
-        reasons = []
-        if current.empty:
-            reasons.append("현재 가격 0행")
-        if pattern is None:
-            reasons.append("선택 과거 패턴 없음")
-        if historical.empty:
-            reasons.append("과거 패턴 봉 0행")
-        st.info("STO/Replay 차트 대기 · " + " · ".join(reasons))
-    st.markdown("### 3. 원본 패턴 검증")
-    if not current.empty and pattern is not None and not historical.empty:
-        compare_left, compare_right = st.columns([1, 1], gap="large")
-        with compare_left:
-            st.markdown("#### 현재 종목 원본 차트")
-            st.plotly_chart(build_trading_chart(current, symbol), key=f"recommendation_raw_chart_{market}_{ticker}", use_container_width=True, config=CHART_CONFIG)
-        with compare_right:
-            historical_label = str(pattern["name"] or pattern["ticker"])
-            pattern_identity = str(pattern["pattern_id"] if "pattern_id" in pattern.keys() else historical_label)
-            st.markdown(f"#### 과거 유사사례 · {historical_label}")
-            st.plotly_chart(build_pattern_compare_chart(current, historical, symbol, historical_label), key=f"recommendation_pattern_compare_{market}_{ticker}_{pattern_identity}", use_container_width=True, config=CHART_CONFIG)
-    else:
-        st.caption("원본 비교 차트는 현재 가격과 과거 패턴 봉이 모두 준비되면 자동 표시됩니다.")
-    st.markdown("### 4. 근거·리스크·시장 환경")
-    left, right = st.columns([1.15, 1], gap="large")
-    with left:
-        st.markdown("#### 추천 근거")
-        evidence_rows = [
-            {"항목": "주봉 패턴", "값": f"{weekly:.1f}%", "상태": "핵심 순위 근거"},
-            {"항목": "STO 필터", "값": f"{sto:.1f}%", "상태": "PASS"},
-            {"항목": "과거 유사사례", "값": f"{replay_count}건", "상태": "확인 가능" if replay_count else "없음"},
-        ]
-        if environment_score is not None:
-            evidence_rows.append({"항목": "시장·업종 환경", "값": f"{environment_score:.1f}", "상태": "측정됨"})
-        if risk_score is not None:
-            evidence_rows.append({"항목": "위험도", "값": f"{risk_score:.1f}", "상태": "낮을수록 유리"})
-        st.dataframe(pd.DataFrame(evidence_rows), hide_index=True, use_container_width=True)
-    with right:
-        st.markdown("#### 반대 근거·주의사항")
-        cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
-        if isinstance(cautions, str):
-            cautions = [cautions]
-        if cautions:
-            for item in cautions[:8]:
-                st.warning(str(item))
-        else:
-            st.caption("저장된 반대 근거 데이터가 없습니다. 데이터가 없음을 긍정 신호로 해석하면 안 됩니다.")
-    st.markdown("### 5. 최신 뉴스·공시")
-    if news_rows:
-        st.dataframe(news_rows, hide_index=True, use_container_width=True)
-    else:
-        st.info("표시할 최신 뉴스·공시가 없습니다.")
-    if news_warning:
-        st.caption(news_warning)
+    with st.expander("데이터 연결 상태 · 개발 진단", expanded=False):
+        render_data_health_panel(health_rows)
+        st.caption(f"전체 surge_patterns {table_counts['surge_patterns']:,}건 · surge_pattern_bars {table_counts['surge_pattern_bars']:,}건")
 
 
 def _render_orders() -> None:

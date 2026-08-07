@@ -29,7 +29,7 @@ def _dedupe_replay_matches(replay_matches: list[dict[str, Any]]) -> list[dict[st
         ids = _match_ids(match)
         identity = ids[0] if ids else ""
         ticker = str(match.get("ticker") or match.get("name") or "").strip()
-        event_date = str(match.get("event_date") or "").strip()
+        event_date = str(match.get("event_date") or match.get("surge_start_date") or "").strip()
         key = (identity, ticker, event_date)
         if key in seen:
             continue
@@ -39,10 +39,7 @@ def _dedupe_replay_matches(replay_matches: list[dict[str, Any]]) -> list[dict[st
 
 
 def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1",
-        (table,),
-    ).fetchone()
+    row = conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=? LIMIT 1", (table,)).fetchone()
     return row is not None
 
 
@@ -70,35 +67,82 @@ def _match_ids(match: dict[str, Any]) -> list[str]:
     return [str(value).strip() for value in values if str(value or "").strip()]
 
 
+def _match_ticker(match: dict[str, Any]) -> str:
+    return str(match.get("ticker") or match.get("symbol") or match.get("code") or "").strip()
+
+
+def _match_date(match: dict[str, Any]) -> str:
+    value = match.get("event_date") or match.get("surge_start_date") or match.get("date") or match.get("start_date")
+    return str(value or "").strip()[:10]
+
+
+def _ticker_variants(ticker: str) -> list[str]:
+    values = [ticker]
+    if ticker.isdigit():
+        values.extend([ticker.zfill(6), ticker.lstrip("0") or "0", f"{ticker.zfill(6)}.KS", f"{ticker.zfill(6)}.KQ"])
+    return list(dict.fromkeys([value for value in values if value]))
+
+
 def _pattern_for_match(conn: sqlite3.Connection, match: dict[str, Any]):
     if not _table_exists(conn, "surge_patterns"):
         return None
     columns = _table_columns(conn, "surge_patterns")
+
     for event_id in _match_ids(match):
-        for column in ("source_event_id", "pattern_id"):
+        for column in ("source_event_id", "event_id", "pattern_id"):
             if column not in columns:
                 continue
             try:
                 row = conn.execute(
-                    f"SELECT * FROM surge_patterns WHERE {column}=? ORDER BY surge_start_date DESC LIMIT 1",
+                    f'SELECT * FROM surge_patterns WHERE CAST("{column}" AS TEXT)=? ORDER BY surge_start_date DESC LIMIT 1',
                     (event_id,),
                 ).fetchone()
             except sqlite3.Error:
                 row = None
             if row is not None:
                 return row
+
+    ticker = _match_ticker(match)
+    event_date = _match_date(match)
+    ticker_col = next((name for name in ("ticker", "symbol", "code") if name in columns), None)
+    date_col = next((name for name in ("surge_start_date", "event_date", "date", "start_date") if name in columns), None)
+    if ticker and ticker_col:
+        variants = _ticker_variants(ticker)
+        placeholders = ",".join("?" for _ in variants)
+        if event_date and date_col:
+            try:
+                row = conn.execute(
+                    f'SELECT * FROM surge_patterns WHERE CAST("{ticker_col}" AS TEXT) IN ({placeholders}) AND substr(CAST("{date_col}" AS TEXT),1,10)=? ORDER BY "{date_col}" DESC LIMIT 1',
+                    tuple(variants) + (event_date,),
+                ).fetchone()
+            except sqlite3.Error:
+                row = None
+            if row is not None:
+                return row
+        try:
+            row = conn.execute(
+                f'SELECT * FROM surge_patterns WHERE CAST("{ticker_col}" AS TEXT) IN ({placeholders}) ORDER BY {date_col if date_col else "rowid"} DESC LIMIT 1',
+                tuple(variants),
+            ).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None:
+            return row
     return None
 
 
 def _pattern_bars(conn: sqlite3.Connection, pattern) -> pd.DataFrame:
     if pattern is None or not _table_exists(conn, "surge_pattern_bars"):
         return pd.DataFrame()
+    pattern_columns = _table_columns(conn, "surge_pattern_bars")
     pattern_id = str(pattern["pattern_id"] if "pattern_id" in pattern.keys() else "")
-    if not pattern_id:
+    id_col = next((name for name in ("pattern_id", "source_event_id", "event_id") if name in pattern_columns), None)
+    if not pattern_id or not id_col:
         return pd.DataFrame()
+    order_col = "bar_index" if "bar_index" in pattern_columns else ("date" if "date" in pattern_columns else "rowid")
     try:
         rows = conn.execute(
-            "SELECT * FROM surge_pattern_bars WHERE pattern_id=? ORDER BY bar_index",
+            f'SELECT * FROM surge_pattern_bars WHERE CAST("{id_col}" AS TEXT)=? ORDER BY "{order_col}"',
             (pattern_id,),
         ).fetchall()
     except sqlite3.Error:
@@ -106,15 +150,58 @@ def _pattern_bars(conn: sqlite3.Connection, pattern) -> pd.DataFrame:
     return pd.DataFrame([dict(row) for row in rows])
 
 
+def _load_raw_historical_bars(conn: sqlite3.Connection, match: dict[str, Any], limit: int = 120) -> tuple[pd.DataFrame, str | None]:
+    ticker = _match_ticker(match)
+    event_date = _match_date(match)
+    if not ticker:
+        return pd.DataFrame(), None
+    existing = [str(row[0]) for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    preferred = ["ohlcv", "daily_prices", "price_daily", "prices", "price_bars", "stock_prices", "market_prices"]
+    for table in preferred + [name for name in existing if name not in preferred]:
+        if table not in existing:
+            continue
+        columns = _table_columns(conn, table)
+        ticker_col = next((name for name in ("ticker", "symbol", "code") if name in columns), None)
+        date_col = next((name for name in ("date", "trade_date", "datetime", "timestamp") if name in columns), None)
+        required = {next((name for name in ("open", "Open") if name in columns), ""), next((name for name in ("high", "High") if name in columns), ""), next((name for name in ("low", "Low") if name in columns), ""), next((name for name in ("close", "Close") if name in columns), "")}
+        if not ticker_col or not date_col or "" in required:
+            continue
+        variants = _ticker_variants(ticker)
+        placeholders = ",".join("?" for _ in variants)
+        date_clause = f' AND substr(CAST("{date_col}" AS TEXT),1,10)<=?' if event_date else ""
+        params: tuple[Any, ...] = tuple(variants) + ((event_date,) if event_date else tuple())
+        try:
+            rows = conn.execute(
+                f'SELECT * FROM "{table}" WHERE CAST("{ticker_col}" AS TEXT) IN ({placeholders}){date_clause} ORDER BY "{date_col}" DESC LIMIT {int(limit)}',
+                params,
+            ).fetchall()
+        except sqlite3.Error:
+            continue
+        if rows:
+            frame = pd.DataFrame([dict(row) for row in rows]).sort_values(date_col)
+            return frame, f"DB:{table}"
+    return pd.DataFrame(), None
+
+
+def _historical_for_match(conn: sqlite3.Connection, match: dict[str, Any]) -> tuple[pd.DataFrame, Any, str]:
+    pattern = _pattern_for_match(conn, match)
+    bars = _pattern_bars(conn, pattern)
+    if not bars.empty:
+        return bars, pattern, "저장 패턴 봉"
+    raw, source = _load_raw_historical_bars(conn, match)
+    if not raw.empty:
+        return raw, pattern, f"원본 가격 복원 · {source}"
+    if pattern is None:
+        return pd.DataFrame(), None, "Replay ID/종목·날짜 매칭 실패"
+    return pd.DataFrame(), pattern, "패턴은 찾았지만 원천 봉 없음"
+
+
 def _load_future_rows(conn: sqlite3.Connection, match: dict[str, Any]):
     if not _table_exists(conn, "replay_event_flow"):
         return []
     for event_id in _match_ids(match):
         try:
-            rows = conn.execute(
-                "SELECT day_index, close FROM replay_event_flow WHERE event_id=? ORDER BY day_index",
-                (event_id,),
-            ).fetchall()
+            rows = conn.execute("SELECT day_index, close FROM replay_event_flow WHERE event_id=? ORDER BY day_index", (event_id,)).fetchall()
         except sqlite3.Error:
             rows = []
         if rows:
@@ -181,7 +268,7 @@ def _normalize_ohlcv(frame: pd.DataFrame, *, historical: bool = False) -> pd.Dat
         return pd.DataFrame()
     source = frame.copy()
     mapping = {
-        "Date": ["Date", "date", "datetime", "timestamp", "bar_index"],
+        "Date": ["Date", "date", "trade_date", "datetime", "timestamp", "bar_index"],
         "Open": ["Open", "open"],
         "High": ["High", "high"],
         "Low": ["Low", "low"],
@@ -210,12 +297,7 @@ def _normalize_ohlcv(frame: pd.DataFrame, *, historical: bool = False) -> pd.Dat
     return normalized.dropna(subset=["Open", "High", "Low", "Close"]).reset_index(drop=True)
 
 
-def _build_direct_compare_chart(
-    current: pd.DataFrame,
-    historical: pd.DataFrame,
-    current_label: str,
-    historical_label: str,
-) -> go.Figure:
+def _build_direct_compare_chart(current: pd.DataFrame, historical: pd.DataFrame, current_label: str, historical_label: str) -> go.Figure:
     current_df = _normalize_ohlcv(current)
     historical_df = _normalize_ohlcv(historical, historical=True)
     length = min(len(current_df), len(historical_df), 80)
@@ -238,21 +320,7 @@ def _build_direct_compare_chart(
     current_volume = volume_ratio(current_df)
     historical_volume = volume_ratio(historical_df)
 
-    fig = make_subplots(
-        rows=6,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.018,
-        row_heights=[0.27, 0.27, 0.14, 0.14, 0.09, 0.09],
-        subplot_titles=(
-            f"현재 {current_label} · 가격",
-            f"과거 {historical_label} · 가격",
-            "현재 vs 과거 · 기준 100 Overlay",
-            "거래량 · 20봉 평균 대비",
-            "STO 5·3·3",
-            "STO 10·6·6 / 20·12·12",
-        ),
-    )
+    fig = make_subplots(rows=6, cols=1, shared_xaxes=True, vertical_spacing=0.018, row_heights=[0.27, 0.27, 0.14, 0.14, 0.09, 0.09], subplot_titles=(f"현재 {current_label} · 가격", f"과거 {historical_label} · 가격", "현재 vs 과거 · 기준 100 Overlay", "거래량 · 20봉 평균 대비", "STO 5·3·3", "STO 10·6·6 / 20·12·12"))
     fig.add_trace(go.Candlestick(x=x, open=current_df["Open"], high=current_df["High"], low=current_df["Low"], close=current_df["Close"], name=f"현재 {current_label}"), row=1, col=1)
     fig.add_trace(go.Candlestick(x=x, open=historical_df["Open"], high=historical_df["High"], low=historical_df["Low"], close=historical_df["Close"], name=f"과거 {historical_label}"), row=2, col=1)
     fig.add_trace(go.Scatter(x=x, y=current_price, mode="lines", name="현재 정규화", line=dict(width=2.4)), row=3, col=1)
@@ -274,15 +342,7 @@ def _build_direct_compare_chart(
         fig.add_hline(y=20, line_dash="dot", row=row_index, col=1)
         fig.update_yaxes(range=[0, 100], row=row_index, col=1)
 
-    fig.update_layout(
-        height=1060,
-        hovermode="x unified",
-        xaxis_rangeslider_visible=False,
-        xaxis2_rangeslider_visible=False,
-        legend=dict(orientation="h", y=1.02),
-        margin=dict(l=16, r=20, t=90, b=20),
-        title="추천 근거 원천 데이터 직접 비교",
-    )
+    fig.update_layout(height=1060, hovermode="x unified", xaxis_rangeslider_visible=False, xaxis2_rangeslider_visible=False, legend=dict(orientation="h", y=1.02), margin=dict(l=16, r=20, t=90, b=20), title="추천 근거 원천 데이터 직접 비교")
     fig.update_xaxes(title_text="대응 봉 위치", row=6, col=1)
     fig.update_yaxes(title_text="가격", row=1, col=1)
     fig.update_yaxes(title_text="가격", row=2, col=1)
@@ -291,59 +351,32 @@ def _build_direct_compare_chart(
     return fig
 
 
-def _data_availability(
-    conn: sqlite3.Connection,
-    current: pd.DataFrame,
-    replay_matches: list[dict[str, Any]],
-    prediction: dict[str, Any],
-) -> list[dict[str, str]]:
+def _data_availability(conn: sqlite3.Connection, current: pd.DataFrame, replay_matches: list[dict[str, Any]], prediction: dict[str, Any]) -> list[dict[str, str]]:
     current_ohlcv = _normalize_ohlcv(current)
     pattern_count = _table_count(conn, "surge_patterns")
     pattern_bar_count = _table_count(conn, "surge_pattern_bars")
     future_count = _table_count(conn, "replay_event_flow")
     pattern_columns = _table_columns(conn, "surge_pattern_bars")
     flow_columns = _table_columns(conn, "replay_event_flow")
-
     current_state = "사용 가능" if len(current_ohlcv) >= 5 else "부족"
     replay_state = "사용 가능" if replay_matches else "없음"
-    pattern_state = "사용 가능" if pattern_count > 0 and pattern_bar_count > 0 else "없음"
+    pattern_state = "사용 가능" if pattern_count > 0 else "없음"
     future_state = "사용 가능" if future_count > 0 and {"day_index", "close"}.issubset(flow_columns) else "없음"
     prediction_state = "사용 가능" if prediction else "없음"
-    volume_state = "사용 가능" if "volume" in pattern_columns or "Volume" in pattern_columns else "없음"
-
-    investor_tables = [
-        "investor_trading",
-        "investor_flow",
-        "investor_flows",
-        "market_investor_flow",
-        "stock_investor_flow",
-    ]
-    environment_tables = [
-        "market_environment",
-        "market_snapshot",
-        "environment_snapshots",
-        "macro_snapshot",
-        "sector_snapshot",
-        "events",
-        "market_events",
-    ]
-    investor_found = [table for table in investor_tables if _table_count(conn, table) > 0]
-    environment_found = [table for table in environment_tables if _table_count(conn, table) > 0]
-
+    volume_state = "사용 가능" if "volume" in pattern_columns or "Volume" in pattern_columns else "원본 가격 fallback 가능"
     return [
         {"데이터": "현재 종목 OHLCV", "상태": current_state, "확인 내용": f"현재 화면 전달 봉 {len(current_ohlcv)}개"},
         {"데이터": "Replay 매칭 결과", "상태": replay_state, "확인 내용": f"중복 제거 후 {len(replay_matches)}건"},
-        {"데이터": "과거 패턴 원천 봉", "상태": pattern_state, "확인 내용": f"surge_patterns {pattern_count:,}건 / surge_pattern_bars {pattern_bar_count:,}건"},
-        {"데이터": "과거 거래량", "상태": volume_state, "확인 내용": "surge_pattern_bars의 volume 열 확인"},
+        {"데이터": "과거 패턴 메타", "상태": pattern_state, "확인 내용": f"surge_patterns {pattern_count:,}건"},
+        {"데이터": "과거 패턴 봉", "상태": "사용 가능" if pattern_bar_count > 0 else "fallback", "확인 내용": f"surge_pattern_bars {pattern_bar_count:,}건 · 없으면 원본 가격 DB에서 복원"},
+        {"데이터": "과거 거래량", "상태": volume_state, "확인 내용": "저장 패턴 봉 또는 원본 가격 DB"},
         {"데이터": "매칭 이후 경로", "상태": future_state, "확인 내용": f"replay_event_flow {future_count:,}건"},
         {"데이터": "Prediction", "상태": prediction_state, "확인 내용": "payload prediction 존재 여부"},
-        {"데이터": "투자자별 수급", "상태": "사용 가능" if investor_found else "미확인/없음", "확인 내용": ", ".join(investor_found) if investor_found else "후보 테이블을 찾지 못함"},
-        {"데이터": "시장·업종·이벤트 환경", "상태": "사용 가능" if environment_found else "미확인/없음", "확인 내용": ", ".join(environment_found) if environment_found else "후보 테이블을 찾지 못함"},
     ]
 
 
 def _render_data_availability(rows: list[dict[str, str]]) -> None:
-    missing = [row for row in rows if row["상태"] != "사용 가능"]
+    missing = [row for row in rows if row["상태"] in {"없음", "부족"}]
     if missing:
         st.warning("검증 신뢰도를 낮추는 미연결 데이터가 있습니다: " + ", ".join(row["데이터"] for row in missing))
     with st.expander("데이터 연결 진단", expanded=False):
@@ -357,7 +390,7 @@ def _render_validation_map(replay_matches: list[dict[str, Any]], prediction: dic
         {"계산 결과": "주봉 패턴", "값": _mean_pct(pd.Series(weekly_values)), "직접 확인": "현재·과거 가격 흐름 / Overlay / 거래량"},
         {"계산 결과": "STO", "값": _mean_pct(pd.Series(sto_values)), "직접 확인": "5·3·3 / 10·6·6 / 20·12·12 전환 시점"},
         {"계산 결과": "Replay", "값": f"{len(replay_matches)}건", "직접 확인": "성공·중립·실패 사례와 사후 경로"},
-        {"계산 결과": "Prediction", "값": str(prediction.get("grade") or "-") if prediction else "-", "직접 확인": "기간별 기대수익과 경로 분산"},
+        {"계산 결과": "Prediction", "값": str(prediction.get("grade") or "미생성") if prediction else "미생성", "직접 확인": "기간별 기대수익과 경로 분산"},
     ]
     with st.expander("알고리즘 계산값 ↔ 원천 데이터 대응표", expanded=False):
         st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -366,19 +399,8 @@ def _render_validation_map(replay_matches: list[dict[str, Any]], prediction: dic
 def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
     if not replay_matches:
         return
-    frame = pd.DataFrame(
-        [
-            {
-                "weekly": _number(match.get("weekly_similarity")),
-                "sto": _number(match.get("sto_similarity")),
-                "max_return": _number(match.get("max_return")),
-                "max_drawdown": _number(match.get("max_drawdown")),
-            }
-            for match in replay_matches[:10]
-        ]
-    )
+    frame = pd.DataFrame([{ "weekly": _number(match.get("weekly_similarity")), "sto": _number(match.get("sto_similarity")), "max_return": _number(match.get("max_return")), "max_drawdown": _number(match.get("max_drawdown")) } for match in replay_matches[:10]])
     drawdowns = pd.to_numeric(frame["max_drawdown"], errors="coerce").dropna()
-    returns = pd.to_numeric(frame["max_return"], errors="coerce").dropna()
     metrics = st.columns(5)
     metrics[0].metric("유효 사례", f"{len(frame)}건")
     metrics[1].metric("평균 주봉", _mean_pct(frame["weekly"]))
@@ -388,19 +410,7 @@ def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
 
 
 def _render_outcome_groups(replay_matches: list[dict[str, Any]]) -> None:
-    rows = []
-    for match in replay_matches[:10]:
-        rows.append(
-            {
-                "결과": _classify_case(match),
-                "종목": match.get("name") or match.get("ticker") or "-",
-                "기준일": match.get("event_date") or "-",
-                "주봉유사도(%)": _number(match.get("weekly_similarity")),
-                "STO유사도(%)": _number(match.get("sto_similarity")),
-                "최고수익(%)": _number(match.get("max_return")),
-                "최대하락(%)": _number(match.get("max_drawdown")),
-            }
-        )
+    rows = [{"결과": _classify_case(match), "종목": match.get("name") or match.get("ticker") or "-", "기준일": match.get("event_date") or "-", "주봉유사도(%)": _number(match.get("weekly_similarity")), "STO유사도(%)": _number(match.get("sto_similarity")), "최고수익(%)": _number(match.get("max_return")), "최대하락(%)": _number(match.get("max_drawdown"))} for match in replay_matches[:10]]
     frame = pd.DataFrame(rows)
     if frame.empty:
         return
@@ -420,15 +430,7 @@ def _render_prediction(prediction: dict[str, Any]) -> None:
     rows = []
     for item in horizons:
         if isinstance(item, dict):
-            rows.append(
-                {
-                    "기간": f"{int(item.get('days') or 0)}일",
-                    "표본": int(item.get("sample_count") or 0),
-                    "상승확률(%)": _number(item.get("up_probability")),
-                    "기대수익(%)": _number(item.get("expected_return")),
-                    "중앙값수익(%)": _number(item.get("median_return")),
-                }
-            )
+            rows.append({"기간": f"{int(item.get('days') or 0)}일", "표본": int(item.get("sample_count") or 0), "상승확률(%)": _number(item.get("up_probability")), "기대수익(%)": _number(item.get("expected_return")), "중앙값수익(%)": _number(item.get("median_return"))})
     if rows:
         with st.expander("Replay Prediction 상세", expanded=False):
             st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
@@ -438,39 +440,26 @@ def _selected_case(replay_matches: list[dict[str, Any]], key_prefix: str) -> tup
     if not replay_matches:
         return None, None
     options = list(range(min(10, len(replay_matches))))
-    selected_index = st.selectbox(
-        "비교할 과거 사례",
-        options=options,
-        format_func=lambda index: f"#{index + 1} {replay_matches[index].get('name') or replay_matches[index].get('ticker') or '-'} · {replay_matches[index].get('event_date') or '-'} · {_classify_case(replay_matches[index])}",
-        key=f"{key_prefix}_replay_case",
-    )
+    selected_index = st.selectbox("비교할 과거 사례", options=options, format_func=lambda index: f"#{index + 1} {replay_matches[index].get('name') or replay_matches[index].get('ticker') or '-'} · {replay_matches[index].get('event_date') or '-'} · {_classify_case(replay_matches[index])}", key=f"{key_prefix}_replay_case")
     return int(selected_index), replay_matches[int(selected_index)]
 
 
-def _render_selected_workspace(
-    conn: sqlite3.Connection,
-    current: pd.DataFrame,
-    current_label: str,
-    selected_index: int,
-    match: dict[str, Any],
-    key_prefix: str,
-    prediction: dict[str, Any],
-) -> None:
-    pattern = _pattern_for_match(conn, match)
-    historical = _pattern_bars(conn, pattern)
-    historical_label = str(pattern["name"] or pattern["ticker"]) if pattern is not None else "과거 사례"
+def _render_selected_workspace(conn: sqlite3.Connection, current: pd.DataFrame, current_label: str, selected_index: int, match: dict[str, Any], key_prefix: str, prediction: dict[str, Any]) -> None:
+    historical, pattern, recovery = _historical_for_match(conn, match)
+    historical_label = str((pattern["name"] if pattern is not None and "name" in pattern.keys() else None) or (pattern["ticker"] if pattern is not None and "ticker" in pattern.keys() else None) or match.get("name") or match.get("ticker") or "과거 사례")
 
     left, right = st.columns([7.2, 2.8], gap="large")
     with left:
         st.markdown("### 원천 데이터 직접 비교")
         st.caption("현재와 과거를 같은 봉 위치로 맞춰 가격·거래량·STO를 한 화면에서 확인합니다.")
-        if current.empty or pattern is None or historical.empty:
-            st.warning("선택한 Replay 사례에 연결된 과거 원천 봉이 없어 직접 비교 차트를 표시할 수 없습니다.")
-            if pattern is None:
-                st.caption("Replay 사례 ID와 surge_patterns 연결을 확인해야 합니다.")
-            elif historical.empty:
-                st.caption("surge_pattern_bars에 해당 pattern_id의 봉 데이터가 필요합니다.")
+        if current.empty or historical.empty:
+            st.warning("선택한 Replay 사례의 과거 원천가격을 확보하지 못했습니다.")
+            st.caption(recovery)
+            ids = ", ".join(_match_ids(match)) or "없음"
+            st.caption(f"Replay 식별자: {ids} · 종목: {_match_ticker(match) or '없음'} · 기준일: {_match_date(match) or '없음'}")
         else:
+            if recovery.startswith("원본 가격 복원"):
+                st.info(f"저장 패턴 봉 대신 {recovery}으로 비교 차트를 복원했습니다.")
             chart = _build_direct_compare_chart(current, historical, current_label, historical_label)
             if chart.data:
                 st.plotly_chart(chart, use_container_width=True, config=CHART_CONFIG, key=f"{key_prefix}_verification_workspace_{selected_index}")
@@ -480,16 +469,15 @@ def _render_selected_workspace(
                 st.plotly_chart(build_pattern_compare_chart(current, historical, current_label, historical_label), use_container_width=True, config=CHART_CONFIG)
     with right:
         st.markdown("### 검증 패널")
-        summary = pd.DataFrame(
-            [
-                {"항목": "결과 분류", "값": _classify_case(match)},
-                {"항목": "주봉 유사도", "값": _format_pct(match.get("weekly_similarity"))},
-                {"항목": "STO 유사도", "값": _format_pct(match.get("sto_similarity"))},
-                {"항목": "과거 최고수익", "값": _format_pct(match.get("max_return"))},
-                {"항목": "과거 최대하락", "값": _format_pct(match.get("max_drawdown"))},
-                {"항목": "Prediction", "값": str(prediction.get("grade") or "-")},
-            ]
-        )
+        summary = pd.DataFrame([
+            {"항목": "결과 분류", "값": _classify_case(match)},
+            {"항목": "주봉 유사도", "값": _format_pct(match.get("weekly_similarity"))},
+            {"항목": "STO 유사도", "값": _format_pct(match.get("sto_similarity"))},
+            {"항목": "과거 최고수익", "값": _format_pct(match.get("max_return"))},
+            {"항목": "과거 최대하락", "값": _format_pct(match.get("max_drawdown"))},
+            {"항목": "Prediction", "값": str(prediction.get("grade") or "미생성") if prediction else "미생성"},
+            {"항목": "원천데이터", "값": recovery},
+        ])
         st.dataframe(summary, hide_index=True, use_container_width=True)
         st.markdown("#### 사람이 확인")
         st.checkbox("가격의 상승·조정 순서가 유사함", key=f"{key_prefix}_check_price_{selected_index}")
@@ -549,15 +537,12 @@ def render_replay_analysis_panel(*, db_path: str, payload: dict[str, Any], curre
             _render_validation_map(replay_matches, prediction)
             _render_prediction(prediction)
             return
-
         selected_index, match = _selected_case(replay_matches, key_prefix)
         if selected_index is not None and match is not None:
             _render_selected_workspace(conn, current, current_label, selected_index, match, key_prefix, prediction)
-
         _render_validation_map(replay_matches, prediction)
         _render_outcome_groups(replay_matches)
         _render_prediction(prediction)
-
         if include_heavy and selected_index is not None and match is not None:
             _render_selected_future_path(conn, match)
             _render_future_distribution(conn, replay_matches)

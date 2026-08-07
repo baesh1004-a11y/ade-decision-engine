@@ -30,7 +30,21 @@ def render_recommendation_detail_enhancements(
     include_heavy: bool,
 ) -> None:
     prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
-    st.markdown("### 추천 핵심정보")
+
+    # Keep the top of the recommendation detail focused on human verification.
+    # The previous implementation placed metadata tables and recommendation prose
+    # before the evidence workspace, forcing users to scroll past the most useful
+    # charts.  The verification desk now renders first.
+    render_replay_analysis_panel(
+        db_path=db_path,
+        payload=payload,
+        current=current,
+        current_label=current_label,
+        key_prefix=f"recommendation_detail_{market}_{ticker}",
+        include_heavy=include_heavy,
+    )
+
+    st.markdown("### 보조 판단정보")
     rows = []
     target_price = _number(payload.get("target_price") or payload.get("take_profit") or payload.get("expected_price"))
     stop_price = _number(payload.get("stop_loss") or payload.get("stop_price"))
@@ -60,14 +74,5 @@ def render_recommendation_detail_enhancements(
         ticker=ticker,
     )
 
-    render_replay_analysis_panel(
-        db_path=db_path,
-        payload=payload,
-        current=current,
-        current_label=current_label,
-        key_prefix=f"recommendation_detail_{market}_{ticker}",
-        include_heavy=include_heavy,
-    )
-
     if not include_heavy:
-        st.info("가격·STO·미래경로 차트는 아래 상세 차트 버튼을 누르면 추가로 표시됩니다.")
+        st.caption("가격·STO·미래경로의 상세 차트는 아래 버튼으로 추가 로드할 수 있습니다.")

@@ -73,8 +73,11 @@ def _match_ids(match: dict[str, Any]) -> list[str]:
 def _pattern_for_match(conn: sqlite3.Connection, match: dict[str, Any]):
     if not _table_exists(conn, "surge_patterns"):
         return None
+    columns = _table_columns(conn, "surge_patterns")
     for event_id in _match_ids(match):
         for column in ("source_event_id", "pattern_id"):
+            if column not in columns:
+                continue
             try:
                 row = conn.execute(
                     f"SELECT * FROM surge_patterns WHERE {column}=? ORDER BY surge_start_date DESC LIMIT 1",
@@ -242,9 +245,9 @@ def _build_direct_compare_chart(
         vertical_spacing=0.018,
         row_heights=[0.27, 0.27, 0.14, 0.14, 0.09, 0.09],
         subplot_titles=(
-            f"현재 {current_label} · 정규화 가격",
-            f"과거 {historical_label} · 정규화 가격",
-            "현재 vs 과거 Overlay",
+            f"현재 {current_label} · 가격",
+            f"과거 {historical_label} · 가격",
+            "현재 vs 과거 · 기준 100 Overlay",
             "거래량 · 20봉 평균 대비",
             "STO 5·3·3",
             "STO 10·6·6 / 20·12·12",
@@ -272,7 +275,7 @@ def _build_direct_compare_chart(
         fig.update_yaxes(range=[0, 100], row=row_index, col=1)
 
     fig.update_layout(
-        height=1180,
+        height=1060,
         hovermode="x unified",
         xaxis_rangeslider_visible=False,
         xaxis2_rangeslider_visible=False,
@@ -340,34 +343,28 @@ def _data_availability(
 
 
 def _render_data_availability(rows: list[dict[str, str]]) -> None:
-    st.markdown("### 실제 데이터 가용성")
-    st.caption("현재 추천 상세화면이 실제로 사용할 수 있는 원천 데이터를 런타임 DB 기준으로 확인합니다.")
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-    missing = [row["데이터"] for row in rows if row["상태"] not in {"사용 가능"}]
+    missing = [row for row in rows if row["상태"] != "사용 가능"]
     if missing:
-        st.warning("추가 확보 또는 연결이 필요한 데이터: " + ", ".join(missing))
-    else:
-        st.success("권고안 구현에 필요한 핵심 데이터가 모두 확인되었습니다.")
+        st.warning("검증 신뢰도를 낮추는 미연결 데이터가 있습니다: " + ", ".join(row["데이터"] for row in missing))
+    with st.expander("데이터 연결 진단", expanded=False):
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 
 def _render_validation_map(replay_matches: list[dict[str, Any]], prediction: dict[str, Any]) -> None:
-    st.markdown("### 알고리즘 판단과 원천 증거")
-    st.caption("프로그램 계산값과 실제 과거 데이터가 같은 이야기를 하는지 사람이 다시 확인하는 단계입니다.")
     weekly_values = [_number(item.get("weekly_similarity")) for item in replay_matches]
     sto_values = [_number(item.get("sto_similarity")) for item in replay_matches]
     rows = [
-        {"알고리즘 판단": "주봉 패턴 유사도", "계산 결과": _mean_pct(pd.Series(weekly_values)), "사람이 확인할 원천 증거": "현재·과거 주봉, 이동평균, 거래량, 정규화 Overlay"},
-        {"알고리즘 판단": "STO 유사도", "계산 결과": _mean_pct(pd.Series(sto_values)), "사람이 확인할 원천 증거": "5·3·3 / 10·6·6 / 20·12·12 전환 시점"},
-        {"알고리즘 판단": "Replay 표본", "계산 결과": f"{len(replay_matches)}건", "사람이 확인할 원천 증거": "성공·중립·실패 사례와 사후 경로"},
-        {"알고리즘 판단": "Prediction", "계산 결과": str(prediction.get("grade") or "-") if prediction else "-", "사람이 확인할 원천 증거": "기간별 확률·기대수익·경로 분산"},
+        {"계산 결과": "주봉 패턴", "값": _mean_pct(pd.Series(weekly_values)), "직접 확인": "현재·과거 가격 흐름 / Overlay / 거래량"},
+        {"계산 결과": "STO", "값": _mean_pct(pd.Series(sto_values)), "직접 확인": "5·3·3 / 10·6·6 / 20·12·12 전환 시점"},
+        {"계산 결과": "Replay", "값": f"{len(replay_matches)}건", "직접 확인": "성공·중립·실패 사례와 사후 경로"},
+        {"계산 결과": "Prediction", "값": str(prediction.get("grade") or "-") if prediction else "-", "직접 확인": "기간별 기대수익과 경로 분산"},
     ]
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    with st.expander("알고리즘 계산값 ↔ 원천 데이터 대응표", expanded=False):
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 
 def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
-    st.markdown("### 과거 유사사례 성과 요약")
     if not replay_matches:
-        st.info("표시할 과거 유사사례가 없습니다.")
         return
     frame = pd.DataFrame(
         [
@@ -382,17 +379,15 @@ def _render_replay_overview(replay_matches: list[dict[str, Any]]) -> None:
     )
     drawdowns = pd.to_numeric(frame["max_drawdown"], errors="coerce").dropna()
     returns = pd.to_numeric(frame["max_return"], errors="coerce").dropna()
-    metrics = st.columns(6)
+    metrics = st.columns(5)
     metrics[0].metric("유효 사례", f"{len(frame)}건")
-    metrics[1].metric("평균 주봉 유사도", _mean_pct(frame["weekly"]))
-    metrics[2].metric("평균 STO 유사도", _mean_pct(frame["sto"]))
+    metrics[1].metric("평균 주봉", _mean_pct(frame["weekly"]))
+    metrics[2].metric("평균 STO", _mean_pct(frame["sto"]))
     metrics[3].metric("평균 최고수익", _mean_pct(frame["max_return"]))
     metrics[4].metric("최대 하락", _format_pct(drawdowns.min() if not drawdowns.empty else None))
-    metrics[5].metric("상승 사례 비율", f"{returns.gt(0).mean() * 100:.1f}%" if not returns.empty else "-")
 
 
 def _render_outcome_groups(replay_matches: list[dict[str, Any]]) -> None:
-    st.markdown("### 성공·중립·실패 사례")
     rows = []
     for match in replay_matches[:10]:
         rows.append(
@@ -408,20 +403,19 @@ def _render_outcome_groups(replay_matches: list[dict[str, Any]]) -> None:
         )
     frame = pd.DataFrame(rows)
     if frame.empty:
-        st.info("결과를 분류할 과거 사례가 없습니다.")
         return
-    tabs = st.tabs(["성공", "중립", "실패"])
-    for tab, label in zip(tabs, ["성공", "중립", "실패"]):
-        with tab:
-            subset = frame[frame["결과"] == label]
-            if subset.empty:
-                st.caption(f"{label} 사례가 없습니다.")
-            else:
-                st.dataframe(subset, hide_index=True, use_container_width=True)
+    with st.expander("성공·중립·실패 전체 사례", expanded=False):
+        tabs = st.tabs(["성공", "중립", "실패"])
+        for tab, label in zip(tabs, ["성공", "중립", "실패"]):
+            with tab:
+                subset = frame[frame["결과"] == label]
+                if subset.empty:
+                    st.caption(f"{label} 사례가 없습니다.")
+                else:
+                    st.dataframe(subset, hide_index=True, use_container_width=True)
 
 
 def _render_prediction(prediction: dict[str, Any]) -> None:
-    st.markdown("### Replay Prediction")
     horizons = prediction.get("horizons") or []
     rows = []
     for item in horizons:
@@ -435,10 +429,9 @@ def _render_prediction(prediction: dict[str, Any]) -> None:
                     "중앙값수익(%)": _number(item.get("median_return")),
                 }
             )
-    if not rows:
-        st.info("Prediction 데이터가 없습니다.")
-        return
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    if rows:
+        with st.expander("Replay Prediction 상세", expanded=False):
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 
 def _selected_case(replay_matches: list[dict[str, Any]], key_prefix: str) -> tuple[int, dict[str, Any]] | tuple[None, None]:
@@ -467,21 +460,26 @@ def _render_selected_workspace(
     historical = _pattern_bars(conn, pattern)
     historical_label = str(pattern["name"] or pattern["ticker"]) if pattern is not None else "과거 사례"
 
-    left, right = st.columns([7, 3], gap="large")
+    left, right = st.columns([7.2, 2.8], gap="large")
     with left:
-        st.markdown("### 현재 종목 vs 과거 유사사례")
+        st.markdown("### 원천 데이터 직접 비교")
+        st.caption("현재와 과거를 같은 봉 위치로 맞춰 가격·거래량·STO를 한 화면에서 확인합니다.")
         if current.empty or pattern is None or historical.empty:
-            st.warning("현재 또는 과거 원천 봉이 없어 직접 비교 차트를 표시할 수 없습니다.")
+            st.warning("선택한 Replay 사례에 연결된 과거 원천 봉이 없어 직접 비교 차트를 표시할 수 없습니다.")
+            if pattern is None:
+                st.caption("Replay 사례 ID와 surge_patterns 연결을 확인해야 합니다.")
+            elif historical.empty:
+                st.caption("surge_pattern_bars에 해당 pattern_id의 봉 데이터가 필요합니다.")
         else:
             chart = _build_direct_compare_chart(current, historical, current_label, historical_label)
             if chart.data:
                 st.plotly_chart(chart, use_container_width=True, config=CHART_CONFIG, key=f"{key_prefix}_verification_workspace_{selected_index}")
             else:
-                st.warning("원천 봉 열 구조를 해석하지 못했습니다.")
+                st.warning("현재/과거 원천 봉의 OHLC 열 구조를 해석하지 못했습니다.")
             with st.expander("간단 Overlay만 보기", expanded=False):
                 st.plotly_chart(build_pattern_compare_chart(current, historical, current_label, historical_label), use_container_width=True, config=CHART_CONFIG)
     with right:
-        st.markdown("### 알고리즘 판정")
+        st.markdown("### 검증 패널")
         summary = pd.DataFrame(
             [
                 {"항목": "결과 분류", "값": _classify_case(match)},
@@ -493,33 +491,29 @@ def _render_selected_workspace(
             ]
         )
         st.dataframe(summary, hide_index=True, use_container_width=True)
-        st.markdown("### 사람이 확인할 항목")
-        st.checkbox("가격의 상승·조정 순서가 실제로 유사함", key=f"{key_prefix}_check_price_{selected_index}")
+        st.markdown("#### 사람이 확인")
+        st.checkbox("가격의 상승·조정 순서가 유사함", key=f"{key_prefix}_check_price_{selected_index}")
         st.checkbox("STO 전환 시점과 방향이 유사함", key=f"{key_prefix}_check_sto_{selected_index}")
         st.checkbox("거래량 확대 시점과 지속성이 유사함", key=f"{key_prefix}_check_volume_{selected_index}")
         st.checkbox("시장·업종·수급 환경 차이를 확인함", key=f"{key_prefix}_check_environment_{selected_index}")
-        st.info("시장·업종·수급·이벤트 데이터는 실제 연결 여부를 위 데이터 가용성 표에서 확인하세요.")
+        st.caption("계산값은 참고값입니다. 위 원천 차트와 외부환경 확인 후 주문 여부를 결정합니다.")
 
 
 def _render_selected_future_path(conn: sqlite3.Connection, match: dict[str, Any]) -> None:
-    st.markdown("### 선택 사례의 매칭 이후 20거래일")
     paths = _future_paths(conn, [match])
     if paths.empty:
-        st.caption("선택 사례의 미래 경로 원본이 없습니다.")
         return
     series = paths[paths.columns[0]].dropna()
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=series.index, y=series.values, mode="lines+markers", name="누적수익률"))
     fig.add_hline(y=0)
-    fig.update_layout(height=360, xaxis_title="매칭 이후 거래일", yaxis_title="누적수익률(%)")
+    fig.update_layout(height=320, xaxis_title="매칭 이후 거래일", yaxis_title="누적수익률(%)", title="선택 사례의 매칭 이후 20거래일")
     st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
 
 def _render_future_distribution(conn: sqlite3.Connection, replay_matches: list[dict[str, Any]]) -> None:
-    st.markdown("### 유사사례 이후 20거래일 경로 분포")
     paths = _future_paths(conn, replay_matches)
     if paths.empty:
-        st.info("미래 경로 원본이 없습니다.")
         return
     mean_path = paths.mean(axis=1, skipna=True)
     median_path = paths.median(axis=1, skipna=True)
@@ -531,7 +525,7 @@ def _render_future_distribution(conn: sqlite3.Connection, replay_matches: list[d
     fig.add_trace(go.Scatter(x=paths.index, y=mean_path, mode="lines+markers", name="평균 경로"))
     fig.add_trace(go.Scatter(x=paths.index, y=median_path, mode="lines", name="중앙값 경로", line=dict(dash="dash")))
     fig.add_hline(y=0)
-    fig.update_layout(height=460, xaxis_title="매칭 이후 거래일", yaxis_title="누적수익률(%)")
+    fig.update_layout(height=390, xaxis_title="매칭 이후 거래일", yaxis_title="누적수익률(%)", title="유사사례 이후 20거래일 경로 분포")
     st.plotly_chart(fig, use_container_width=True, config=CHART_CONFIG)
 
 
@@ -542,19 +536,28 @@ def render_replay_analysis_panel(*, db_path: str, payload: dict[str, Any], curre
     if len(raw_matches) != len(replay_matches):
         st.caption(f"중복 Replay 사례 {len(raw_matches) - len(replay_matches)}건을 제거했습니다.")
 
+    st.markdown("## 추천 검증 데스크")
+    st.caption("알고리즘 계산 결과를 원천 데이터와 직접 대조하고, 유사사례와 환경 차이를 사람이 다시 확인하는 화면입니다.")
+
     with sqlite3.connect(db_path, timeout=5) as conn:
         conn.row_factory = sqlite3.Row
         availability = _data_availability(conn, current, replay_matches, prediction)
         _render_data_availability(availability)
-        _render_validation_map(replay_matches, prediction)
         _render_replay_overview(replay_matches)
+        if not replay_matches:
+            st.warning("Replay 사례가 없어 원천 비교를 진행할 수 없습니다.")
+            _render_validation_map(replay_matches, prediction)
+            _render_prediction(prediction)
+            return
+
+        selected_index, match = _selected_case(replay_matches, key_prefix)
+        if selected_index is not None and match is not None:
+            _render_selected_workspace(conn, current, current_label, selected_index, match, key_prefix, prediction)
+
+        _render_validation_map(replay_matches, prediction)
         _render_outcome_groups(replay_matches)
         _render_prediction(prediction)
-        if not replay_matches:
-            return
-        selected_index, match = _selected_case(replay_matches, key_prefix)
-        if selected_index is None or match is None:
-            return
-        _render_selected_workspace(conn, current, current_label, selected_index, match, key_prefix, prediction)
-        _render_selected_future_path(conn, match)
-        _render_future_distribution(conn, replay_matches)
+
+        if include_heavy and selected_index is not None and match is not None:
+            _render_selected_future_path(conn, match)
+            _render_future_distribution(conn, replay_matches)

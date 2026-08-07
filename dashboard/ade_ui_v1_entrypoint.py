@@ -223,6 +223,31 @@ def _render_orders() -> None:
         render_scheduled_order_tab(market=market)
 
 
+def _render_recommendation_reason(payload: dict, selected: dict) -> None:
+    import streamlit as st
+
+    reason = (
+        payload.get("recommendation_reason")
+        or payload.get("reason")
+        or payload.get("rationale")
+        or selected.get("recommendation_reason")
+        or selected.get("reason")
+    )
+    if isinstance(reason, str) and reason.strip():
+        st.info(reason.strip())
+        return
+    if isinstance(reason, (list, tuple)) and reason:
+        for item in reason[:8]:
+            st.markdown(f"- {item}")
+        return
+
+    weekly = float(selected.get("weekly_similarity") or selected.get("score") or selected.get("final_similarity") or 0)
+    sto = float(selected.get("sto_similarity") or 0)
+    replay_matches = payload.get("replay_matches") or []
+    replay_count = len(replay_matches) if isinstance(replay_matches, list) else 0
+    st.caption(f"저장된 추천근거 원문 없음 · 주봉 유사도 {weekly:.2f}% · STO 유사도 {sto:.2f}% · Replay {replay_count}건")
+
+
 def _render_recommendation_detail(market: str, ticker: str) -> None:
     import streamlit as st
 
@@ -279,7 +304,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     with right:
         st.markdown("### 판단 패널")
         st.markdown("**1. 알고리즘 근거**")
-        base_app.render_recommendation_reason_button(payload=payload, selected=selected, market=market, ticker=normalized_ticker)
+        _render_recommendation_reason(payload, selected)
         st.markdown("**2. Replay 결과**")
         st.caption(f"과거 유사사례 {replay_count}건의 성공·중립·실패 경로를 좌측에서 직접 비교합니다.")
         st.markdown("**3. 환경·수급**")

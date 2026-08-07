@@ -23,8 +23,8 @@ def _render_overview() -> None:
         key="ade_overview_segment",
         label_visibility="collapsed",
     )
-    st.session_state.ade_overview_tab = tab or "시장"
-    if tab == "내 투자":
+    st.session_state.ade_overview_tab = tab or current
+    if st.session_state.ade_overview_tab == "내 투자":
         base_app._render_portfolio_overview()
     else:
         render_market_overview_panel()
@@ -37,33 +37,31 @@ def _render_status_bar() -> None:
     from broker.kis_websocket import shared_market_client
     from dashboard.kis_zero_base_bridge import kis_configured, kis_paper_enabled
     from dashboard.order_candidate_store import store_health
-    from dashboard.ui_workspace import get_workspace
 
-    workspace = get_workspace(st.session_state.ade_ui_workspace)
     if kis_paper_enabled():
-        kis_text, kis_class = "KIS 모의투자 설정", "ade-ok"
+        kis_text, kis_class = "KIS PAPER", "ade-ok"
     elif kis_configured():
-        kis_text, kis_class = "KIS 설정 확인 필요", ""
+        kis_text, kis_class = "KIS CHECK", ""
     else:
-        kis_text, kis_class = "KIS 미설정", ""
+        kis_text, kis_class = "KIS OFF", ""
 
     health = shared_market_client().health_snapshot()
     latest_received_at = health.get("latest_received_at")
     if health.get("connected") and latest_received_at:
         age = time.time() - float(latest_received_at)
-        ws_text = "실시간 정상" if age <= 3 else ("실시간 지연" if age <= 10 else "실시간 오래됨")
+        ws_text = "LIVE" if age <= 3 else ("LIVE DELAY" if age <= 10 else "LIVE STALE")
         ws_class = "ade-ok" if age <= 3 else ""
     elif health.get("connected"):
-        ws_text, ws_class = "실시간 연결·수신대기", ""
+        ws_text, ws_class = "LIVE WAIT", ""
     else:
-        ws_text, ws_class = "실시간 미사용 · 주문 화면에서 종목 선택 시 연결", ""
+        ws_text, ws_class = "LIVE OFF", ""
 
     candidate_health = store_health()
     schema_version = candidate_health.get("schema_version")
-    candidate_text = f"후보DB 정상 v{schema_version}" if candidate_health.get("status") == "정상" else "후보DB 오류"
+    candidate_text = f"DB v{schema_version}" if candidate_health.get("status") == "정상" else "DB ERROR"
     candidate_class = "ade-ok" if candidate_health.get("status") == "정상" else ""
     st.markdown(
-        f'<div class="ade-statusbar"><span>{workspace.short_name}</span><span>AI 데이터 부분 연결</span><span class="ade-ok">DB 정상</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span>Yahoo 참고용</span><span class="{candidate_class}">{candidate_text}</span><span>추천·Replay·STO 규칙 유지</span></div>',
+        f'<div class="ade-statusbar"><span>ADE TERMINAL</span><span class="{kis_class}">{kis_text}</span><span class="{ws_class}">{ws_text}</span><span class="{candidate_class}">{candidate_text}</span><span>REPLAY / STO READY</span></div>',
         unsafe_allow_html=True,
     )
 
@@ -133,19 +131,31 @@ def _render_standard_order_ticket(market: str, ticker: str) -> None:
         holding_quantity=holding_quantity,
         orderable_quantity=orderable_quantity,
     )
-    tabs = st.tabs(["일반주문", "예약주문"])
-    with tabs[0]:
-        render_order_ticket(context=context, submit_callback=_submit_order)
-        details = [message for message in [account_error, quote_error, orderable_error] if message]
-        if details:
-            st.caption(" · ".join(details))
-    with tabs[1]:
+
+    current = st.session_state.get("ade_order_ticket_tab", "일반주문")
+    if current not in {"일반주문", "예약주문"}:
+        current = "일반주문"
+    selected = st.segmented_control(
+        "주문 방식",
+        options=["일반주문", "예약주문"],
+        default=current,
+        key=f"ade_order_ticket_segment_{market}_{ticker}",
+        label_visibility="collapsed",
+    )
+    st.session_state.ade_order_ticket_tab = selected or current
+
+    if st.session_state.ade_order_ticket_tab == "예약주문":
         render_scheduled_order_tab(
             market=market,
             ticker=ticker,
             name=name,
             current_price=current_price,
         )
+    else:
+        render_order_ticket(context=context, submit_callback=_submit_order)
+        details = [message for message in [account_error, quote_error, orderable_error] if message]
+        if details:
+            st.caption(" · ".join(details))
 
 
 def _render_orders() -> None:
@@ -165,8 +175,8 @@ def _render_orders() -> None:
         _render_standard_order_ticket(market, str(st.session_state.ade_order_ticker))
         return
 
-    st.markdown("### 주문")
-    st.caption("종목 검색 → 주문 방향 → 주문 방식 → 수량 → 최종 확인 순서로 진행합니다.")
+    st.markdown("### 주문 데스크")
+    st.caption("종목 탐색 → 주문 판단 → 주문/체결 관리")
     render_search_launcher(
         market=market,
         search_func=base_app._search_order_symbols,
@@ -174,10 +184,23 @@ def _render_orders() -> None:
         on_add_candidate=lambda ticker, symbol: _save_candidate(market, ticker, symbol),
     )
 
-    tabs = st.tabs(["주문후보", "보유종목", "미체결", "당일 체결", "예약주문"])
-    with tabs[0]:
+    options = ["주문후보", "보유종목", "미체결", "당일 체결", "예약주문"]
+    current = st.session_state.get("ade_order_tab", "주문후보")
+    if current not in options:
+        current = "주문후보"
+    selected = st.segmented_control(
+        "주문 데스크 하위 메뉴",
+        options=options,
+        default=current,
+        key=f"ade_order_segment_{market}",
+        label_visibility="collapsed",
+    )
+    st.session_state.ade_order_tab = selected or current
+    active = st.session_state.ade_order_tab
+
+    if active == "주문후보":
         base_app._render_candidate_controls(market)
-    with tabs[1]:
+    elif active == "보유종목":
         account, positions, error = base_app._cached_kis_snapshot() if market == "kr" else (None, [], None)
         if not positions:
             st.info("보유종목이 없습니다.")
@@ -189,21 +212,110 @@ def _render_orders() -> None:
             ):
                 _open_order(str(row.get("ticker")), str(row.get("name") or row.get("ticker")))
         if account:
-            st.caption(f"KIS 주문가능 현금 ₩{float(account.get('cash') or 0):,.0f}")
+            st.caption(f"KIS 예수금 ₩{float(account.get('cash') or 0):,.0f}")
         if error:
             st.caption(error)
-    with tabs[2]:
+    elif active == "미체결":
         base_app._render_pending_orders()
-    with tabs[3]:
+    elif active == "당일 체결":
         base_app._render_daily_orders()
-    with tabs[4]:
+    else:
         render_scheduled_order_tab(market=market)
+
+
+def _render_recommendation_detail(market: str, ticker: str) -> None:
+    import streamlit as st
+
+    if st.button("← 추천종목으로 돌아가기", key=f"terminal_reco_back_{market}_{ticker}"):
+        st.session_state.ade_recommendation_detail = None
+        st.session_state.ade_show_heavy_charts = False
+        st.rerun()
+
+    recommendations, context = base_app._load_recommendations(market)
+    selected = next((row for row in recommendations if str(row.get("ticker")) == str(ticker)), None)
+    if selected is None:
+        st.warning("선택 종목을 찾을 수 없습니다.")
+        return
+
+    profile = base_app.get_market_profile(market)
+    normalized_ticker = base_app.normalize_ticker(ticker, market)
+    payload = base_app._safe_json(selected.get("payload_json"))
+    run_id = context.run_id if context else "-"
+    symbol = str(selected.get("symbol") or selected.get("name") or ticker)
+    weekly = float(selected.get("weekly_similarity") or selected.get("score") or selected.get("final_similarity") or 0)
+    sto = float(selected.get("sto_similarity") or 0)
+    replay_matches = payload.get("replay_matches") or []
+    replay_count = len(replay_matches) if isinstance(replay_matches, list) else 0
+    prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
+
+    with base_app.sqlite3.connect(str(profile.db_path), timeout=5) as conn:
+        conn.row_factory = base_app.sqlite3.Row
+        current, current_source, current_warning = base_app._load_current_bars_resilient(conn, market, normalized_ticker, profile.price_source)
+
+    st.markdown(f"## {symbol} · 검증 데스크")
+    st.caption(f"{ticker} · 실행ID {run_id} · 가격소스 {current_source}")
+    if current_warning:
+        st.caption(current_warning)
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("추천점수", f"{weekly:.1f}")
+    k2.metric("STO 유사도", f"{sto:.1f}%")
+    k3.metric("Replay", f"{replay_count}건")
+    k4.metric("Prediction", str(prediction.get("grade") or "미생성"))
+
+    left, right = st.columns([7, 3], gap="large")
+    with left:
+        st.markdown("### 현재 ↔ 과거 유사사례 직접 비교")
+        base_app.render_recommendation_detail_enhancements(
+            db_path=str(profile.db_path),
+            payload=payload,
+            selected=selected,
+            market=market,
+            ticker=normalized_ticker,
+            current=current,
+            current_label=symbol,
+            include_heavy=True,
+        )
+    with right:
+        st.markdown("### 판단 패널")
+        st.markdown("**1. 알고리즘 근거**")
+        base_app.render_recommendation_reason_button(payload=payload, selected=selected, market=market, ticker=normalized_ticker)
+        st.markdown("**2. Replay 결과**")
+        st.caption(f"과거 유사사례 {replay_count}건의 성공·중립·실패 경로를 좌측에서 직접 비교합니다.")
+        st.markdown("**3. 환경·수급**")
+        supply = base_app.load_supply_demand_health(normalized_ticker, market=market)
+        st.caption(str((supply.get("investor") or {}).get("detail") or "수급 확인 필요"))
+        st.markdown("**4. 반대 근거**")
+        cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
+        if isinstance(cautions, str):
+            cautions = [cautions]
+        if cautions:
+            for item in cautions[:5]:
+                st.warning(str(item))
+        else:
+            st.caption("저장된 반대 근거 없음 · 데이터 부재를 긍정 신호로 해석하지 않음")
+        st.markdown("**5. 뉴스·공시**")
+        news_rows, news_warning = base_app._cached_security_news(ticker, symbol, 8)
+        if news_rows:
+            st.dataframe(news_rows, hide_index=True, use_container_width=True)
+        else:
+            st.caption("표시할 최신 뉴스·공시가 없습니다.")
+        if news_warning:
+            st.caption(news_warning)
+        if st.button("검증 후 주문 화면으로", type="primary", use_container_width=True, key=f"verified_order_{market}_{ticker}"):
+            try:
+                base_app._add_order_candidate(market, ticker, symbol)
+            except Exception:
+                pass
+            st.session_state.ade_order_ticker = ticker
+            base_app._navigate_primary("주문")
 
 
 def run() -> None:
     base_app._render_overview = _render_overview
     base_app._render_status_bar = _render_status_bar
     base_app._render_orders = _render_orders
+    base_app._render_recommendation_detail = _render_recommendation_detail
     base_app.run()
 
 

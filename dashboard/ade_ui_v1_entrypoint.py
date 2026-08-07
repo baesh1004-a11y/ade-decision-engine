@@ -288,52 +288,57 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     k3.metric("Replay", f"{replay_count}건")
     k4.metric("Prediction", str(prediction.get("grade") or "미생성"))
 
-    left, right = st.columns([7, 3], gap="large")
-    with left:
-        st.markdown("### 현재 ↔ 과거 유사사례 직접 비교")
-        base_app.render_recommendation_detail_enhancements(
-            db_path=str(profile.db_path),
-            payload=payload,
-            selected=selected,
-            market=market,
-            ticker=normalized_ticker,
-            current=current,
-            current_label=symbol,
-            include_heavy=True,
-        )
-    with right:
-        st.markdown("### 판단 패널")
-        st.markdown("**1. 알고리즘 근거**")
-        _render_recommendation_reason(payload, selected)
-        st.markdown("**2. Replay 결과**")
-        st.caption(f"과거 유사사례 {replay_count}건의 성공·중립·실패 경로를 좌측에서 직접 비교합니다.")
-        st.markdown("**3. 환경·수급**")
-        supply = base_app.load_supply_demand_health(normalized_ticker, market=market)
-        st.caption(str((supply.get("investor") or {}).get("detail") or "수급 확인 필요"))
-        st.markdown("**4. 반대 근거**")
-        cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
-        if isinstance(cautions, str):
-            cautions = [cautions]
-        if cautions:
-            for item in cautions[:5]:
-                st.warning(str(item))
-        else:
-            st.caption("저장된 반대 근거 없음 · 데이터 부재를 긍정 신호로 해석하지 않음")
-        st.markdown("**5. 뉴스·공시**")
-        news_rows, news_warning = base_app._cached_security_news(ticker, symbol, 8)
-        if news_rows:
-            st.dataframe(news_rows, hide_index=True, use_container_width=True)
-        else:
-            st.caption("표시할 최신 뉴스·공시가 없습니다.")
-        if news_warning:
-            st.caption(news_warning)
-        if st.button("검증 후 주문 화면으로", type="primary", use_container_width=True, key=f"verified_order_{market}_{ticker}"):
-            try:
-                base_app._add_order_candidate(market, ticker, symbol)
-            except Exception:
-                pass
-            st.session_state.ade_order_ticker = ticker
-            base_app._navigate_primary("주문")
+    st.markdown("### 현재 ↔ 과거 유사사례 직접 비교")
+    st.caption("차트는 전체 폭으로 크게 보고, 아래에서 판단 근거를 별도 전체 화면 섹션으로 확인합니다.")
+    base_app.render_recommendation_detail_enhancements(
+        db_path=str(profile.db_path),
+        payload=payload,
+        selected=selected,
+        market=market,
+        ticker=normalized_ticker,
+        current=current,
+        current_label=symbol,
+        include_heavy=True,
+    )
+
+    st.divider()
+    st.markdown("## 판단 근거")
+    st.markdown("### 1. 알고리즘 근거")
+    _render_recommendation_reason(payload, selected)
+
+    st.markdown("### 2. Replay 결과")
+    st.caption(f"과거 유사사례 {replay_count}건의 성공·중립·실패 경로를 위 비교 화면에서 직접 확인합니다.")
+
+    st.markdown("### 3. 환경·수급")
+    supply = base_app.load_supply_demand_health(normalized_ticker, market=market)
+    st.caption(str((supply.get("investor") or {}).get("detail") or "수급 확인 필요"))
+
+    st.markdown("### 4. 반대 근거")
+    cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
+    if isinstance(cautions, str):
+        cautions = [cautions]
+    if cautions:
+        for item in cautions[:5]:
+            st.warning(str(item))
+    else:
+        st.caption("저장된 반대 근거 없음 · 데이터 부재를 긍정 신호로 해석하지 않음")
+
+    st.markdown("### 5. 뉴스·공시")
+    news_rows, news_warning = base_app._cached_security_news(ticker, symbol, 8)
+    if news_rows:
+        st.dataframe(news_rows, hide_index=True, use_container_width=True)
+    else:
+        st.caption("표시할 최신 뉴스·공시가 없습니다.")
+    if news_warning:
+        st.caption(news_warning)
+
+    if st.button("검증 후 주문 화면으로", type="primary", use_container_width=True, key=f"verified_order_{market}_{ticker}"):
+        try:
+            base_app._add_order_candidate(market, ticker, symbol)
+        except Exception:
+            pass
+        st.session_state.ade_order_ticker = ticker
+        base_app._navigate_primary("주문")
 
 
 def run() -> None:

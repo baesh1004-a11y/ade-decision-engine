@@ -136,6 +136,20 @@ def _init_state() -> None:
         st.session_state.setdefault(key, value)
 
 
+def _navigate_primary(label: str) -> None:
+    current = str(st.session_state.get("ade_primary_page") or "상황종합판")
+    if current == label:
+        return
+    st.session_state.ade_primary_page = label
+    if label != "추천결과":
+        st.session_state.ade_recommendation_detail = None
+        st.session_state.ade_show_heavy_charts = False
+    if label != "주문":
+        st.session_state.ade_order_ticker = None
+        _reset_order_confirmation()
+    st.rerun()
+
+
 def _render_top_navigation() -> None:
     workspace = get_workspace(st.session_state.ade_ui_workspace)
     st.markdown(
@@ -144,23 +158,21 @@ def _render_top_navigation() -> None:
     )
     c1, c2, c3, c4 = st.columns([1.2, 1.2, 1.0, 1.2])
     for col, label in [(c1, "상황종합판"), (c2, "추천결과"), (c3, "주문")]:
-        if col.button(label, type="primary" if st.session_state.ade_primary_page == label else "secondary", use_container_width=True):
-            st.session_state.ade_primary_page = label
-            st.session_state.ade_recommendation_detail = None
-            st.session_state.ade_show_heavy_charts = False
-            st.rerun()
+        if col.button(label, type="primary" if st.session_state.ade_primary_page == label else "secondary", use_container_width=True, key=f"nav_{label}"):
+            _navigate_primary(label)
     with c4:
-        if st.button("JP Radar", type="primary" if st.session_state.ade_primary_page == "JP Radar" else "secondary", use_container_width=True):
-            st.session_state.ade_primary_page = "JP Radar"
-            st.rerun()
+        if st.button("JP Radar", type="primary" if st.session_state.ade_primary_page == "JP Radar" else "secondary", use_container_width=True, key="nav_JP_Radar"):
+            _navigate_primary("JP Radar")
 
 
 def _render_overview() -> None:
     tabs = st.segmented_control("상황종합판 하위 메뉴", options=["시장", "이벤트", "내 투자"], default=st.session_state.ade_overview_tab, key="ade_overview_segment", label_visibility="collapsed")
-    st.session_state.ade_overview_tab = tabs or "시장"
-    if tabs == "시장":
+    if tabs:
+        st.session_state.ade_overview_tab = tabs
+    current_tab = st.session_state.ade_overview_tab
+    if current_tab == "시장":
         _render_market_overview()
-    elif tabs == "이벤트":
+    elif current_tab == "이벤트":
         _render_event_timeline()
     else:
         _render_portfolio_overview()
@@ -209,7 +221,7 @@ def _render_portfolio_overview() -> None:
     total = cash + evaluation
     invested = evaluation - pnl
     pnl_rate = (pnl / invested * 100) if invested > 0 else 0
-    for col, (label, value, delta) in zip(st.columns(5), [("총자산", f"₩{total:,.0f}", None), ("주문가능 현금", f"₩{cash:,.0f}", None), ("평가금액", f"₩{evaluation:,.0f}", None), ("평가손익", f"₩{pnl:+,.0f}", f"{pnl_rate:+.2f}%"), ("보유종목", f"{int(account.get('position_count') or len(positions))}개", None)]):
+    for col, (label, value, delta) in zip(st.columns(5), [("총자산", f"₩{total:,.0f}", None), ("예수금", f"₩{cash:,.0f}", None), ("평가금액", f"₩{evaluation:,.0f}", None), ("평가손익", f"₩{pnl:+,.0f}", f"{pnl_rate:+.2f}%"), ("보유종목", f"{int(account.get('position_count') or len(positions))}개", None)]):
         col.metric(label, value, delta)
     if positions:
         st.dataframe(pd.DataFrame(positions), hide_index=True, use_container_width=True)
@@ -241,19 +253,17 @@ def _render_recommendations() -> None:
         score = float(row.get("score") or row.get("final_similarity") or row.get("weekly_similarity") or 0)
         cols[2].metric("추천점수", f"{score:.1f}")
         if cols[3].button("JP Radar", key=f"jp_{market}_{ticker}", use_container_width=True):
-            st.session_state.ade_primary_page = "JP Radar"
             st.session_state.ade_jp_ticker = ticker
-            st.rerun()
+            _navigate_primary("JP Radar")
         if cols[4].button("주문", key=f"order_{market}_{ticker}", type="primary", use_container_width=True):
             try:
                 _add_order_candidate(market, ticker, symbol)
             except OrderCandidateStoreError as exc:
                 st.error(str(exc))
                 continue
-            st.session_state.ade_primary_page = "주문"
             st.session_state.ade_order_ticker = ticker
             _reset_order_confirmation()
-            st.rerun()
+            _navigate_primary("주문")
         st.divider()
 
 
@@ -426,32 +436,22 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         row = dict(validation)
         risk_score = float(row.get("risk_score") or 0)
         environment_score = float(row.get("final_score") or row.get("score") or 0)
-    target = _payload_number(payload, "target_price", "take_profit", "expected_price")
-    stop = _payload_number(payload, "stop_loss", "stop_price")
-    confidence = _payload_number(payload, "confidence", "confidence_score")
-    summary = _payload_text(payload, "ai_summary", "summary", "reason", "recommendation_reason")
     st.markdown(f"## {symbol}")
     st.caption(f"{ticker} · 실행ID {run_id} · 생성 {finished_at} · 가격기준 {current_end} · 가격소스 {current_source}")
     if current_warning:
         st.caption(f"가격 보조 조회: {current_warning}")
 
-    # Decision data first: the detailed evidence workspace is the primary screen.
     kpis = st.columns(4)
     kpis[0].metric("추천점수", f"{weekly:.1f}")
     kpis[1].metric("STO 유사도", f"{sto:.1f}%")
     kpis[2].metric("과거 유사사례", f"{replay_count}건")
     prediction = payload.get("prediction") if isinstance(payload.get("prediction"), dict) else {}
-    prediction_grade = str(prediction.get("grade") or "-")
+    prediction_grade = str(prediction.get("grade") or "미생성")
     kpis[3].metric("Prediction", prediction_grade)
 
     render_recommendation_detail_enhancements(
-        db_path=str(profile.db_path),
-        payload=payload,
-        selected=selected,
-        market=market,
-        ticker=normalized_ticker,
-        current=current,
-        current_label=symbol,
+        db_path=str(profile.db_path), payload=payload, selected=selected, market=market,
+        ticker=normalized_ticker, current=current, current_label=symbol,
         include_heavy=bool(st.session_state.ade_show_heavy_charts),
     )
 
@@ -494,22 +494,12 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
     if news_warning:
         st.caption(news_warning)
 
-    # Engineering diagnostics belong at the bottom and remain collapsed by default.
     health_rows = build_data_health_rows(
-        current=current,
-        current_source=current_source,
-        current_warning=current_warning,
-        historical=historical,
-        pattern=pattern,
-        replay_count=replay_count,
-        news_count=news_count,
-        disclosure_count=disclosure_count,
-        news_warning=news_warning,
-        validation=validation,
-        validation_attempted=validation_attempted,
-        validation_error=validation_error,
-        market=market,
-        supply_health=supply_health,
+        current=current, current_source=current_source, current_warning=current_warning,
+        historical=historical, pattern=pattern, replay_count=replay_count,
+        news_count=news_count, disclosure_count=disclosure_count, news_warning=news_warning,
+        validation=validation, validation_attempted=validation_attempted,
+        validation_error=validation_error, market=market, supply_health=supply_health,
     )
     with st.expander("데이터 연결 상태 · 개발 진단", expanded=False):
         render_data_health_panel(health_rows)
@@ -556,7 +546,7 @@ def _render_orders() -> None:
     with tabs[3]:
         _render_daily_orders()
     if account:
-        st.caption(f"KIS 주문가능 현금 ₩{float(account.get('cash') or 0):,.0f}")
+        st.caption(f"KIS 예수금 ₩{float(account.get('cash') or 0):,.0f}")
     if error:
         st.caption(error)
 
@@ -1031,6 +1021,7 @@ def _render_jp_radar() -> None:
     st.markdown("## JP Radar")
     market = _market_selector("ade_jp_market")
     ticker = st.text_input("종목코드", value=st.session_state.ade_jp_ticker or ("005930" if market == "kr" else "AAPL"))
+    st.session_state.ade_jp_ticker = ticker
     try:
         result = _cached_jp_radar(ticker)
     except Exception:
@@ -1043,7 +1034,9 @@ def _render_jp_radar() -> None:
 
 def _market_selector(key: str) -> str:
     value = st.segmented_control("시장", options=["kr", "us"], default=st.session_state.get("ade_market", "kr"), format_func=lambda v: "국내" if v == "kr" else "미국", key=key, label_visibility="collapsed")
-    return str(value or "kr")
+    market = str(value or st.session_state.get("ade_market", "kr"))
+    st.session_state.ade_market = market
+    return market
 
 
 @st.cache_data(ttl=30, show_spinner=False)

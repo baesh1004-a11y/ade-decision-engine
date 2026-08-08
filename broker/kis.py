@@ -37,16 +37,33 @@ class KISBrokerAdapter:
         self._last_balance_at = 0.0
         self._request_lock = threading.RLock()
 
-    def get_cash(self) -> float:
-        """Return settled deposit cash for total-account asset calculation."""
+    def _balance_summary_row(self) -> dict[str, Any]:
         payload = self._request_domestic_balance()
         output2 = payload.get("output2") or []
         if isinstance(output2, list) and output2:
             row = output2[0]
-            if row.get("dnca_tot_amt") not in (None, ""):
-                return self._to_float(row.get("dnca_tot_amt"))
-            if row.get("prvs_rcdl_excc_amt") not in (None, ""):
-                return self._to_float(row.get("prvs_rcdl_excc_amt"))
+            return row if isinstance(row, dict) else {}
+        if isinstance(output2, dict):
+            return output2
+        return {}
+
+    def get_cash(self) -> float:
+        """Return settled deposit cash for total-account asset calculation."""
+        row = self._balance_summary_row()
+        if row.get("dnca_tot_amt") not in (None, ""):
+            return self._to_float(row.get("dnca_tot_amt"))
+        if row.get("prvs_rcdl_excc_amt") not in (None, ""):
+            return self._to_float(row.get("prvs_rcdl_excc_amt"))
+        return 0.0
+
+    def get_total_assets(self) -> float:
+        """Return KIS account net assets when provided by inquire-balance output2."""
+        row = self._balance_summary_row()
+        for key in ("nass_amt", "tot_evlu_amt"):
+            if row.get(key) not in (None, ""):
+                value = self._to_float(row.get(key))
+                if value > 0:
+                    return value
         return 0.0
 
     def get_positions(self) -> list[BrokerPosition]:

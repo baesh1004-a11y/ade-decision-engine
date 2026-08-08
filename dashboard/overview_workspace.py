@@ -10,6 +10,22 @@ from dashboard.market_overview_service import load_market_overview, load_sector_
 from markets.profiles import get_market_profile
 
 
+_STICKY_KPI_STYLE = """
+<style>
+/* Situation board market strip: keep the six market KPIs visible while scrolling. */
+.ade-market-sticky-anchor + div[data-testid="stHorizontalBlock"]{
+    position: sticky;
+    top: 3.35rem;
+    z-index: 930;
+    padding: .45rem 0 .6rem;
+    background: rgba(247,251,255,.92);
+    backdrop-filter: blur(18px) saturate(1.2);
+    border-bottom: 1px solid rgba(91,122,153,.18);
+}
+</style>
+"""
+
+
 def _number(row: dict[str, Any], *keys: str) -> float:
     for key in keys:
         value = row.get(key)
@@ -32,6 +48,7 @@ def _text(row: dict[str, Any], *keys: str) -> str:
 def _render_market_kpis(refresh: bool) -> None:
     metrics, warning = load_market_overview(refresh=refresh)
     ordered = ["kospi", "kosdaq", "sp500", "nasdaq", "usdkrw", "vix"]
+    st.markdown('<div class="ade-market-sticky-anchor"></div>', unsafe_allow_html=True)
     columns = st.columns(6)
     for column, key in zip(columns, ordered):
         metric = metrics.get(key)
@@ -200,7 +217,11 @@ def _render_portfolio(base_app: Any, refresh: bool) -> None:
     cash = float(account.get("cash") or 0)
     evaluation = float(account.get("evaluation_amount") or 0)
     pnl = float(account.get("pnl") or 0)
-    total = cash + evaluation
+    total = float(account.get("total_assets") or 0)
+    total_source = "KIS 순자산"
+    if total <= 0:
+        total = cash + evaluation
+        total_source = "예수금+평가금액 fallback"
     invested = evaluation - pnl
     pnl_rate = pnl / invested * 100 if invested > 0 else 0.0
     for col, (label, value, delta) in zip(
@@ -214,6 +235,7 @@ def _render_portfolio(base_app: Any, refresh: bool) -> None:
         ],
     ):
         col.metric(label, value, delta)
+    st.caption(f"총자산 기준 · {total_source}")
 
     st.markdown("### 보유종목")
     if not positions:
@@ -240,6 +262,7 @@ def _render_portfolio(base_app: Any, refresh: bool) -> None:
 
 
 def render_overview_workspace(base_app: Any) -> None:
+    st.markdown(_STICKY_KPI_STYLE, unsafe_allow_html=True)
     st.markdown("### 상황종합판")
     refresh_cols = st.columns([5, 1])
     refresh = refresh_cols[1].button("새로고침", key="overview_workspace_refresh", use_container_width=True)

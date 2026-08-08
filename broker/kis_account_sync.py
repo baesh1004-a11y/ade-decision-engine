@@ -16,6 +16,7 @@ class KISAccountSnapshot:
     position_count: int
     evaluation_amount: float
     pnl: float
+    total_assets: float
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -53,10 +54,14 @@ class KISAccountSync:
                     cash REAL NOT NULL,
                     position_count INTEGER NOT NULL,
                     evaluation_amount REAL NOT NULL,
-                    pnl REAL NOT NULL
+                    pnl REAL NOT NULL,
+                    total_assets REAL NOT NULL DEFAULT 0
                 )
                 """
             )
+            account_columns = {row["name"] for row in conn.execute("PRAGMA table_info(kis_account_snapshots)").fetchall()}
+            if "total_assets" not in account_columns:
+                conn.execute("ALTER TABLE kis_account_snapshots ADD COLUMN total_assets REAL NOT NULL DEFAULT 0")
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS kis_position_snapshots (
@@ -93,6 +98,9 @@ class KISAccountSync:
         captured_at = datetime.now().isoformat(timespec="microseconds")
         evaluation_amount = sum(float(item.evaluation_amount) for item in positions)
         pnl = sum(float(item.pnl) for item in positions)
+        total_assets = float(getattr(broker, "get_total_assets", lambda: 0.0)() or 0.0)
+        if total_assets <= 0:
+            total_assets = cash + evaluation_amount
 
         snapshot = KISAccountSnapshot(
             captured_at=captured_at,
@@ -100,15 +108,16 @@ class KISAccountSync:
             position_count=len(positions),
             evaluation_amount=evaluation_amount,
             pnl=pnl,
+            total_assets=total_assets,
         )
         rows: list[dict[str, object]] = []
         with self._connect() as conn:
             cursor = conn.execute(
                 """
-                INSERT INTO kis_account_snapshots(captured_at, cash, position_count, evaluation_amount, pnl)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO kis_account_snapshots(captured_at, cash, position_count, evaluation_amount, pnl, total_assets)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (captured_at, cash, len(positions), evaluation_amount, pnl),
+                (captured_at, cash, len(positions), evaluation_amount, pnl, total_assets),
             )
             snapshot_id = int(cursor.lastrowid)
             for item in positions:
@@ -189,7 +198,7 @@ class KISAccountSync:
         with self._connect(readonly=True) as conn:
             rows = conn.execute(
                 """
-                SELECT captured_at, cash, position_count, evaluation_amount, pnl
+                SELECT captured_at, cash, position_count, evaluation_amount, pnl, total_assets
                 FROM kis_account_snapshots
                 ORDER BY id DESC LIMIT ?
                 """,

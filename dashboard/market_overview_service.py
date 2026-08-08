@@ -50,7 +50,7 @@ _MARKET_META: dict[str, tuple[str, dt_time, dt_time]] = {
     "KRW=X": ("Etc/UTC", dt_time(0, 0), dt_time(23, 59)),
 }
 _VALUE_RANGES: dict[str, tuple[float, float]] = {
-    "^KS11": (500.0, 5000.0),
+    "^KS11": (500.0, 15000.0),
     "^KQ11": (200.0, 2500.0),
     "^GSPC": (1000.0, 15000.0),
     "^IXIC": (3000.0, 50000.0),
@@ -321,45 +321,42 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
     rows: list[dict[str, Any]] = []
     used_date = ""
     for business_date in _candidate_business_dates():
-        date_rows: list[dict[str, Any]] = []
-        for market in ("KOSPI", "KOSDAQ"):
-            try:
-                frame = _load_index_frame(business_date, market)
-                for ticker, series in frame.iterrows():
-                    ticker_text = str(ticker).zfill(4)
-                    name = str(pykrx_stock.get_index_ticker_name(ticker_text) or ticker_text)
-                    close = _pick_numeric(series, "종가", "현재가", "지수", "현재지수")
-                    change_rate = _pick_numeric(series, "등락률", "변동률")
-                    if change_rate == 0:
-                        previous = _previous_index_close(business_date, ticker_text)
-                        if previous > 0 and close > 0:
-                            change_rate = (close - previous) / previous * 100
-                    volume = _pick_numeric(series, "거래량", "거래주식수")
-                    turnover = _pick_numeric(series, "거래대금", "거래금액")
-                    if close <= 0:
-                        continue
-                    strength = max(0.0, min(100.0, 50.0 + change_rate * 8.0))
-                    date_rows.append(
-                        {
-                            "sector": f"{market} · {name}",
-                            "change_rate": round(change_rate, 2),
-                            "breadth": None,
-                            "relative_strength": round(strength, 1),
-                            "turnover": int(turnover),
-                            "volume": int(volume),
-                            "source": "pykrx 업종지수",
-                            "as_of": business_date,
-                        }
-                    )
-            except Exception:
-                continue
-        if date_rows:
-            rows = date_rows
+        try:
+            kospi = _load_index_frame(business_date, "KOSPI")
+            kosdaq = _load_index_frame(business_date, "KOSDAQ")
+        except Exception:
+            continue
+        frames = [frame for frame in (kospi, kosdaq) if not frame.empty]
+        if not frames:
+            continue
+        combined = pd.concat(frames)
+        for ticker, row in combined.iterrows():
+            name = str(pykrx_stock.get_index_ticker_name(ticker) or ticker)
+            close = _pick_numeric(row, "종가", "현재가", "지수")
+            open_price = _pick_numeric(row, "시가")
+            previous_close = _previous_index_close(business_date, str(ticker))
+            reference = previous_close or open_price
+            change_rate = ((close / reference) - 1.0) * 100.0 if reference else 0.0
+            turnover = _pick_numeric(row, "거래대금", "거래금액")
+            breadth = _pick_numeric(row, "등락률")
+            rows.append(
+                {
+                    "sector": name,
+                    "change_rate": round(change_rate, 3),
+                    "turnover": turnover,
+                    "breadth": breadth,
+                    "relative_strength": round(change_rate, 3),
+                    "as_of": business_date,
+                    "source": "pykrx",
+                }
+            )
+        if rows:
             used_date = business_date
             break
-
-    rows.sort(key=lambda item: (float(item.get("relative_strength") or 0), float(item.get("turnover") or 0)), reverse=True)
-    warning = f"기준일 {used_date}" if used_date else "국내 섹터 데이터를 아직 가져오지 못했습니다. 잠시 후 다시 시도합니다."
+    rows.sort(key=lambda item: float(item.get("relative_strength") or 0), reverse=True)
+    warning = None if rows else "국내 업종 등락 데이터를 조회하지 못했습니다."
+    if rows and used_date != _candidate_business_dates()[0]:
+        warning = f"최근 조회 가능한 거래일({used_date}) 기준입니다."
     _SECTOR_CACHE = (now, rows, warning)
     return rows[:limit], warning
 
@@ -368,10 +365,10 @@ def load_sector_strength(db_path: str | Path, *, limit: int = 10, refresh: bool 
     global _SECTOR_CACHE
     if refresh:
         _SECTOR_CACHE = None
-    db_rows, db_error = _load_sector_strength_from_db(Path(db_path), limit)
-    if db_rows:
-        return db_rows, db_error
-    live_rows, live_error = _calculate_live_sector_strength(limit)
-    if live_rows:
-        return live_rows, live_error
-    return [], live_error or db_error or "국내 섹터 데이터를 아직 가져오지 못했습니다. 잠시 후 다시 시도합니다."
+    rows, warning = _calculate_live_sector_strength(limit)
+    if rows:
+        return rows, warning
+    stored_rows, stored_warning = _load_sector_strength_from_db(Path(db_path), limit)
+    if stored_rows:
+        return stored_rows, warning or stored_warning
+    return [], warning or stored_warning

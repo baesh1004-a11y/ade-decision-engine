@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dashboard import ade_ui_v1_app as base_app
-from dashboard.overview_market_panel import render_market_overview_panel
+from dashboard.overview_workspace import render_overview_workspace
 from dashboard.standard_order_panel import (
     OrderContext,
     render_order_ticket,
@@ -11,23 +11,7 @@ from dashboard.standard_order_panel import (
 
 
 def _render_overview() -> None:
-    import streamlit as st
-
-    current = st.session_state.get("ade_overview_tab", "시장")
-    if current not in {"시장", "내 투자"}:
-        current = "시장"
-    tab = st.segmented_control(
-        "상황종합판 하위 메뉴",
-        options=["시장", "내 투자"],
-        default=current,
-        key="ade_overview_segment",
-        label_visibility="collapsed",
-    )
-    st.session_state.ade_overview_tab = tab or current
-    if st.session_state.ade_overview_tab == "내 투자":
-        base_app._render_portfolio_overview()
-    else:
-        render_market_overview_panel()
+    render_overview_workspace(base_app)
 
 
 def _render_status_bar() -> None:

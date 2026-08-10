@@ -10,6 +10,29 @@ from dashboard.standard_order_panel import (
 )
 
 
+_RECOMMENDATION_STYLE = """
+<style>
+.ade-reco-shell{background:linear-gradient(180deg,#dff5f3 0%,#eef8ef 48%,#f4f6f8 100%);padding:16px;border-radius:30px}
+.ade-reco-hero{background:#fff;border-radius:28px;padding:24px;margin:12px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
+.ade-reco-title{font-size:30px;font-weight:950;letter-spacing:-.045em;color:#0b0f14}
+.ade-reco-meta{font-size:12px;color:#7b8794;margin-top:6px}
+.ade-reco-kpis{display:grid;grid-template-columns:1.35fr 1fr 1fr 1fr;gap:12px;margin-top:18px}
+.ade-reco-kpi{background:#fafafa;border-radius:18px;padding:16px;border:1px solid rgba(15,23,42,.06)}
+.ade-reco-kpi.hero{background:#101922;color:#fff}
+.ade-reco-kpi .l{font-size:12px;font-weight:800;color:#6f7b88}.ade-reco-kpi.hero .l{color:rgba(255,255,255,.66)}
+.ade-reco-kpi .v{font-size:28px;font-weight:950;letter-spacing:-.04em;margin-top:5px;color:#111827}.ade-reco-kpi.hero .v{font-size:34px;color:#fff}
+.ade-reco-section{background:#fff;border-radius:28px;padding:24px;margin:14px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
+.ade-reco-section-title{font-size:25px;font-weight:950;letter-spacing:-.04em;color:#0b0f14}
+.ade-reco-section-sub{font-size:12px;color:#8a94a1;margin-top:5px}
+.ade-reco-pill-row{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}.ade-reco-pill{padding:8px 12px;border-radius:999px;border:1px solid #dbe1e7;background:#fff;font-size:12px;font-weight:800}.ade-reco-pill.active{border:2px solid #111827}
+.ade-evidence-list{margin-top:14px}.ade-evidence-row{display:grid;grid-template-columns:34px 150px 1fr;gap:14px;align-items:start;padding:15px 0;border-top:1px solid #eceff3}.ade-evidence-row:first-child{border-top:0}.ade-evidence-no{width:28px;height:28px;border-radius:999px;background:#101922;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900}.ade-evidence-label{font-size:14px;font-weight:900}.ade-evidence-body{font-size:14px;line-height:1.45;color:#374151}
+.ade-risk-card{background:#fff7ed;border:1px solid #fed7aa;border-radius:16px;padding:14px 16px;margin-top:10px;color:#9a3412;font-size:14px;font-weight:750}
+.ade-news-card{padding:14px 0;border-top:1px solid #eceff3}.ade-news-card:first-child{border-top:0}
+@media(max-width:900px){.ade-reco-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.ade-reco-kpi.hero{grid-column:1/-1}.ade-evidence-row{grid-template-columns:30px 1fr}.ade-evidence-label{grid-column:2}.ade-evidence-body{grid-column:2}}
+</style>
+"""
+
+
 def _render_overview() -> None:
     render_overview_workspace(base_app)
 
@@ -207,9 +230,7 @@ def _render_orders() -> None:
         render_scheduled_order_tab(market=market)
 
 
-def _render_recommendation_reason(payload: dict, selected: dict) -> None:
-    import streamlit as st
-
+def _render_recommendation_reason(payload: dict, selected: dict) -> str:
     reason = (
         payload.get("recommendation_reason")
         or payload.get("reason")
@@ -218,22 +239,20 @@ def _render_recommendation_reason(payload: dict, selected: dict) -> None:
         or selected.get("reason")
     )
     if isinstance(reason, str) and reason.strip():
-        st.info(reason.strip())
-        return
+        return reason.strip()
     if isinstance(reason, (list, tuple)) and reason:
-        for item in reason[:8]:
-            st.markdown(f"- {item}")
-        return
-
+        return " · ".join(str(item) for item in reason[:5])
     weekly = float(selected.get("weekly_similarity") or selected.get("score") or selected.get("final_similarity") or 0)
     sto = float(selected.get("sto_similarity") or 0)
     replay_matches = payload.get("replay_matches") or []
     replay_count = len(replay_matches) if isinstance(replay_matches, list) else 0
-    st.caption(f"저장된 추천근거 원문 없음 · 주봉 유사도 {weekly:.2f}% · STO 유사도 {sto:.2f}% · Replay {replay_count}건")
+    return f"저장된 추천근거 원문 없음 · 주봉 유사도 {weekly:.2f}% · STO 유사도 {sto:.2f}% · Replay {replay_count}건"
 
 
 def _render_recommendation_detail(market: str, ticker: str) -> None:
     import streamlit as st
+
+    st.markdown(_RECOMMENDATION_STYLE, unsafe_allow_html=True)
 
     if st.button("← 추천종목으로 돌아가기", key=f"terminal_reco_back_{market}_{ticker}"):
         st.session_state.ade_recommendation_detail = None
@@ -261,19 +280,15 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         conn.row_factory = base_app.sqlite3.Row
         current, current_source, current_warning = base_app._load_current_bars_resilient(conn, market, normalized_ticker, profile.price_source)
 
-    st.markdown(f"## {symbol} · 검증 데스크")
-    st.caption(f"{ticker} · 실행ID {run_id} · 가격소스 {current_source}")
+    st.markdown('<div class="ade-reco-shell">', unsafe_allow_html=True)
+    st.markdown(
+        f'''<div class="ade-reco-hero"><div class="ade-reco-title">{symbol}</div><div class="ade-reco-meta">{ticker} · 실행ID {run_id} · 가격소스 {current_source}</div><div class="ade-reco-kpis"><div class="ade-reco-kpi hero"><div class="l">추천점수</div><div class="v">{weekly:.1f}</div></div><div class="ade-reco-kpi"><div class="l">STO 유사도</div><div class="v">{sto:.1f}%</div></div><div class="ade-reco-kpi"><div class="l">Replay</div><div class="v">{replay_count}건</div></div><div class="ade-reco-kpi"><div class="l">Prediction</div><div class="v">{str(prediction.get('grade') or '미생성')}</div></div></div></div>''',
+        unsafe_allow_html=True,
+    )
     if current_warning:
         st.caption(current_warning)
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("추천점수", f"{weekly:.1f}")
-    k2.metric("STO 유사도", f"{sto:.1f}%")
-    k3.metric("Replay", f"{replay_count}건")
-    k4.metric("Prediction", str(prediction.get("grade") or "미생성"))
-
-    st.markdown("### 현재 ↔ 과거 유사사례 직접 비교")
-    st.caption("차트는 전체 폭으로 크게 보고, 아래에서 판단 근거를 별도 전체 화면 섹션으로 확인합니다.")
+    st.markdown('<div class="ade-reco-section"><div class="ade-reco-section-title">현재 ↔ 과거 유사사례 직접 비교</div><div class="ade-reco-section-sub">현재 패턴과 Replay 유사사례를 같은 작업공간에서 크게 비교합니다.</div><div class="ade-reco-pill-row"><div class="ade-reco-pill active">현재</div><div class="ade-reco-pill">과거 사례</div><div class="ade-reco-pill">Overlay</div><div class="ade-reco-pill">STO</div></div></div>', unsafe_allow_html=True)
     base_app.render_recommendation_detail_enhancements(
         db_path=str(profile.db_path),
         payload=payload,
@@ -285,36 +300,28 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
         include_heavy=True,
     )
 
-    st.divider()
-    st.markdown("## 판단 근거")
-    st.markdown("### 1. 알고리즘 근거")
-    _render_recommendation_reason(payload, selected)
-
-    st.markdown("### 2. Replay 결과")
-    st.caption(f"과거 유사사례 {replay_count}건의 성공·중립·실패 경로를 위 비교 화면에서 직접 확인합니다.")
-
-    st.markdown("### 3. 환경·수급")
     supply = base_app.load_supply_demand_health(normalized_ticker, market=market)
-    st.caption(str((supply.get("investor") or {}).get("detail") or "수급 확인 필요"))
-
-    st.markdown("### 4. 반대 근거")
+    supply_text = str((supply.get("investor") or {}).get("detail") or "수급 확인 필요")
+    reason_text = _render_recommendation_reason(payload, selected)
     cautions = payload.get("risk_factors") or payload.get("cautions") or payload.get("warnings") or []
     if isinstance(cautions, str):
         cautions = [cautions]
-    if cautions:
-        for item in cautions[:5]:
-            st.warning(str(item))
-    else:
-        st.caption("저장된 반대 근거 없음 · 데이터 부재를 긍정 신호로 해석하지 않음")
+    caution_text = " · ".join(str(item) for item in cautions[:5]) if cautions else "저장된 반대 근거 없음 · 데이터 부재를 긍정 신호로 해석하지 않음"
 
-    st.markdown("### 5. 뉴스·공시")
+    st.markdown(
+        f'''<div class="ade-reco-section"><div class="ade-reco-section-title">판단 근거</div><div class="ade-reco-section-sub">추천 자체보다 검증 가능한 근거를 순서대로 확인합니다.</div><div class="ade-evidence-list"><div class="ade-evidence-row"><div class="ade-evidence-no">1</div><div class="ade-evidence-label">알고리즘 근거</div><div class="ade-evidence-body">{reason_text}</div></div><div class="ade-evidence-row"><div class="ade-evidence-no">2</div><div class="ade-evidence-label">Replay 결과</div><div class="ade-evidence-body">과거 유사사례 {replay_count}건을 위 비교 화면에서 직접 확인합니다.</div></div><div class="ade-evidence-row"><div class="ade-evidence-no">3</div><div class="ade-evidence-label">환경·수급</div><div class="ade-evidence-body">{supply_text}</div></div><div class="ade-evidence-row"><div class="ade-evidence-no">4</div><div class="ade-evidence-label">반대 근거</div><div class="ade-evidence-body">{caution_text}</div></div></div></div>''',
+        unsafe_allow_html=True,
+    )
+
     news_rows, news_warning = base_app._cached_security_news(ticker, symbol, 8)
+    st.markdown('<div class="ade-reco-section"><div class="ade-reco-section-title">뉴스·공시</div><div class="ade-reco-section-sub">최신 정보는 별도 카드에서 확인합니다.</div>', unsafe_allow_html=True)
     if news_rows:
         st.dataframe(news_rows, hide_index=True, use_container_width=True)
     else:
-        st.caption("표시할 최신 뉴스·공시가 없습니다.")
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 최신 뉴스·공시가 없습니다.</div>', unsafe_allow_html=True)
     if news_warning:
         st.caption(news_warning)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     if st.button("검증 후 주문 화면으로", type="primary", use_container_width=True, key=f"verified_order_{market}_{ticker}"):
         try:
@@ -323,6 +330,7 @@ def _render_recommendation_detail(market: str, ticker: str) -> None:
             pass
         st.session_state.ade_order_ticker = ticker
         base_app._navigate_primary("주문")
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def run() -> None:

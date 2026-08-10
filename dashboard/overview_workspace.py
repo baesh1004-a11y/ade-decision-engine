@@ -10,28 +10,19 @@ from dashboard.market_overview_service import load_market_overview, load_sector_
 from markets.profiles import get_market_profile
 
 
-_STICKY_KPI_STYLE = """
+_OVERVIEW_STYLE = """
 <style>
-.ade-market-strip{position:sticky;top:3.35rem;z-index:930;padding:.55rem 0 .7rem;background:rgba(236,249,247,.96);backdrop-filter:blur(18px) saturate(1.2);border-bottom:1px solid rgba(91,122,153,.18)}
-.design-section-label{margin:18px 0 8px;font-size:10px;font-weight:950;letter-spacing:.12em;color:#5f7287;text-transform:uppercase}
-
-/* #43 Reference Replica */
-.ref-shell{background:linear-gradient(180deg,#dff5f3 0%,#eef8ef 52%,#f3f4f7 100%);padding:14px;border-radius:28px}.ref-card{background:#fff;border-radius:28px;padding:24px;margin:14px 0;box-shadow:0 3px 10px rgba(22,47,66,.03)}.ref-title{font-size:25px;font-weight:950;letter-spacing:-.04em;color:#0b0f14}.ref-chip-row{display:flex;gap:10px;overflow:hidden;margin-top:18px}.ref-chip{white-space:nowrap;border:1px solid rgba(15,23,42,.12);border-radius:999px;padding:10px 14px;font-size:13px;font-weight:750;background:#fff}.ref-chip.active{border:2px solid #111827;color:#111827}.ref-soft{background:#fafafa;border-radius:18px;padding:20px;margin-top:18px}.ref-kpi-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ref-index{background:#fff;border-radius:24px;padding:20px}.ref-index .label{font-size:14px;color:#6b7280}.ref-index .value{font-size:30px;font-weight:700;margin-top:8px}.ref-index .delta{font-size:16px;font-weight:700;margin-top:6px;color:#e5484d}.ref-mini{height:54px;border-bottom:1px dashed #b8c0ca;margin:10px 0 8px;position:relative}.ref-mini:after{content:"";position:absolute;left:12%;right:18%;top:34px;height:2px;background:linear-gradient(90deg,#aab2bd 0 45%,#e5484d 45% 100%);transform:skewY(-8deg)}
-
-/* #44 Brokerage Clean */
-.b44{background:#fff;border-radius:22px;padding:20px;border:1px solid rgba(91,122,153,.12)}.b44 h3{font-size:22px;margin:0 0 16px}.b44-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.b44-item{padding:14px 0;border-top:1px solid rgba(15,23,42,.08)}.b44-item .l{font-size:11px;color:#7b8794}.b44-item .v{font-size:26px;font-weight:800;margin-top:3px}.b44-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-top:1px solid rgba(15,23,42,.08)}.b44-row .name{font-size:18px;font-weight:850}.b44-row .meta{font-size:11px;color:#8a94a1}.b44-row .right{text-align:right}.b44-row .price{font-size:20px;font-weight:800}.b44-row .rate{font-size:13px;font-weight:800;color:#e5484d}
-
-/* #45 Editorial Cards */
-.b45{background:#f8fafc;border-radius:18px;padding:18px}.b45-head{font-size:28px;font-weight:950;line-height:1.05}.b45-sub{font-size:12px;color:#7c8796;margin-top:6px}.b45-list{margin-top:16px}.b45-line{display:grid;grid-template-columns:76px 1fr 90px;gap:12px;align-items:start;padding:14px 0;border-top:1px solid #e5e7eb}.b45-line .time{font-size:12px;font-weight:850}.b45-line .event{font-size:16px;font-weight:750}.b45-line .badge{font-size:10px;font-weight:900;padding:4px 7px;border-radius:999px;background:#111827;color:#fff;text-align:center}
-
-/* #46 Data Dense */
-.b46{background:#0b1219;color:#e8eef4;border-radius:12px;padding:16px}.b46-title{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:900;letter-spacing:.08em}.b46-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;margin-top:10px}.b46-cell{border:1px solid #243241;padding:9px;border-radius:6px}.b46-cell .l{font-size:8px;color:#8fa0af}.b46-cell .v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:850;margin-top:3px}.b46-cell .d{font-size:9px;color:#9dd7bd;margin-top:3px}
-
-/* #47 ADE Hybrid */
-.b47{background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(227,242,255,.84));border:1px solid rgba(47,128,237,.16);border-radius:26px;padding:22px;box-shadow:0 12px 28px rgba(47,128,237,.08)}.b47-top{display:flex;justify-content:space-between;align-items:flex-end}.b47-title{font-size:24px;font-weight:950}.b47-tag{font-size:10px;font-weight:900;padding:5px 9px;border-radius:999px;background:#0b1f33;color:#fff}.b47-grid{display:grid;grid-template-columns:1.4fr repeat(4,1fr);gap:10px;margin-top:16px}.b47-hero{background:#0b1f33;color:#fff;border-radius:18px;padding:16px}.b47-hero .l{font-size:9px;opacity:.65}.b47-hero .v{font-size:34px;font-weight:950;margin-top:5px}.b47-mini{background:rgba(255,255,255,.8);border-radius:16px;padding:14px}.b47-mini .l{font-size:9px;color:#64748b}.b47-mini .v{font-size:20px;font-weight:850;margin-top:4px}
-
-/* #48 Mobile Investment Feed */
-.b48{background:#fff;border-radius:28px;padding:22px}.b48-title{font-size:24px;font-weight:950}.b48-tabs{display:flex;gap:8px;margin:14px 0}.b48-tab{padding:9px 13px;border-radius:999px;border:1px solid #d9dee5;font-size:12px;font-weight:750}.b48-tab.active{border:2px solid #111827}.b48-card{background:#fafafa;border-radius:18px;padding:18px;margin-top:12px}.b48-card .headline{font-size:18px;font-weight:900}.b48-card .body{font-size:14px;line-height:1.55;color:#4b5563;margin-top:10px}.b48-list{margin-top:12px}.b48-list .row{display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid #eceff3}.b48-list .row .left{font-size:14px;font-weight:750}.b48-list .row .right{font-size:14px;font-weight:850;color:#e5484d}
+.ade-board-shell{background:linear-gradient(180deg,#dff5f3 0%,#eef8ef 48%,#f4f6f8 100%);padding:16px;border-radius:30px}
+.ade-board-head{display:flex;justify-content:space-between;align-items:flex-end;margin:4px 2px 14px}.ade-board-title{font-size:28px;font-weight:950;letter-spacing:-.045em;color:#0b0f14}.ade-board-sub{font-size:12px;color:#7b8794;margin-top:5px}
+.ade-section-card{background:#fff;border-radius:28px;padding:24px;margin:14px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
+.ade-section-title{font-size:24px;font-weight:950;letter-spacing:-.04em;color:#0b0f14}.ade-section-sub{font-size:12px;color:#8a94a1;margin-top:5px}
+.ade-market-strip{position:sticky;top:3.35rem;z-index:930;background:rgba(223,245,243,.96);backdrop-filter:blur(18px) saturate(1.15);padding:8px 0 10px;border-bottom:1px solid rgba(91,122,153,.14)}
+.ade-index-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ade-index-card{background:#fff;border-radius:22px;padding:18px;border:1px solid rgba(15,23,42,.07)}.ade-index-card .label{font-size:12px;color:#7b8794;font-weight:700}.ade-index-card .value{font-size:28px;font-weight:800;letter-spacing:-.04em;margin-top:7px;color:#101418}.ade-index-card .delta{font-size:14px;font-weight:800;margin-top:5px}.ade-index-card .mini{height:34px;border-bottom:1px dashed #c3cbd4;margin-top:8px;position:relative}.ade-index-card .mini:after{content:"";position:absolute;left:10%;right:16%;top:22px;height:2px;background:linear-gradient(90deg,#aab2bd 0 48%,#e5484d 48% 100%);transform:skewY(-7deg)}
+.ade-portfolio-grid{display:grid;grid-template-columns:1.45fr repeat(4,1fr);gap:12px;margin-top:18px}.ade-asset-hero{background:#101922;color:white;border-radius:20px;padding:18px}.ade-asset-hero .l{font-size:10px;opacity:.65;letter-spacing:.08em}.ade-asset-hero .v{font-size:34px;font-weight:950;letter-spacing:-.05em;margin-top:6px}.ade-asset-mini{background:#fafafa;border-radius:18px;padding:16px;border:1px solid rgba(15,23,42,.06)}.ade-asset-mini .l{font-size:10px;color:#7b8794}.ade-asset-mini .v{font-size:20px;font-weight:850;margin-top:5px;letter-spacing:-.03em}.ade-asset-mini .s{font-size:11px;font-weight:750;margin-top:5px;color:#697586}
+.ade-holding-row{display:grid;grid-template-columns:1.5fr .85fr 1fr 1fr 1fr;gap:12px;align-items:center;padding:16px 0;border-top:1px solid #eceff3}.ade-holding-row:first-of-type{border-top:0}.ade-holding-row .name{font-size:18px;font-weight:900}.ade-holding-row .code{font-size:10px;color:#98a2ad;margin-top:2px}.ade-holding-row .k{font-size:9px;color:#99a3ae;font-weight:800}.ade-holding-row .v{font-size:14px;font-weight:800;margin-top:3px}.ade-holding-row .rate{font-size:18px;font-weight:950;text-align:right}.ade-holding-row .price{text-align:right;font-size:17px;font-weight:850}.ade-holding-row .go{text-align:right;font-size:18px;color:#a2abb5}
+.ade-event-list{margin-top:16px}.ade-event-row{display:grid;grid-template-columns:86px 1fr 90px;gap:14px;align-items:start;padding:15px 0;border-top:1px solid #eceff3}.ade-event-row:first-child{border-top:0}.ade-event-row .time{font-size:11px;font-weight:850;color:#4b5563}.ade-event-row .event{font-size:16px;font-weight:780;line-height:1.35}.ade-event-row .meta{font-size:10px;color:#9aa3ad;margin-top:4px}.ade-event-row .badge{font-size:10px;font-weight:900;padding:5px 8px;border-radius:999px;background:#111827;color:#fff;text-align:center}
+.ade-sector-chip-row{display:flex;gap:9px;overflow:hidden;margin-top:16px}.ade-sector-chip{white-space:nowrap;border:1px solid #dbe1e7;border-radius:999px;padding:9px 13px;font-size:12px;font-weight:800;background:#fff}.ade-sector-list{margin-top:12px}.ade-sector-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-top:1px solid #eceff3}.ade-sector-row .name{font-size:15px;font-weight:850}.ade-sector-row .rate{font-size:15px;font-weight:900}.ade-source-note{font-size:10px;color:#9aa3ad;margin-top:8px}
+@media(max-width:900px){.ade-index-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ade-portfolio-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.ade-asset-hero{grid-column:1/-1}.ade-holding-row{grid-template-columns:1.5fr 1fr 1fr}.ade-holding-row .hide-mobile{display:none}.ade-event-row{grid-template-columns:76px 1fr 74px}}
 </style>
 """
 
@@ -53,6 +44,14 @@ def _text(row: dict[str, Any], *keys: str) -> str:
         if value not in (None, ""):
             return str(value)
     return ""
+
+
+def _event_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    preferred = ["일시(KST)", "국가", "구분", "이벤트", "중요도", "출처", "비고"]
+    return frame[[column for column in preferred if column in frame.columns]]
 
 
 def _load_overview_data(base_app: Any, refresh: bool):
@@ -77,88 +76,79 @@ def _metric_value(metrics: dict[str, Any], key: str) -> tuple[str, str, str]:
     return label, value, delta
 
 
-def _render_43_reference(metrics: dict[str, Any], account: dict[str, Any] | None, positions: list[dict[str, Any]], important: list[dict[str, Any]]) -> None:
-    k1 = _metric_value(metrics, "kospi")
-    k2 = _metric_value(metrics, "kosdaq")
-    total = float((account or {}).get("total_assets") or 0)
-    cash = float((account or {}).get("cash") or 0)
-    pnl = float((account or {}).get("pnl") or 0)
-    pos = positions[0] if positions else {}
-    pos_name = _text(pos, "name", "ticker") or "보유종목"
-    pos_rate = _number(pos, "pnl_rate")
-    event = important[0] if important else {}
-    st.markdown('<div class="design-section-label">#43 Reference Replica · 사진 구성 최대 재현</div>', unsafe_allow_html=True)
-    st.markdown(f'''<div class="ref-shell">
-      <div class="ref-kpi-grid">
-        <div class="ref-index"><div class="label">{k1[0]} · 실시간</div><div class="value">{k1[1]}</div><div class="delta">{k1[2]}</div><div class="ref-mini"></div></div>
-        <div class="ref-index"><div class="label">{k2[0]} · 실시간</div><div class="value">{k2[1]}</div><div class="delta">{k2[2]}</div><div class="ref-mini"></div></div>
-      </div>
-      <div class="ref-card"><div class="ref-title">내 투자 현황</div><div class="ref-chip-row"><div class="ref-chip active">총자산 ₩{total:,.0f}</div><div class="ref-chip">예수금 ₩{cash:,.0f}</div><div class="ref-chip">손익 ₩{pnl:+,.0f}</div></div><div class="ref-soft"><b>{pos_name}</b><br><br>보유 포지션 수익률 <b>{pos_rate:+.2f}%</b></div></div>
-      <div class="ref-card"><div class="ref-title">주요 이벤트</div><div class="ref-chip-row"><div class="ref-chip active">{str(event.get('일시(KST)') or '-')}</div><div class="ref-chip">{str(event.get('국가') or '-')}</div></div><div class="ref-soft">{str(event.get('이벤트') or event.get('구분') or '표시할 주요 이벤트가 없습니다.')}</div></div>
-    </div>''', unsafe_allow_html=True)
-
-
-def _render_44_brokerage(account: dict[str, Any] | None, positions: list[dict[str, Any]]) -> None:
-    total = float((account or {}).get("total_assets") or 0)
-    cash = float((account or {}).get("cash") or 0)
-    evaluation = float((account or {}).get("evaluation_amount") or 0)
-    pnl = float((account or {}).get("pnl") or 0)
-    st.markdown('<div class="design-section-label">#44 Brokerage Clean · 증권사 계좌요약형</div>', unsafe_allow_html=True)
-    html = f'<div class="b44"><h3>내 투자</h3><div class="b44-grid"><div class="b44-item"><div class="l">총자산</div><div class="v">₩{total:,.0f}</div></div><div class="b44-item"><div class="l">예수금</div><div class="v">₩{cash:,.0f}</div></div><div class="b44-item"><div class="l">평가금액</div><div class="v">₩{evaluation:,.0f}</div></div></div>'
-    for row in positions[:3]:
-        name = _text(row, "name", "ticker")
-        ticker = _text(row, "ticker")
-        price = _number(row, "current_price")
-        rate = _number(row, "pnl_rate")
-        html += f'<div class="b44-row"><div><div class="name">{name}</div><div class="meta">{ticker}</div></div><div class="right"><div class="price">₩{price:,.0f}</div><div class="rate">{rate:+.2f}%</div></div></div>'
-    html += f'<div class="b44-row"><div class="name">평가손익</div><div class="right"><div class="price">₩{pnl:+,.0f}</div></div></div></div>'
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def _render_45_editorial(important: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="design-section-label">#45 Editorial Cards · 이벤트 중심 편집형</div>', unsafe_allow_html=True)
-    html = '<div class="b45"><div class="b45-head">오늘 시장에서<br>봐야 할 것</div><div class="b45-sub">중요 이벤트만 크게 읽는 구성</div><div class="b45-list">'
-    for row in important[:4]:
-        html += f'<div class="b45-line"><div class="time">{str(row.get("일시(KST)") or "-")}</div><div class="event">{str(row.get("이벤트") or row.get("구분") or "-")}</div><div class="badge">{str(row.get("중요도") or "-")}</div></div>'
-    if not important:
-        html += '<div class="b45-line"><div class="time">-</div><div class="event">표시할 주요 이벤트가 없습니다.</div><div class="badge">-</div></div>'
-    html += '</div></div>'
-    st.markdown(html, unsafe_allow_html=True)
-
-
-def _render_46_dense(metrics: dict[str, Any]) -> None:
-    st.markdown('<div class="design-section-label">#46 Data Dense · 고밀도 터미널형</div>', unsafe_allow_html=True)
+def _render_market_strip(metrics: dict[str, Any]) -> None:
     ordered = ["kospi", "kosdaq", "sp500", "nasdaq", "usdkrw", "vix"]
-    cells = []
+    cards = []
     for key in ordered:
         label, value, delta = _metric_value(metrics, key)
-        cells.append(f'<div class="b46-cell"><div class="l">{label}</div><div class="v">{value}</div><div class="d">{delta}</div></div>')
-    st.markdown('<div class="b46"><div class="b46-title">ADE / MARKET SNAPSHOT</div><div class="b46-grid">'+''.join(cells)+'</div></div>', unsafe_allow_html=True)
+        cards.append(f'<div class="ade-index-card"><div class="label">{label} · 실시간</div><div class="value">{value}</div><div class="delta">{delta}</div><div class="mini"></div></div>')
+    st.markdown('<div class="ade-market-strip"><div class="ade-index-grid">' + ''.join(cards) + '</div></div>', unsafe_allow_html=True)
 
 
-def _render_47_hybrid(account: dict[str, Any] | None) -> None:
+def _render_portfolio_summary(account: dict[str, Any] | None, positions: list[dict[str, Any]]) -> None:
     total = float((account or {}).get("total_assets") or 0)
     cash = float((account or {}).get("cash") or 0)
     evaluation = float((account or {}).get("evaluation_amount") or 0)
     pnl = float((account or {}).get("pnl") or 0)
-    count = int((account or {}).get("position_count") or 0)
-    st.markdown('<div class="design-section-label">#47 ADE Hybrid · 사진 구조 + ADE 전문형</div>', unsafe_allow_html=True)
-    st.markdown(f'''<div class="b47"><div class="b47-top"><div class="b47-title">Portfolio Command</div><div class="b47-tag">ADE</div></div><div class="b47-grid"><div class="b47-hero"><div class="l">총자산</div><div class="v">₩{total:,.0f}</div></div><div class="b47-mini"><div class="l">예수금</div><div class="v">₩{cash:,.0f}</div></div><div class="b47-mini"><div class="l">평가금액</div><div class="v">₩{evaluation:,.0f}</div></div><div class="b47-mini"><div class="l">평가손익</div><div class="v">₩{pnl:+,.0f}</div></div><div class="b47-mini"><div class="l">보유종목</div><div class="v">{count}개</div></div></div></div>''', unsafe_allow_html=True)
+    if total <= 0:
+        total = cash + evaluation
+    invested = evaluation - pnl
+    pnl_rate = pnl / invested * 100 if invested > 0 else 0.0
+    count = int((account or {}).get("position_count") or len(positions))
+    st.markdown(f'''<div class="ade-section-card"><div class="ade-section-title">내 투자 현황</div><div class="ade-section-sub">계좌 전체 상태를 먼저 보고, 아래 보유종목에서 상세 판단으로 이동합니다.</div><div class="ade-portfolio-grid"><div class="ade-asset-hero"><div class="l">TOTAL ASSETS</div><div class="v">₩{total:,.0f}</div></div><div class="ade-asset-mini"><div class="l">예수금</div><div class="v">₩{cash:,.0f}</div></div><div class="ade-asset-mini"><div class="l">평가금액</div><div class="v">₩{evaluation:,.0f}</div></div><div class="ade-asset-mini"><div class="l">평가손익</div><div class="v">₩{pnl:+,.0f}</div><div class="s">{pnl_rate:+.2f}%</div></div><div class="ade-asset-mini"><div class="l">보유종목</div><div class="v">{count}개</div></div></div></div>''', unsafe_allow_html=True)
 
 
-def _render_48_feed(positions: list[dict[str, Any]], sectors: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="design-section-label">#48 Mobile Investment Feed · 모바일 발견형</div>', unsafe_allow_html=True)
-    html = '<div class="b48"><div class="b48-title">발견</div><div class="b48-tabs"><div class="b48-tab active">보유종목</div><div class="b48-tab">시장</div><div class="b48-tab">업종</div></div><div class="b48-card">'
-    if positions:
-        row = positions[0]
-        html += f'<div class="headline">{_text(row,"name","ticker")}</div><div class="body">현재가 ₩{_number(row,"current_price"):,.0f} · 수익률 {_number(row,"pnl_rate"):+.2f}%</div>'
+def _render_holdings(positions: list[dict[str, Any]]) -> None:
+    st.markdown('<div class="ade-section-card"><div class="ade-section-title">보유종목</div><div class="ade-section-sub">가격·수익률을 한눈에 보고 종목을 눌러 상세 분석으로 들어갑니다.</div>', unsafe_allow_html=True)
+    if not positions:
+        st.markdown('<div style="padding:18px 0;color:#8a94a1">보유종목이 없습니다.</div></div>', unsafe_allow_html=True)
+        return
+    for row in positions:
+        ticker = _text(row, "ticker")
+        name = _text(row, "name", "ticker")
+        qty = int(_number(row, "quantity"))
+        avg = _number(row, "average_price")
+        current = _number(row, "current_price")
+        evaluation = _number(row, "evaluation_amount")
+        rate = _number(row, "pnl_rate")
+        st.markdown(f'''<div class="ade-holding-row"><div><div class="name">{name}</div><div class="code">{ticker}</div></div><div class="hide-mobile"><div class="k">보유</div><div class="v">{qty:,}주</div></div><div class="hide-mobile"><div class="k">평단</div><div class="v">₩{avg:,.0f}</div></div><div><div class="k">현재가</div><div class="price">₩{current:,.0f}</div></div><div><div class="k">수익률</div><div class="rate">{rate:+.2f}%</div></div></div>''', unsafe_allow_html=True)
+        if st.button(f"{name} 상세보기", key=f"overview_holding_{ticker}", use_container_width=True):
+            st.session_state.ade_portfolio_ticker = ticker
+            st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+def _render_events(important: list[dict[str, Any]], rows: list[dict[str, Any]]) -> None:
+    st.markdown('<div class="ade-section-card"><div class="ade-section-title">오늘 시장에서 봐야 할 것</div><div class="ade-section-sub">#45 Editorial Cards를 기준으로 중요한 이벤트만 크게 읽도록 정리했습니다.</div><div class="ade-event-list">', unsafe_allow_html=True)
+    if important:
+        for row in important[:5]:
+            when = str(row.get("일시(KST)") or "-")
+            country = str(row.get("국가") or "-")
+            event = str(row.get("이벤트") or row.get("구분") or "-")
+            importance = str(row.get("중요도") or "-")
+            source = str(row.get("출처") or "")
+            st.markdown(f'<div class="ade-event-row"><div class="time">{when}<div class="meta">{country}</div></div><div class="event">{event}<div class="meta">{source}</div></div><div class="badge">{importance}</div></div>', unsafe_allow_html=True)
     else:
-        html += '<div class="headline">보유종목 없음</div><div class="body">계좌에 보유 중인 종목이 없습니다.</div>'
-    html += '<div class="b48-list">'
-    for row in sectors[:3]:
-        html += f'<div class="row"><div class="left">{str(row.get("sector") or "-")}</div><div class="right">{_number(row,"change_rate"):+.2f}%</div></div>'
-    html += '</div></div></div>'
-    st.markdown(html, unsafe_allow_html=True)
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 주요 이벤트가 없습니다.</div>', unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
+    with st.expander("향후 90일 전체 일정", expanded=False):
+        if rows:
+            st.dataframe(_event_frame(rows), hide_index=True, use_container_width=True)
+        else:
+            st.info("표시할 전체 이벤트가 없습니다.")
+
+
+def _render_sectors(sectors: list[dict[str, Any]]) -> None:
+    st.markdown('<div class="ade-section-card"><div class="ade-section-title">오늘의 시장 흐름</div><div class="ade-section-sub">상위 업종은 pill로 먼저 보고, 아래에서 수익률 순으로 확인합니다.</div>', unsafe_allow_html=True)
+    if sectors:
+        chips = ''.join(f'<div class="ade-sector-chip">{str(row.get("sector") or "-")} {_number(row,"change_rate"):+.2f}%</div>' for row in sectors[:4])
+        st.markdown('<div class="ade-sector-chip-row">'+chips+'</div><div class="ade-sector-list">', unsafe_allow_html=True)
+        for row in sectors[:6]:
+            st.markdown(f'<div class="ade-sector-row"><div class="name">{str(row.get("sector") or "-")}</div><div class="rate">{_number(row,"change_rate"):+.2f}%</div></div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">업종 등락 데이터를 아직 가져오지 못했습니다.</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _render_position_detail(base_app: Any, row: dict[str, Any]) -> None:
@@ -239,8 +229,7 @@ def _render_position_detail(base_app: Any, row: dict[str, Any]) -> None:
 
 
 def render_overview_workspace(base_app: Any) -> None:
-    st.markdown(_STICKY_KPI_STYLE, unsafe_allow_html=True)
-    st.markdown("### 상황종합판 · UI TEST 43–48")
+    st.markdown(_OVERVIEW_STYLE, unsafe_allow_html=True)
     refresh_cols = st.columns([5, 1])
     refresh = refresh_cols[1].button("새로고침", key="overview_workspace_refresh", use_container_width=True)
     metrics, account, positions, important, rows, sectors, warnings = _load_overview_data(base_app, refresh)
@@ -253,27 +242,13 @@ def render_overview_workspace(base_app: Any) -> None:
             return
         st.session_state.ade_portfolio_ticker = None
 
-    _render_43_reference(metrics, account, positions, important)
-    _render_44_brokerage(account, positions)
-    _render_45_editorial(important)
-    _render_46_dense(metrics)
-    _render_47_hybrid(account)
-    _render_48_feed(positions, sectors)
-
-    st.markdown("### 보유종목 선택")
-    for row in positions:
-        ticker = _text(row, "ticker")
-        name = _text(row, "name", "ticker")
-        if st.button(f"{name} · {ticker}", key=f"ui_test_holding_{ticker}", use_container_width=True):
-            st.session_state.ade_portfolio_ticker = ticker
-            st.rerun()
-
-    with st.expander("향후 90일 전체 일정", expanded=False):
-        if rows:
-            frame = pd.DataFrame(rows)
-            st.dataframe(frame, hide_index=True, use_container_width=True)
-        else:
-            st.info("표시할 전체 이벤트가 없습니다.")
+    st.markdown('<div class="ade-board-shell"><div class="ade-board-head"><div><div class="ade-board-title">상황종합판</div><div class="ade-board-sub">#43 Reference Replica + #45 Editorial Cards 통합안</div></div></div>', unsafe_allow_html=True)
+    _render_market_strip(metrics)
+    _render_portfolio_summary(account, positions)
+    _render_holdings(positions)
+    _render_events(important, rows)
+    _render_sectors(sectors)
+    st.markdown('</div>', unsafe_allow_html=True)
 
     for warning in warnings:
         st.caption(str(warning))

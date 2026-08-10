@@ -12,23 +12,26 @@ from markets.profiles import get_market_profile
 
 _STICKY_KPI_STYLE = """
 <style>
-.ade-market-strip{position:sticky;top:3.35rem;z-index:930;padding:.55rem 0 .7rem;background:rgba(247,251,255,.94);backdrop-filter:blur(18px) saturate(1.2);border-bottom:1px solid rgba(91,122,153,.18)}
-.ade-design-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px}.ade-design-card{min-height:108px;padding:12px 13px;box-sizing:border-box}.ade-design-no{font-size:9px;font-weight:900;letter-spacing:.08em;opacity:.62}.ade-design-title{font-size:8px;font-weight:800;opacity:.58;margin-top:2px}.ade-design-label{margin-top:8px}.ade-design-value{line-height:1;margin-top:5px}.ade-design-delta{margin-top:7px}
-.d29{background:linear-gradient(135deg,#10253b,#1e5b8d);color:white;border-radius:18px}.d29 .ade-design-label{font-size:9px;font-weight:500;letter-spacing:.18em}.d29 .ade-design-value{font-size:36px;font-weight:950;letter-spacing:-.06em}.d29 .ade-design-delta{font-size:9px;font-weight:700}
-.d30{background:#fff;color:#111827;border-radius:2px;border-bottom:4px solid #111827}.d30 .ade-design-label{font-size:13px;font-weight:900}.d30 .ade-design-value{font-size:21px;font-weight:300}.d30 .ade-design-delta{font-size:14px;font-weight:950}
-.d31{background:linear-gradient(180deg,#eef7ff,#fff);color:#16324f;border-radius:16px;border:1px solid rgba(47,128,237,.18)}.d31 .ade-design-label{font-size:8px;font-weight:900;text-transform:uppercase}.d31 .ade-design-value{font-size:27px;font-weight:800}.d31 .ade-design-delta{font-size:10px;font-weight:500}
-.d32{background:#05080d;color:#d7f7e8;border-radius:0;border:1px solid #1d2a36}.d32 .ade-design-label{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:8px;font-weight:700}.d32 .ade-design-value{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:900;letter-spacing:.02em}.d32 .ade-design-delta{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:800}
-.d33{background:#fdfdfd;color:#0b1f33;border-radius:22px;border:1px solid rgba(91,122,153,.12)}.d33 .ade-design-label{font-size:14px;font-weight:400}.d33 .ade-design-value{font-size:34px;font-weight:650;letter-spacing:-.07em}.d33 .ade-design-delta{font-size:8px;font-weight:600;opacity:.5}
-.d34{background:linear-gradient(135deg,#fff1f2,#fff);color:#7f1d1d;border-radius:28px;border:1px solid rgba(225,29,72,.16)}.d34 .ade-design-label{font-size:10px;font-weight:950}.d34 .ade-design-value{font-size:24px;font-weight:950}.d34 .ade-design-delta{font-size:15px;font-weight:950;display:inline-block;padding:3px 8px;border-radius:999px;background:rgba(225,29,72,.08)}
-.portfolio-grid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}.p-card{min-height:120px;padding:15px}.p-card .n{font-size:9px;font-weight:900;opacity:.62}.p-card .t{font-size:8px;font-weight:800;opacity:.58;margin-bottom:8px}.p-card .l{opacity:.7}.p-card .v{margin-top:5px;letter-spacing:-.04em}.p-card .s{margin-top:7px}
-.p35{background:#07111f;color:white;border-radius:24px}.p35 .l{font-size:8px;font-weight:500;letter-spacing:.16em}.p35 .v{font-size:38px;font-weight:950}.p35 .s{font-size:9px;font-weight:700}
-.p36{background:#fff;border-left:6px solid #2f80ed;border-radius:8px}.p36 .l{font-size:13px;font-weight:900}.p36 .v{font-size:22px;font-weight:500}.p36 .s{font-size:10px;font-weight:600}
-.p37{background:linear-gradient(135deg,rgba(255,255,255,.9),rgba(220,239,255,.58));border:1px solid rgba(91,122,153,.16);border-radius:26px}.p37 .l{font-size:9px;font-weight:800}.p37 .v{font-size:28px;font-weight:850}.p37 .s{font-size:8px;font-weight:500}
-.p38{background:#fff7ed;border-radius:14px;border:1px solid rgba(249,115,22,.22)}.p38 .l{font-size:11px;font-weight:900;color:#9a3412}.p38 .v{font-size:31px;font-weight:950;color:#9a3412}.p38 .s{font-size:15px;font-weight:950}
-.p39{background:#f8fafc;border-radius:2px;border-top:1px solid #94a3b8;border-bottom:1px solid #94a3b8}.p39 .l{font-size:8px;font-weight:900;letter-spacing:.12em}.p39 .v{font-size:40px;font-weight:250}.p39 .s{font-size:9px;font-weight:600}
-.holding-card{display:grid;grid-template-columns:1.4fr .8fr .95fr 1fr 1fr;gap:14px;align-items:center;padding:15px 16px;margin:8px 0;background:#08111c;color:white;border-radius:18px;border:1px solid #223247}.holding-card .name{font-size:24px;font-weight:950}.holding-card .code{font-size:8px;opacity:.5;letter-spacing:.14em}.holding-card .k{font-size:8px;font-weight:700;opacity:.5}.holding-card .v{font-size:13px;font-weight:800;margin-top:2px}.holding-card .rate{font-size:23px;font-weight:950}
-.event-card{display:grid;grid-template-columns:74px 64px 1fr 96px;gap:12px;align-items:center;padding:13px 14px;margin:7px 0;border-left:4px solid #2f80ed;background:linear-gradient(90deg,#f7fbff,#fff);border-radius:6px}.event-card .date{font-size:9px;font-weight:950;line-height:1.35}.event-card .country{font-size:8px;font-weight:900;opacity:.62;text-transform:uppercase}.event-card .event{font-size:16px;font-weight:800}.event-card .importance{font-size:12px;font-weight:950;padding:5px 8px;border-radius:6px;background:#0b1f33;color:#fff;text-align:center}
-.sector-card{display:grid;grid-template-columns:1.5fr .7fr 1fr .8fr;gap:12px;align-items:center;padding:12px 14px;margin:7px 0;border-radius:16px;background:#fff;border:1px solid rgba(91,122,153,.16)}.sector-card .name{font-size:17px;font-weight:900}.sector-card .rate{font-size:14px;font-weight:950}.sector-card .meta{font-size:8px;opacity:.6}.design-section-label{margin:18px 0 8px;font-size:10px;font-weight:950;letter-spacing:.12em;color:#5f7287;text-transform:uppercase}
+.ade-market-strip{position:sticky;top:3.35rem;z-index:930;padding:.55rem 0 .7rem;background:rgba(236,249,247,.96);backdrop-filter:blur(18px) saturate(1.2);border-bottom:1px solid rgba(91,122,153,.18)}
+.design-section-label{margin:18px 0 8px;font-size:10px;font-weight:950;letter-spacing:.12em;color:#5f7287;text-transform:uppercase}
+
+/* #43 Reference Replica */
+.ref-shell{background:linear-gradient(180deg,#dff5f3 0%,#eef8ef 52%,#f3f4f7 100%);padding:14px;border-radius:28px}.ref-card{background:#fff;border-radius:28px;padding:24px;margin:14px 0;box-shadow:0 3px 10px rgba(22,47,66,.03)}.ref-title{font-size:25px;font-weight:950;letter-spacing:-.04em;color:#0b0f14}.ref-chip-row{display:flex;gap:10px;overflow:hidden;margin-top:18px}.ref-chip{white-space:nowrap;border:1px solid rgba(15,23,42,.12);border-radius:999px;padding:10px 14px;font-size:13px;font-weight:750;background:#fff}.ref-chip.active{border:2px solid #111827;color:#111827}.ref-soft{background:#fafafa;border-radius:18px;padding:20px;margin-top:18px}.ref-kpi-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ref-index{background:#fff;border-radius:24px;padding:20px}.ref-index .label{font-size:14px;color:#6b7280}.ref-index .value{font-size:30px;font-weight:700;margin-top:8px}.ref-index .delta{font-size:16px;font-weight:700;margin-top:6px;color:#e5484d}.ref-mini{height:54px;border-bottom:1px dashed #b8c0ca;margin:10px 0 8px;position:relative}.ref-mini:after{content:"";position:absolute;left:12%;right:18%;top:34px;height:2px;background:linear-gradient(90deg,#aab2bd 0 45%,#e5484d 45% 100%);transform:skewY(-8deg)}
+
+/* #44 Brokerage Clean */
+.b44{background:#fff;border-radius:22px;padding:20px;border:1px solid rgba(91,122,153,.12)}.b44 h3{font-size:22px;margin:0 0 16px}.b44-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.b44-item{padding:14px 0;border-top:1px solid rgba(15,23,42,.08)}.b44-item .l{font-size:11px;color:#7b8794}.b44-item .v{font-size:26px;font-weight:800;margin-top:3px}.b44-row{display:flex;justify-content:space-between;align-items:center;padding:14px 0;border-top:1px solid rgba(15,23,42,.08)}.b44-row .name{font-size:18px;font-weight:850}.b44-row .meta{font-size:11px;color:#8a94a1}.b44-row .right{text-align:right}.b44-row .price{font-size:20px;font-weight:800}.b44-row .rate{font-size:13px;font-weight:800;color:#e5484d}
+
+/* #45 Editorial Cards */
+.b45{background:#f8fafc;border-radius:18px;padding:18px}.b45-head{font-size:28px;font-weight:950;line-height:1.05}.b45-sub{font-size:12px;color:#7c8796;margin-top:6px}.b45-list{margin-top:16px}.b45-line{display:grid;grid-template-columns:76px 1fr 90px;gap:12px;align-items:start;padding:14px 0;border-top:1px solid #e5e7eb}.b45-line .time{font-size:12px;font-weight:850}.b45-line .event{font-size:16px;font-weight:750}.b45-line .badge{font-size:10px;font-weight:900;padding:4px 7px;border-radius:999px;background:#111827;color:#fff;text-align:center}
+
+/* #46 Data Dense */
+.b46{background:#0b1219;color:#e8eef4;border-radius:12px;padding:16px}.b46-title{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;font-weight:900;letter-spacing:.08em}.b46-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px;margin-top:10px}.b46-cell{border:1px solid #243241;padding:9px;border-radius:6px}.b46-cell .l{font-size:8px;color:#8fa0af}.b46-cell .v{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:18px;font-weight:850;margin-top:3px}.b46-cell .d{font-size:9px;color:#9dd7bd;margin-top:3px}
+
+/* #47 ADE Hybrid */
+.b47{background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(227,242,255,.84));border:1px solid rgba(47,128,237,.16);border-radius:26px;padding:22px;box-shadow:0 12px 28px rgba(47,128,237,.08)}.b47-top{display:flex;justify-content:space-between;align-items:flex-end}.b47-title{font-size:24px;font-weight:950}.b47-tag{font-size:10px;font-weight:900;padding:5px 9px;border-radius:999px;background:#0b1f33;color:#fff}.b47-grid{display:grid;grid-template-columns:1.4fr repeat(4,1fr);gap:10px;margin-top:16px}.b47-hero{background:#0b1f33;color:#fff;border-radius:18px;padding:16px}.b47-hero .l{font-size:9px;opacity:.65}.b47-hero .v{font-size:34px;font-weight:950;margin-top:5px}.b47-mini{background:rgba(255,255,255,.8);border-radius:16px;padding:14px}.b47-mini .l{font-size:9px;color:#64748b}.b47-mini .v{font-size:20px;font-weight:850;margin-top:4px}
+
+/* #48 Mobile Investment Feed */
+.b48{background:#fff;border-radius:28px;padding:22px}.b48-title{font-size:24px;font-weight:950}.b48-tabs{display:flex;gap:8px;margin:14px 0}.b48-tab{padding:9px 13px;border-radius:999px;border:1px solid #d9dee5;font-size:12px;font-weight:750}.b48-tab.active{border:2px solid #111827}.b48-card{background:#fafafa;border-radius:18px;padding:18px;margin-top:12px}.b48-card .headline{font-size:18px;font-weight:900}.b48-card .body{font-size:14px;line-height:1.55;color:#4b5563;margin-top:10px}.b48-list{margin-top:12px}.b48-list .row{display:flex;justify-content:space-between;padding:10px 0;border-top:1px solid #eceff3}.b48-list .row .left{font-size:14px;font-weight:750}.b48-list .row .right{font-size:14px;font-weight:850;color:#e5484d}
 </style>
 """
 
@@ -52,70 +55,110 @@ def _text(row: dict[str, Any], *keys: str) -> str:
     return ""
 
 
-def _render_market_kpis(refresh: bool) -> None:
-    metrics, warning = load_market_overview(refresh=refresh)
-    ordered = [
-        ("kospi", 29, "Mega Index"),
-        ("kosdaq", 30, "Delta First"),
-        ("sp500", 31, "Research Compact"),
-        ("nasdaq", 32, "Micro Terminal"),
-        ("usdkrw", 33, "FX Display"),
-        ("vix", 34, "Risk Emphasis"),
-    ]
-    cards = []
-    for key, no, title in ordered:
-        metric = metrics.get(key)
-        label = metric.label if metric else key.upper()
-        value = "조회 실패" if metric is None or metric.value is None else f"{metric.value:,.2f}"
-        delta = "-" if metric is None or metric.change_rate is None else f"{metric.change_rate:+.2f}%"
-        cards.append(f'<div class="ade-design-card d{no}"><div class="ade-design-no">#{no}</div><div class="ade-design-title">{title}</div><div class="ade-design-label">{label}</div><div class="ade-design-value">{value}</div><div class="ade-design-delta">{delta}</div></div>')
-    st.markdown('<div class="ade-market-strip"><div class="ade-design-grid">' + "".join(cards) + '</div></div>', unsafe_allow_html=True)
-    if warning:
-        st.caption(warning)
-
-
-def _event_frame(rows: list[dict[str, Any]]) -> pd.DataFrame:
-    if not rows:
-        return pd.DataFrame()
-    frame = pd.DataFrame(rows)
-    preferred = ["일시(KST)", "국가", "구분", "이벤트", "중요도", "출처", "비고"]
-    return frame[[column for column in preferred if column in frame.columns]]
-
-
-def _render_market_context(refresh: bool) -> None:
-    rows, warning = load_economic_calendar(days_ahead=90, refresh=refresh)
+def _load_overview_data(base_app: Any, refresh: bool):
+    metrics, metric_warning = load_market_overview(refresh=refresh)
+    rows, event_warning = load_economic_calendar(days_ahead=90, refresh=refresh)
     important = [row for row in rows if str(row.get("중요도") or "") in {"높음", "매우 높음"}]
-    st.markdown('<div class="design-section-label">#41 Event Focus · 주요 이벤트</div>', unsafe_allow_html=True)
-    if important:
-        for row in important[:5]:
-            date = str(row.get("일시(KST)") or "-")
-            country = str(row.get("국가") or "-")
-            event = str(row.get("이벤트") or row.get("구분") or "-")
-            importance = str(row.get("중요도") or "-")
-            st.markdown(f'<div class="event-card"><div class="date">{date}</div><div class="country">{country}</div><div class="event">{event}</div><div class="importance">{importance}</div></div>', unsafe_allow_html=True)
+    if refresh:
+        base_app._cached_kis_snapshot.clear()
+        account, positions, account_warning = base_app._kis_data(True)
     else:
-        st.info("표시할 주요 이벤트가 없습니다.")
-    if warning:
-        st.caption(warning)
-    with st.expander("향후 90일 전체 일정", expanded=False):
-        if rows:
-            st.dataframe(_event_frame(rows), hide_index=True, use_container_width=True)
-        else:
-            st.info("표시할 전체 이벤트가 없습니다.")
+        account, positions, account_warning = base_app._cached_kis_snapshot()
+    sectors, sector_warning = load_sector_strength(get_market_profile("kr").db_path, limit=6, refresh=refresh)
+    warnings = [w for w in [metric_warning, event_warning, account_warning, sector_warning] if w]
+    return metrics, account, positions, important, rows, sectors, warnings
 
-    st.markdown('<div class="design-section-label">#42 Sector Contrast · 국내 업종 등락 순위</div>', unsafe_allow_html=True)
-    sectors, sector_warning = load_sector_strength(get_market_profile("kr").db_path, limit=10, refresh=refresh)
-    if sectors:
-        for row in sectors:
-            sector = str(row.get("sector") or "-")
-            rate = _number(row, "change_rate")
-            turnover = _number(row, "turnover")
-            as_of = str(row.get("as_of") or "-")
-            st.markdown(f'<div class="sector-card"><div class="name">{sector}</div><div class="rate">{rate:+.2f}%</div><div class="meta">거래대금 {turnover:,.0f}</div><div class="meta">{as_of}</div></div>', unsafe_allow_html=True)
+
+def _metric_value(metrics: dict[str, Any], key: str) -> tuple[str, str, str]:
+    metric = metrics.get(key)
+    label = metric.label if metric else key.upper()
+    value = "조회 실패" if metric is None or metric.value is None else f"{metric.value:,.2f}"
+    delta = "-" if metric is None or metric.change_rate is None else f"{metric.change_rate:+.2f}%"
+    return label, value, delta
+
+
+def _render_43_reference(metrics: dict[str, Any], account: dict[str, Any] | None, positions: list[dict[str, Any]], important: list[dict[str, Any]]) -> None:
+    k1 = _metric_value(metrics, "kospi")
+    k2 = _metric_value(metrics, "kosdaq")
+    total = float((account or {}).get("total_assets") or 0)
+    cash = float((account or {}).get("cash") or 0)
+    pnl = float((account or {}).get("pnl") or 0)
+    pos = positions[0] if positions else {}
+    pos_name = _text(pos, "name", "ticker") or "보유종목"
+    pos_rate = _number(pos, "pnl_rate")
+    event = important[0] if important else {}
+    st.markdown('<div class="design-section-label">#43 Reference Replica · 사진 구성 최대 재현</div>', unsafe_allow_html=True)
+    st.markdown(f'''<div class="ref-shell">
+      <div class="ref-kpi-grid">
+        <div class="ref-index"><div class="label">{k1[0]} · 실시간</div><div class="value">{k1[1]}</div><div class="delta">{k1[2]}</div><div class="ref-mini"></div></div>
+        <div class="ref-index"><div class="label">{k2[0]} · 실시간</div><div class="value">{k2[1]}</div><div class="delta">{k2[2]}</div><div class="ref-mini"></div></div>
+      </div>
+      <div class="ref-card"><div class="ref-title">내 투자 현황</div><div class="ref-chip-row"><div class="ref-chip active">총자산 ₩{total:,.0f}</div><div class="ref-chip">예수금 ₩{cash:,.0f}</div><div class="ref-chip">손익 ₩{pnl:+,.0f}</div></div><div class="ref-soft"><b>{pos_name}</b><br><br>보유 포지션 수익률 <b>{pos_rate:+.2f}%</b></div></div>
+      <div class="ref-card"><div class="ref-title">주요 이벤트</div><div class="ref-chip-row"><div class="ref-chip active">{str(event.get('일시(KST)') or '-')}</div><div class="ref-chip">{str(event.get('국가') or '-')}</div></div><div class="ref-soft">{str(event.get('이벤트') or event.get('구분') or '표시할 주요 이벤트가 없습니다.')}</div></div>
+    </div>''', unsafe_allow_html=True)
+
+
+def _render_44_brokerage(account: dict[str, Any] | None, positions: list[dict[str, Any]]) -> None:
+    total = float((account or {}).get("total_assets") or 0)
+    cash = float((account or {}).get("cash") or 0)
+    evaluation = float((account or {}).get("evaluation_amount") or 0)
+    pnl = float((account or {}).get("pnl") or 0)
+    st.markdown('<div class="design-section-label">#44 Brokerage Clean · 증권사 계좌요약형</div>', unsafe_allow_html=True)
+    html = f'<div class="b44"><h3>내 투자</h3><div class="b44-grid"><div class="b44-item"><div class="l">총자산</div><div class="v">₩{total:,.0f}</div></div><div class="b44-item"><div class="l">예수금</div><div class="v">₩{cash:,.0f}</div></div><div class="b44-item"><div class="l">평가금액</div><div class="v">₩{evaluation:,.0f}</div></div></div>'
+    for row in positions[:3]:
+        name = _text(row, "name", "ticker")
+        ticker = _text(row, "ticker")
+        price = _number(row, "current_price")
+        rate = _number(row, "pnl_rate")
+        html += f'<div class="b44-row"><div><div class="name">{name}</div><div class="meta">{ticker}</div></div><div class="right"><div class="price">₩{price:,.0f}</div><div class="rate">{rate:+.2f}%</div></div></div>'
+    html += f'<div class="b44-row"><div class="name">평가손익</div><div class="right"><div class="price">₩{pnl:+,.0f}</div></div></div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _render_45_editorial(important: list[dict[str, Any]]) -> None:
+    st.markdown('<div class="design-section-label">#45 Editorial Cards · 이벤트 중심 편집형</div>', unsafe_allow_html=True)
+    html = '<div class="b45"><div class="b45-head">오늘 시장에서<br>봐야 할 것</div><div class="b45-sub">중요 이벤트만 크게 읽는 구성</div><div class="b45-list">'
+    for row in important[:4]:
+        html += f'<div class="b45-line"><div class="time">{str(row.get("일시(KST)") or "-")}</div><div class="event">{str(row.get("이벤트") or row.get("구분") or "-")}</div><div class="badge">{str(row.get("중요도") or "-")}</div></div>'
+    if not important:
+        html += '<div class="b45-line"><div class="time">-</div><div class="event">표시할 주요 이벤트가 없습니다.</div><div class="badge">-</div></div>'
+    html += '</div></div>'
+    st.markdown(html, unsafe_allow_html=True)
+
+
+def _render_46_dense(metrics: dict[str, Any]) -> None:
+    st.markdown('<div class="design-section-label">#46 Data Dense · 고밀도 터미널형</div>', unsafe_allow_html=True)
+    ordered = ["kospi", "kosdaq", "sp500", "nasdaq", "usdkrw", "vix"]
+    cells = []
+    for key in ordered:
+        label, value, delta = _metric_value(metrics, key)
+        cells.append(f'<div class="b46-cell"><div class="l">{label}</div><div class="v">{value}</div><div class="d">{delta}</div></div>')
+    st.markdown('<div class="b46"><div class="b46-title">ADE / MARKET SNAPSHOT</div><div class="b46-grid">'+''.join(cells)+'</div></div>', unsafe_allow_html=True)
+
+
+def _render_47_hybrid(account: dict[str, Any] | None) -> None:
+    total = float((account or {}).get("total_assets") or 0)
+    cash = float((account or {}).get("cash") or 0)
+    evaluation = float((account or {}).get("evaluation_amount") or 0)
+    pnl = float((account or {}).get("pnl") or 0)
+    count = int((account or {}).get("position_count") or 0)
+    st.markdown('<div class="design-section-label">#47 ADE Hybrid · 사진 구조 + ADE 전문형</div>', unsafe_allow_html=True)
+    st.markdown(f'''<div class="b47"><div class="b47-top"><div class="b47-title">Portfolio Command</div><div class="b47-tag">ADE</div></div><div class="b47-grid"><div class="b47-hero"><div class="l">총자산</div><div class="v">₩{total:,.0f}</div></div><div class="b47-mini"><div class="l">예수금</div><div class="v">₩{cash:,.0f}</div></div><div class="b47-mini"><div class="l">평가금액</div><div class="v">₩{evaluation:,.0f}</div></div><div class="b47-mini"><div class="l">평가손익</div><div class="v">₩{pnl:+,.0f}</div></div><div class="b47-mini"><div class="l">보유종목</div><div class="v">{count}개</div></div></div></div>''', unsafe_allow_html=True)
+
+
+def _render_48_feed(positions: list[dict[str, Any]], sectors: list[dict[str, Any]]) -> None:
+    st.markdown('<div class="design-section-label">#48 Mobile Investment Feed · 모바일 발견형</div>', unsafe_allow_html=True)
+    html = '<div class="b48"><div class="b48-title">발견</div><div class="b48-tabs"><div class="b48-tab active">보유종목</div><div class="b48-tab">시장</div><div class="b48-tab">업종</div></div><div class="b48-card">'
+    if positions:
+        row = positions[0]
+        html += f'<div class="headline">{_text(row,"name","ticker")}</div><div class="body">현재가 ₩{_number(row,"current_price"):,.0f} · 수익률 {_number(row,"pnl_rate"):+.2f}%</div>'
     else:
-        st.info("국내 업종 등락 데이터를 아직 가져오지 못했습니다.")
-    if sector_warning:
-        st.caption(sector_warning)
+        html += '<div class="headline">보유종목 없음</div><div class="body">계좌에 보유 중인 종목이 없습니다.</div>'
+    html += '<div class="b48-list">'
+    for row in sectors[:3]:
+        html += f'<div class="row"><div class="left">{str(row.get("sector") or "-")}</div><div class="right">{_number(row,"change_rate"):+.2f}%</div></div>'
+    html += '</div></div></div>'
+    st.markdown(html, unsafe_allow_html=True)
 
 
 def _render_position_detail(base_app: Any, row: dict[str, Any]) -> None:
@@ -195,16 +238,12 @@ def _render_position_detail(base_app: Any, row: dict[str, Any]) -> None:
         st.rerun()
 
 
-def _render_portfolio(base_app: Any, refresh: bool) -> None:
-    st.markdown("## 내 투자 현황")
-    if refresh:
-        base_app._cached_kis_snapshot.clear()
-        account, positions, error = base_app._kis_data(True)
-    else:
-        account, positions, error = base_app._cached_kis_snapshot()
-    if account is None:
-        st.info(error or "KIS 계좌 스냅샷이 없습니다.")
-        return
+def render_overview_workspace(base_app: Any) -> None:
+    st.markdown(_STICKY_KPI_STYLE, unsafe_allow_html=True)
+    st.markdown("### 상황종합판 · UI TEST 43–48")
+    refresh_cols = st.columns([5, 1])
+    refresh = refresh_cols[1].button("새로고침", key="overview_workspace_refresh", use_container_width=True)
+    metrics, account, positions, important, rows, sectors, warnings = _load_overview_data(base_app, refresh)
 
     selected_ticker = st.session_state.get("ade_portfolio_ticker")
     if selected_ticker:
@@ -214,58 +253,27 @@ def _render_portfolio(base_app: Any, refresh: bool) -> None:
             return
         st.session_state.ade_portfolio_ticker = None
 
-    cash = float(account.get("cash") or 0)
-    evaluation = float(account.get("evaluation_amount") or 0)
-    pnl = float(account.get("pnl") or 0)
-    total = float(account.get("total_assets") or 0)
-    total_source = "KIS 순자산"
-    if total <= 0:
-        total = cash + evaluation
-        total_source = "예수금+평가금액 fallback"
-    invested = evaluation - pnl
-    pnl_rate = pnl / invested * 100 if invested > 0 else 0.0
-    cards = [
-        (35, "Portfolio Hero", "총자산", f"₩{total:,.0f}", total_source),
-        (36, "Cash Label", "예수금", f"₩{cash:,.0f}", "가용 현금"),
-        (37, "NAV Mid", "평가금액", f"₩{evaluation:,.0f}", "보유자산 평가"),
-        (38, "Return Large", "평가손익", f"₩{pnl:+,.0f}", f"{pnl_rate:+.2f}%"),
-        (39, "Count Giant", "보유종목", f"{int(account.get('position_count') or len(positions))}개", "현재 보유"),
-    ]
-    html = []
-    for no, title, label, value, sub in cards:
-        html.append(f'<div class="p-card p{no}"><div class="n">#{no}</div><div class="t">{title}</div><div class="l">{label}</div><div class="v">{value}</div><div class="s">{sub}</div></div>')
-    st.markdown('<div class="portfolio-grid">' + ''.join(html) + '</div>', unsafe_allow_html=True)
+    _render_43_reference(metrics, account, positions, important)
+    _render_44_brokerage(account, positions)
+    _render_45_editorial(important)
+    _render_46_dense(metrics)
+    _render_47_hybrid(account)
+    _render_48_feed(positions, sectors)
 
-    st.markdown('<div class="design-section-label">#40 Typography Position · 보유종목</div>', unsafe_allow_html=True)
-    if not positions:
-        st.info("보유종목이 없습니다.")
+    st.markdown("### 보유종목 선택")
     for row in positions:
-        ticker = _text(row, "ticker", "symbol", "code")
-        name = _text(row, "name", "symbol_name", "stock_name") or ticker
-        quantity = int(_number(row, "quantity", "qty", "holding_quantity"))
-        pnl_value = _number(row, "pnl", "profit_loss", "evaluation_profit_loss")
-        current_price = _number(row, "current_price", "price", "last_price")
-        evaluation_value = _number(row, "evaluation_amount", "evaluation", "market_value")
-        avg_price = _number(row, "average_price", "avg_price", "purchase_price", "buy_price")
-        invested_value = avg_price * quantity if avg_price > 0 else max(0.0, evaluation_value - pnl_value)
-        rate = pnl_value / invested_value * 100 if invested_value > 0 else _number(row, "pnl_rate", "profit_rate", "return_rate")
-        st.markdown(f'<div class="holding-card"><div><div class="name">{name}</div><div class="code">{ticker}</div></div><div><div class="k">보유</div><div class="v">{quantity:,}주</div></div><div><div class="k">평단</div><div class="v">₩{avg_price:,.0f}</div></div><div><div class="k">현재가</div><div class="v">₩{current_price:,.0f}</div></div><div><div class="k">수익률</div><div class="rate">{rate:+.2f}%</div></div></div>', unsafe_allow_html=True)
-        if st.button(f"{name} 상세 열기", key=f"portfolio_holding_{ticker}", use_container_width=True):
+        ticker = _text(row, "ticker")
+        name = _text(row, "name", "ticker")
+        if st.button(f"{name} · {ticker}", key=f"ui_test_holding_{ticker}", use_container_width=True):
             st.session_state.ade_portfolio_ticker = ticker
             st.rerun()
-    if error:
-        st.caption(error)
 
+    with st.expander("향후 90일 전체 일정", expanded=False):
+        if rows:
+            frame = pd.DataFrame(rows)
+            st.dataframe(frame, hide_index=True, use_container_width=True)
+        else:
+            st.info("표시할 전체 이벤트가 없습니다.")
 
-def render_overview_workspace(base_app: Any) -> None:
-    st.markdown(_STICKY_KPI_STYLE, unsafe_allow_html=True)
-    st.markdown("### 상황종합판")
-    refresh_cols = st.columns([5, 1])
-    refresh = refresh_cols[1].button("새로고침", key="overview_workspace_refresh", use_container_width=True)
-    _render_market_kpis(refresh)
-    st.divider()
-    _render_portfolio(base_app, refresh)
-    if st.session_state.get("ade_portfolio_ticker"):
-        return
-    st.divider()
-    _render_market_context(refresh)
+    for warning in warnings:
+        st.caption(str(warning))

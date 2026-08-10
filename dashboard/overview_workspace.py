@@ -17,9 +17,9 @@ _OVERVIEW_STYLE = """
 .ade-section-card{background:#fff;border-radius:28px;padding:24px;margin:14px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
 .ade-section-title{font-size:26px;font-weight:950;letter-spacing:-.04em;color:#0b0f14}.ade-section-sub{font-size:12px;color:#8a94a1;margin-top:5px}
 .ade-market-strip{position:sticky;top:3.35rem;z-index:930;background:rgba(223,245,243,.96);backdrop-filter:blur(18px) saturate(1.15);padding:8px 0 10px;border-bottom:1px solid rgba(91,122,153,.14)}
-.ade-index-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ade-index-card{background:#fff;border-radius:22px;padding:18px;border:1px solid rgba(15,23,42,.07)}.ade-index-card .label{font-size:15px;color:#596573;font-weight:800}.ade-index-card .value{font-size:34px;font-weight:900;letter-spacing:-.05em;margin-top:7px;color:#101418}.ade-index-card .move{display:flex;gap:8px;align-items:baseline;margin-top:7px}.ade-index-card .points{font-size:16px;font-weight:850}.ade-index-card .delta{font-size:17px;font-weight:900}.ade-index-card.up .points,.ade-index-card.up .delta{color:#e5484d}.ade-index-card.down .points,.ade-index-card.down .delta{color:#2563eb}.ade-index-card.flat .points,.ade-index-card.flat .delta{color:#6b7280}.ade-index-card .mini{height:62px;margin-top:10px;position:relative;overflow:hidden;border-radius:10px;background:linear-gradient(180deg,#fbfdff,#f6f9fc)}.ade-index-card .mini svg{width:100%;height:100%;display:block}.ade-index-card .mini .grid{stroke:#d7dee7;stroke-width:1;stroke-dasharray:3 4}.ade-index-card.up .mini .trend{stroke:#e5484d}.ade-index-card.down .mini .trend{stroke:#2563eb}.ade-index-card.flat .mini .trend{stroke:#7c8796}.ade-index-card .mini .trend{fill:none;stroke-width:2.5;stroke-linecap:round;stroke-linejoin:round}
-.ade-portfolio-grid{display:grid;grid-template-columns:1.45fr repeat(4,1fr);gap:12px;margin-top:18px}.ade-asset-hero{background:#101922;color:white;border-radius:20px;padding:18px}.ade-asset-hero .l{font-size:12px;opacity:.68;letter-spacing:.08em}.ade-asset-hero .v{font-size:37px;font-weight:950;letter-spacing:-.05em;margin-top:6px}.ade-asset-mini{background:#fafafa;border-radius:18px;padding:16px;border:1px solid rgba(15,23,42,.06)}.ade-asset-mini .l{font-size:13px;color:#6f7b88;font-weight:800}.ade-asset-mini .v{font-size:25px;font-weight:900;margin-top:6px;letter-spacing:-.035em;color:#111827}.ade-asset-mini .s{font-size:14px;font-weight:850;margin-top:6px;color:#697586}
-.ade-holding-row{display:grid;grid-template-columns:1.5fr .85fr 1fr 1fr 1fr;gap:12px;align-items:center;padding:16px 0;border-top:1px solid #eceff3}.ade-holding-row:first-of-type{border-top:0}.ade-holding-row .name{font-size:18px;font-weight:900}.ade-holding-row .code{font-size:10px;color:#98a2ad;margin-top:2px}.ade-holding-row .k{font-size:9px;color:#99a3ae;font-weight:800}.ade-holding-row .v{font-size:14px;font-weight:800;margin-top:3px}.ade-holding-row .rate{font-size:18px;font-weight:950;text-align:right}.ade-holding-row .price{text-align:right;font-size:17px;font-weight:850}.ade-holding-row .go{text-align:right;font-size:18px;color:#a2abb5}
+.ade-index-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ade-index-card{background:#fff;border-radius:22px;padding:18px;border:1px solid rgba(15,23,42,.07)}.ade-index-card .label{font-size:15px;color:#596573;font-weight:800}.ade-index-card .value{font-size:34px;font-weight:900;letter-spacing:-.05em;margin-top:7px;color:#101418}.ade-index-card .move{display:flex;gap:8px;align-items:baseline;margin-top:7px}.ade-index-card .points{font-size:16px;font-weight:850}.ade-index-card .delta{font-size:17px;font-weight:900}.ade-index-card.up .points,.ade-index-card.up .delta{color:#e5484d}.ade-index-card.down .points,.ade-index-card.down .delta{color:#2563eb}.ade-index-card.flat .points,.ade-index-card.flat .delta{color:#6b7280}.ade-index-card .mini{height:74px;margin-top:10px;position:relative;overflow:hidden;border-radius:12px;background:linear-gradient(180deg,#fbfdff,#f5f8fb);border:1px solid #edf1f5}.ade-index-card .mini .baseline{position:absolute;left:0;right:0;top:50%;border-top:1px dashed #d3dae3}.ade-index-card .mini .segment{position:absolute;height:2.5px;border-radius:999px;transform-origin:left center}.ade-index-card.up .mini .segment{background:#e5484d}.ade-index-card.down .mini .segment{background:#2563eb}.ade-index-card.flat .mini .segment{background:#7c8796}.ade-index-card .mini .dot{position:absolute;width:6px;height:6px;border-radius:50%;transform:translate(-50%,-50%)}.ade-index-card.up .mini .dot{background:#e5484d}.ade-index-card.down .mini .dot{background:#2563eb}.ade-index-card.flat .mini .dot{background:#7c8796}
+.ade-portfolio-grid{display:grid;grid-template-columns:1.45fr repeat(4,1fr);gap:12px;margin-top:18px}.ade-asset-hero{background:linear-gradient(135deg,#dbeafe 0%,#e0f2fe 52%,#f0fdfa 100%);color:#0f2741;border-radius:20px;padding:18px;border:1px solid rgba(47,128,237,.14);box-shadow:0 10px 24px rgba(47,128,237,.08)}.ade-asset-hero .l{font-size:12px;color:#51708d;letter-spacing:.08em;font-weight:850}.ade-asset-hero .v{font-size:37px;font-weight:950;letter-spacing:-.05em;margin-top:6px}.ade-asset-mini{background:#fafafa;border-radius:18px;padding:16px;border:1px solid rgba(15,23,42,.06)}.ade-asset-mini .l{font-size:13px;color:#6f7b88;font-weight:800}.ade-asset-mini .v{font-size:25px;font-weight:900;margin-top:6px;letter-spacing:-.035em;color:#111827}.ade-asset-mini .s{font-size:14px;font-weight:850;margin-top:6px}.ade-asset-mini.pnl-up .v,.ade-asset-mini.pnl-up .s{color:#e5484d}.ade-asset-mini.pnl-down .v,.ade-asset-mini.pnl-down .s{color:#2563eb}.ade-asset-mini.pnl-flat .v,.ade-asset-mini.pnl-flat .s{color:#697586}
+.ade-holding-row{display:grid;grid-template-columns:1.5fr .85fr 1fr 1fr 1fr;gap:12px;align-items:center;padding:16px 0;border-top:1px solid #eceff3}.ade-holding-row:first-of-type{border-top:0}.ade-holding-row .name{font-size:18px;font-weight:900}.ade-holding-row .code{font-size:10px;color:#98a2ad;margin-top:2px}.ade-holding-row .k{font-size:9px;color:#99a3ae;font-weight:800}.ade-holding-row .v{font-size:14px;font-weight:800;margin-top:3px}.ade-holding-row .rate{font-size:18px;font-weight:950;text-align:right}.ade-holding-row .rate.up{color:#e5484d}.ade-holding-row .rate.down{color:#2563eb}.ade-holding-row .rate.flat{color:#6b7280}.ade-holding-row .price{text-align:right;font-size:17px;font-weight:850}.ade-holding-row .go{text-align:right;font-size:18px;color:#a2abb5}
 .ade-event-list{margin-top:16px}.ade-event-row{display:grid;grid-template-columns:86px 1fr 104px;gap:14px;align-items:start;padding:15px 0;border-top:1px solid #eceff3}.ade-event-row:first-child{border-top:0}.ade-event-row .time{font-size:11px;font-weight:850;color:#4b5563}.ade-event-row .event{font-size:16px;font-weight:780;line-height:1.35}.ade-event-row .meta{font-size:10px;color:#9aa3ad;margin-top:4px}.ade-event-row .badge{font-size:11px;font-weight:900;padding:6px 9px;border-radius:999px;text-align:center}.ade-event-row .badge.high{background:#fff3cd;color:#8a5a00;border:1px solid #f4d27a}.ade-event-row .badge.very-high{background:#ffe3e6;color:#a61b29;border:1px solid #f3a7ae}.ade-event-row .badge.normal{background:#edf2f7;color:#51606f;border:1px solid #d6dde5}
 .ade-calendar-card{background:#fff;border-radius:28px;padding:24px;margin:14px 0}.ade-calendar-head{display:flex;justify-content:space-between;align-items:flex-end}.ade-calendar-title{font-size:24px;font-weight:950;letter-spacing:-.035em}.ade-calendar-sub{font-size:12px;color:#8a94a1;margin-top:5px}.ade-calendar-list{margin-top:16px}.ade-calendar-row{display:grid;grid-template-columns:96px 72px 1fr 92px;gap:14px;align-items:center;padding:14px 0;border-top:1px solid #eceff3}.ade-calendar-row:first-child{border-top:0}.ade-calendar-date{font-size:12px;font-weight:900;color:#374151}.ade-calendar-country{font-size:11px;font-weight:800;color:#7c8796}.ade-calendar-event{font-size:15px;font-weight:780;line-height:1.35}.ade-calendar-badge{font-size:10px;font-weight:900;padding:5px 8px;border-radius:999px;text-align:center}.ade-calendar-badge.high{background:#fff3cd;color:#8a5a00}.ade-calendar-badge.very-high{background:#ffe3e6;color:#a61b29}.ade-calendar-badge.normal{background:#edf2f7;color:#51606f}.ade-calendar-more{margin-top:12px;font-size:11px;color:#87919c}
 .ade-sector-chip-row{display:flex;gap:9px;overflow:hidden;margin-top:16px}.ade-sector-chip{white-space:nowrap;border:1px solid #dbe1e7;border-radius:999px;padding:9px 13px;font-size:12px;font-weight:800;background:#fff}.ade-sector-list{margin-top:12px}.ade-sector-row{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-top:1px solid #eceff3}.ade-sector-row .name{font-size:15px;font-weight:850}.ade-sector-row .rate{font-size:15px;font-weight:900}.ade-source-note{font-size:10px;color:#9aa3ad;margin-top:8px}
@@ -83,9 +83,29 @@ def _metric_parts(metrics: dict[str, Any], key: str) -> tuple[str, str, float, f
     return label, f"{metric.value:,.2f}", change, change_rate, tone
 
 
-def _sparkline_svg(tone: str) -> str:
-    points = "4,46 24,42 42,44 62,33 82,36 104,24 126,29 146,17 170,22 194,12"
-    return f'<svg viewBox="0 0 200 58" preserveAspectRatio="none"><line class="grid" x1="0" y1="18" x2="200" y2="18"/><line class="grid" x1="0" y1="38" x2="200" y2="38"/><polyline class="trend" points="{points}"/></svg>'
+def _sparkline_html(tone: str, change_rate: float) -> str:
+    magnitude = min(1.0, abs(change_rate) / 3.0)
+    base = [58, 54, 56, 46, 49, 38, 43, 30, 34, 23, 27, 18]
+    if tone == "down":
+        ys = [74 - y for y in base]
+    elif tone == "flat":
+        ys = [38, 37, 39, 36, 38, 35, 37, 36, 38, 36, 37, 36]
+    else:
+        ys = base
+    if magnitude < 0.25:
+        center = 37
+        ys = [round(center + (y - center) * 0.55, 1) for y in ys]
+    xs = [4 + i * (92 / (len(ys) - 1)) for i in range(len(ys))]
+    segments: list[str] = ['<div class="baseline"></div>']
+    for i in range(len(xs) - 1):
+        x1, x2 = xs[i], xs[i + 1]
+        y1, y2 = ys[i], ys[i + 1]
+        dx, dy = x2 - x1, y2 - y1
+        length = (dx * dx + dy * dy) ** 0.5
+        angle = __import__('math').degrees(__import__('math').atan2(dy, dx))
+        segments.append(f'<span class="segment" style="left:{x1:.2f}%;top:{y1:.2f}%;width:{length:.2f}%;transform:rotate({angle:.2f}deg)"></span>')
+    segments.append(f'<span class="dot" style="left:{xs[-1]:.2f}%;top:{ys[-1]:.2f}%"></span>')
+    return ''.join(segments)
 
 
 def _render_market_strip(metrics: dict[str, Any]) -> None:
@@ -97,7 +117,7 @@ def _render_market_strip(metrics: dict[str, Any]) -> None:
         points = f"{change:+,.2f}" if value != "조회 실패" else "-"
         delta = f"{change_rate:+.2f}%" if value != "조회 실패" else "-"
         cards.append(
-            f'<div class="ade-index-card {tone}"><div class="label">{label} · 실시간</div><div class="value">{value}</div><div class="move"><div class="points">{arrow} {points}</div><div class="delta">({delta})</div></div><div class="mini">{_sparkline_svg(tone)}</div></div>'
+            f'<div class="ade-index-card {tone}"><div class="label">{label} · 실시간</div><div class="value">{value}</div><div class="move"><div class="points">{arrow} {points}</div><div class="delta">({delta})</div></div><div class="mini">{_sparkline_html(tone, change_rate)}</div></div>'
         )
     st.markdown('<div class="ade-market-strip"><div class="ade-index-grid">' + ''.join(cards) + '</div></div>', unsafe_allow_html=True)
 
@@ -112,7 +132,8 @@ def _render_portfolio_summary(account: dict[str, Any] | None, positions: list[di
     invested = evaluation - pnl
     pnl_rate = pnl / invested * 100 if invested > 0 else 0.0
     count = int((account or {}).get("position_count") or len(positions))
-    st.markdown(f'''<div class="ade-section-card"><div class="ade-section-title">내 투자 현황</div><div class="ade-section-sub">계좌 전체 상태를 먼저 보고, 아래 보유종목에서 상세 판단으로 이동합니다.</div><div class="ade-portfolio-grid"><div class="ade-asset-hero"><div class="l">TOTAL ASSETS</div><div class="v">₩{total:,.0f}</div></div><div class="ade-asset-mini"><div class="l">예수금</div><div class="v">₩{cash:,.0f}</div></div><div class="ade-asset-mini"><div class="l">평가금액</div><div class="v">₩{evaluation:,.0f}</div></div><div class="ade-asset-mini"><div class="l">평가손익</div><div class="v">₩{pnl:+,.0f}</div><div class="s">{pnl_rate:+.2f}%</div></div><div class="ade-asset-mini"><div class="l">보유종목</div><div class="v">{count}개</div></div></div></div>''', unsafe_allow_html=True)
+    pnl_class = "pnl-up" if pnl_rate > 0 else ("pnl-down" if pnl_rate < 0 else "pnl-flat")
+    st.markdown(f'''<div class="ade-section-card"><div class="ade-section-title">내 투자 현황</div><div class="ade-section-sub">계좌 전체 상태를 먼저 보고, 아래 보유종목에서 상세 판단으로 이동합니다.</div><div class="ade-portfolio-grid"><div class="ade-asset-hero"><div class="l">TOTAL ASSETS</div><div class="v">₩{total:,.0f}</div></div><div class="ade-asset-mini"><div class="l">예수금</div><div class="v">₩{cash:,.0f}</div></div><div class="ade-asset-mini"><div class="l">평가금액</div><div class="v">₩{evaluation:,.0f}</div></div><div class="ade-asset-mini {pnl_class}"><div class="l">평가손익</div><div class="v">₩{pnl:+,.0f}</div><div class="s">{pnl_rate:+.2f}%</div></div><div class="ade-asset-mini"><div class="l">보유종목</div><div class="v">{count}개</div></div></div></div>''', unsafe_allow_html=True)
 
 
 def _render_holdings(positions: list[dict[str, Any]]) -> None:
@@ -127,7 +148,8 @@ def _render_holdings(positions: list[dict[str, Any]]) -> None:
         avg = _number(row, "average_price")
         current = _number(row, "current_price")
         rate = _number(row, "pnl_rate")
-        st.markdown(f'''<div class="ade-holding-row"><div><div class="name">{name}</div><div class="code">{ticker}</div></div><div class="hide-mobile"><div class="k">보유</div><div class="v">{qty:,}주</div></div><div class="hide-mobile"><div class="k">평단</div><div class="v">₩{avg:,.0f}</div></div><div><div class="k">현재가</div><div class="price">₩{current:,.0f}</div></div><div><div class="k">수익률</div><div class="rate">{rate:+.2f}%</div></div></div>''', unsafe_allow_html=True)
+        tone = "up" if rate > 0 else ("down" if rate < 0 else "flat")
+        st.markdown(f'''<div class="ade-holding-row"><div><div class="name">{name}</div><div class="code">{ticker}</div></div><div class="hide-mobile"><div class="k">보유</div><div class="v">{qty:,}주</div></div><div class="hide-mobile"><div class="k">평단</div><div class="v">₩{avg:,.0f}</div></div><div><div class="k">현재가</div><div class="price">₩{current:,.0f}</div></div><div><div class="k">수익률</div><div class="rate {tone}">{rate:+.2f}%</div></div></div>''', unsafe_allow_html=True)
         if st.button(f"{name} 상세보기", key=f"overview_holding_{ticker}", use_container_width=True):
             st.session_state.ade_portfolio_ticker = ticker
             st.rerun()
@@ -135,16 +157,16 @@ def _render_holdings(positions: list[dict[str, Any]]) -> None:
 
 
 def _importance_class(value: str) -> str:
-    normalized = str(value or "").strip()
-    if normalized == "매우 높음":
+    value = str(value or "")
+    if value == "매우 높음":
         return "very-high"
-    if normalized == "높음":
+    if value == "높음":
         return "high"
     return "normal"
 
 
 def _render_events(important: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="ade-section-card"><div class="ade-section-title">오늘 시장에서 봐야 할 것</div><div class="ade-section-sub">#45 Editorial Cards를 기준으로 중요한 이벤트만 크게 읽도록 정리했습니다.</div><div class="ade-event-list">', unsafe_allow_html=True)
+    st.markdown('<div class="ade-section-card"><div class="ade-section-title">오늘 시장에서 봐야 할 것</div><div class="ade-section-sub">중요 이벤트만 크게 읽도록 정리했습니다.</div><div class="ade-event-list">', unsafe_allow_html=True)
     if important:
         for row in important[:5]:
             when = str(row.get("일시(KST)") or "-")
@@ -152,27 +174,27 @@ def _render_events(important: list[dict[str, Any]]) -> None:
             event = str(row.get("이벤트") or row.get("구분") or "-")
             importance = str(row.get("중요도") or "-")
             source = str(row.get("출처") or "")
-            badge_class = _importance_class(importance)
-            st.markdown(f'<div class="ade-event-row"><div class="time">{when}<div class="meta">{country}</div></div><div class="event">{event}<div class="meta">{source}</div></div><div class="badge {badge_class}">{importance}</div></div>', unsafe_allow_html=True)
+            css = _importance_class(importance)
+            st.markdown(f'<div class="ade-event-row"><div class="time">{when}<div class="meta">{country}</div></div><div class="event">{event}<div class="meta">{source}</div></div><div class="badge {css}">{importance}</div></div>', unsafe_allow_html=True)
     else:
         st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 주요 이벤트가 없습니다.</div>', unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 def _render_90_day_calendar(rows: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="ade-calendar-card"><div class="ade-calendar-head"><div><div class="ade-calendar-title">향후 90일 전체 일정</div><div class="ade-calendar-sub">기존 데이터프레임 대신 일정 흐름이 바로 읽히는 카드형 리스트로 표시합니다.</div></div></div><div class="ade-calendar-list">', unsafe_allow_html=True)
-    if not rows:
-        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 전체 이벤트가 없습니다.</div>', unsafe_allow_html=True)
-    else:
+    st.markdown('<div class="ade-calendar-card"><div class="ade-calendar-head"><div><div class="ade-calendar-title">향후 90일 전체 일정</div><div class="ade-calendar-sub">중요도와 일정을 카드형 타임라인으로 확인합니다.</div></div></div><div class="ade-calendar-list">', unsafe_allow_html=True)
+    if rows:
         for row in rows[:12]:
             when = str(row.get("일시(KST)") or "-")
             country = str(row.get("국가") or "-")
             event = str(row.get("이벤트") or row.get("구분") or "-")
             importance = str(row.get("중요도") or "-")
-            badge_class = _importance_class(importance)
-            st.markdown(f'<div class="ade-calendar-row"><div class="ade-calendar-date">{when}</div><div class="ade-calendar-country">{country}</div><div class="ade-calendar-event">{event}</div><div class="ade-calendar-badge {badge_class}">{importance}</div></div>', unsafe_allow_html=True)
+            css = _importance_class(importance)
+            st.markdown(f'<div class="ade-calendar-row"><div class="ade-calendar-date">{when}</div><div class="ade-calendar-country">{country}</div><div class="ade-calendar-event">{event}</div><div class="ade-calendar-badge {css}">{importance}</div></div>', unsafe_allow_html=True)
         if len(rows) > 12:
-            st.markdown(f'<div class="ade-calendar-more">외 {len(rows)-12}건 · 전체 데이터는 향후 별도 일정 화면으로 확장 가능</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ade-calendar-more">외 {len(rows)-12}건 · 새로고침 시 최신 일정으로 갱신</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 전체 일정이 없습니다.</div>', unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
 

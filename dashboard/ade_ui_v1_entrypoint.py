@@ -8,6 +8,7 @@ from dashboard.standard_order_panel import (
     render_scheduled_order_tab,
     render_search_launcher,
 )
+from maintenance.recommendation_runner import get_status, start_job
 
 
 _RECOMMENDATION_STYLE = """
@@ -25,6 +26,7 @@ _RECOMMENDATION_STYLE = """
 .ade-reco-reason{background:#fafafa;border-radius:16px;padding:14px 16px;margin-top:14px;font-size:13px;line-height:1.5;color:#4b5563}
 .ade-reco-result-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ade-reco-result-chip{padding:6px 9px;border-radius:999px;font-size:11px;font-weight:850;border:1px solid #dbe1e7;background:#fff}.ade-reco-result-chip.success{background:#fff1f2;color:#b4232f;border-color:#f8c9ce}.ade-reco-result-chip.neutral{background:#f4f6f8;color:#697586}.ade-reco-result-chip.fail{background:#eef4ff;color:#2459a8;border-color:#cdddf8}
 .ade-reco-actions{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:12px}
+.ade-reco-run-card{background:linear-gradient(135deg,#f8fffd,#f4f8ff);border:1px solid rgba(47,128,237,.12);border-radius:20px;padding:16px;margin-top:16px}.ade-reco-run-head{display:flex;justify-content:space-between;gap:16px;align-items:center}.ade-reco-run-title{font-size:16px;font-weight:900}.ade-reco-run-meta{font-size:11px;color:#7b8794;margin-top:4px}.ade-reco-run-stage{font-size:13px;font-weight:850;color:#24415e}.ade-reco-run-numbers{font-size:11px;color:#718096;margin-top:6px}
 .ade-reco-hero{background:#fff;border-radius:28px;padding:24px;margin:12px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
 .ade-reco-title{font-size:30px;font-weight:950;letter-spacing:-.045em;color:#0b0f14}.ade-reco-meta{font-size:12px;color:#7b8794;margin-top:6px}
 .ade-chip-row{display:flex;gap:10px;overflow-x:auto;margin-top:18px;padding-bottom:2px}.ade-chip{white-space:nowrap;border:1px solid #d8dee6;border-radius:999px;padding:9px 14px;font-size:13px;font-weight:800;background:#fff;color:#4b5563}.ade-chip.active{border:2px solid #111827;color:#111827}.ade-chip .up{color:#e5484d}.ade-chip .down{color:#2563eb}
@@ -35,7 +37,7 @@ _RECOMMENDATION_STYLE = """
 .ade-reco-pill-row{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}.ade-reco-pill{padding:8px 12px;border-radius:999px;border:1px solid #dbe1e7;background:#fff;font-size:12px;font-weight:800}.ade-reco-pill.active{border:2px solid #111827}
 .ade-evidence-list{margin-top:14px}.ade-evidence-row{display:grid;grid-template-columns:34px 150px 1fr;gap:14px;align-items:start;padding:15px 0;border-top:1px solid #eceff3}.ade-evidence-row:first-child{border-top:0}.ade-evidence-no{width:28px;height:28px;border-radius:999px;background:#101922;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900}.ade-evidence-label{font-size:14px;font-weight:900}.ade-evidence-body{font-size:14px;line-height:1.45;color:#374151}
 .ade-news-list{margin-top:14px}.ade-news-row{display:grid;grid-template-columns:1fr auto;gap:14px;padding:14px 0;border-top:1px solid #eceff3}.ade-news-row:first-child{border-top:0}.ade-news-title{font-size:15px;font-weight:800;line-height:1.4}.ade-news-meta{font-size:10px;color:#9aa3ad;margin-top:4px}.ade-news-source{font-size:11px;color:#7b8794;white-space:nowrap}
-@media(max-width:900px){.ade-reco-list-top{grid-template-columns:48px 1fr 1fr}.ade-reco-list-top .optional{display:none}.ade-reco-kpis{grid-template-columns:1fr}.ade-replay-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.ade-evidence-row{grid-template-columns:30px 1fr}.ade-evidence-label{grid-column:2}.ade-evidence-body{grid-column:2}}
+@media(max-width:900px){.ade-reco-list-top{grid-template-columns:48px 1fr 1fr}.ade-reco-list-top .optional{display:none}.ade-reco-kpis{grid-template-columns:1fr}.ade-replay-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.ade-evidence-row{grid-template-columns:30px 1fr}.ade-evidence-label{grid-column:2}.ade-evidence-body{grid-column:2}.ade-reco-run-head{align-items:flex-start;flex-direction:column}}
 </style>
 """
 
@@ -303,6 +305,58 @@ def _replay_summary(matches: list[dict]) -> tuple[int, int, int, str, str]:
     return success, neutral, fail, avg_max, avg_dd
 
 
+def _render_recommendation_generation(market: str, context) -> None:
+    import streamlit as st
+
+    profile = base_app.get_market_profile(market)
+    runtime = get_status(profile.code)
+    running = bool(runtime.get("running"))
+    last_run = str(context.finished_at or "-")[:19] if context is not None else "없음"
+    last_count = int(context.recommendation_count or 0) if context is not None else 0
+
+    st.markdown(
+        f'<div class="ade-reco-run-card"><div class="ade-reco-run-head"><div><div class="ade-reco-run-title">추천 계산</div><div class="ade-reco-run-meta">최근 실행 {last_run} · 추천 {last_count}개</div></div><div class="ade-reco-run-stage">{str(runtime.get("stage_label") or "대기")}</div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("추천 계산 설정", expanded=False):
+        c1, c2, c3, c4, c5 = st.columns(5)
+        years = c1.number_input("과거 기간(년)", min_value=1, max_value=10, value=2, key=f"ade_recalc_{market}_years")
+        pool = c2.number_input("과거 패턴 수", min_value=10, max_value=1000, value=100, step=10, key=f"ade_recalc_{market}_pool")
+        weekly = c3.number_input("최소 주봉", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"ade_recalc_{market}_weekly")
+        sto = c4.number_input("STO 통과", min_value=0.0, max_value=100.0, value=85.0, step=1.0, key=f"ade_recalc_{market}_sto")
+        top_n = c5.number_input("추천 수", min_value=1, max_value=50, value=20, key=f"ade_recalc_{market}_top")
+        st.caption("추천 순위는 주봉 유사도를 기준으로 하고 STO는 통과 필터로 사용합니다.")
+
+    if running:
+        overall = float(runtime.get("overall_progress", runtime.get("progress", 0.0)) or 0.0)
+        current = int(runtime.get("current") or 0)
+        total = int(runtime.get("total") or 0)
+        current_ticker = str(runtime.get("current_ticker") or "-")
+        message = str(runtime.get("message") or "추천 계산 중")
+        st.progress(min(1.0, max(0.0, overall)), text=message)
+        st.caption(f"{str(runtime.get('stage_label') or '실행 중')} · {current:,}/{total:,} · 현재 {current_ticker}")
+    else:
+        if st.button("추천 다시 계산", type="primary", use_container_width=True, key=f"ade_recalc_start_{market}"):
+            request_id = start_job(
+                profile.code,
+                profile.db_path,
+                top_n=int(st.session_state.get(f"ade_recalc_{market}_top", 20)),
+                weekly_pool_n=int(st.session_state.get(f"ade_recalc_{market}_pool", 100)),
+                candidate_years=int(st.session_state.get(f"ade_recalc_{market}_years", 2)),
+                use_recent_replay=True,
+                use_weekly_filter=True,
+                min_weekly_similarity=float(st.session_state.get(f"ade_recalc_{market}_weekly", 85.0)),
+                use_sto_filter=True,
+                min_sto_similarity=float(st.session_state.get(f"ade_recalc_{market}_sto", 85.0)),
+            )
+            if request_id:
+                st.success(f"추천 계산을 시작했습니다. 요청ID {request_id}")
+                st.rerun()
+            else:
+                st.warning("이미 같은 시장의 추천 계산이 실행 중입니다.")
+
+
 def _render_recommendations() -> None:
     import streamlit as st
 
@@ -318,6 +372,7 @@ def _render_recommendations() -> None:
     if context is not None:
         meta = f"실행ID {context.run_id} · 생성 {str(context.finished_at or '-')[:19]} · 추천 {context.recommendation_count}개"
     st.markdown(f'<div class="ade-reco-list-shell"><div class="ade-reco-list-head"><div class="ade-reco-list-title">{title}</div><div class="ade-reco-list-sub">{meta or "저장된 추천결과를 검증 가능한 근거 중심으로 봅니다."}</div></div>', unsafe_allow_html=True)
+    _render_recommendation_generation(market, context)
 
     if not recommendations:
         st.markdown('<div class="ade-reco-list-card">저장된 추천 결과가 없습니다.</div></div>', unsafe_allow_html=True)

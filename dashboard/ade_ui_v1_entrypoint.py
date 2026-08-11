@@ -13,6 +13,18 @@ from dashboard.standard_order_panel import (
 _RECOMMENDATION_STYLE = """
 <style>
 .ade-reco-shell{background:linear-gradient(180deg,#dff5f3 0%,#eef8ef 48%,#f4f6f8 100%);padding:16px;border-radius:30px}
+.ade-reco-list-shell{background:linear-gradient(180deg,#dff5f3 0%,#edf8f1 55%,#f4f6f8 100%);padding:16px;border-radius:30px}
+.ade-reco-list-head{background:#fff;border-radius:28px;padding:24px;margin:10px 0 14px;box-shadow:0 4px 14px rgba(22,47,66,.04)}
+.ade-reco-list-title{font-size:30px;font-weight:950;letter-spacing:-.045em;color:#0b0f14}.ade-reco-list-sub{font-size:12px;color:#7b8794;margin-top:6px}
+.ade-reco-list-card{background:#fff;border-radius:26px;padding:20px 22px;margin:12px 0;border:1px solid rgba(15,23,42,.06);box-shadow:0 4px 14px rgba(22,47,66,.035)}
+.ade-reco-list-top{display:grid;grid-template-columns:54px 1.7fr .9fr .9fr .9fr;gap:12px;align-items:center}
+.ade-reco-rank{width:42px;height:42px;border-radius:14px;background:#eef6ff;color:#12314d;display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:950}
+.ade-reco-name{font-size:20px;font-weight:950;letter-spacing:-.03em;color:#111827}.ade-reco-code{font-size:11px;color:#8a94a1;margin-top:3px}
+.ade-reco-stat .l{font-size:10px;color:#8a94a1;font-weight:800}.ade-reco-stat .v{font-size:20px;font-weight:950;color:#111827;margin-top:3px}
+.ade-reco-stat.good .v{color:#e5484d}.ade-reco-stat.bad .v{color:#2563eb}.ade-reco-stat.neutral .v{color:#6b7280}
+.ade-reco-reason{background:#fafafa;border-radius:16px;padding:14px 16px;margin-top:14px;font-size:13px;line-height:1.5;color:#4b5563}
+.ade-reco-result-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.ade-reco-result-chip{padding:6px 9px;border-radius:999px;font-size:11px;font-weight:850;border:1px solid #dbe1e7;background:#fff}.ade-reco-result-chip.success{background:#fff1f2;color:#b4232f;border-color:#f8c9ce}.ade-reco-result-chip.neutral{background:#f4f6f8;color:#697586}.ade-reco-result-chip.fail{background:#eef4ff;color:#2459a8;border-color:#cdddf8}
+.ade-reco-actions{display:grid;grid-template-columns:1fr auto;gap:10px;margin-top:12px}
 .ade-reco-hero{background:#fff;border-radius:28px;padding:24px;margin:12px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
 .ade-reco-title{font-size:30px;font-weight:950;letter-spacing:-.045em;color:#0b0f14}.ade-reco-meta{font-size:12px;color:#7b8794;margin-top:6px}
 .ade-chip-row{display:flex;gap:10px;overflow-x:auto;margin-top:18px;padding-bottom:2px}.ade-chip{white-space:nowrap;border:1px solid #d8dee6;border-radius:999px;padding:9px 14px;font-size:13px;font-weight:800;background:#fff;color:#4b5563}.ade-chip.active{border:2px solid #111827;color:#111827}.ade-chip .up{color:#e5484d}.ade-chip .down{color:#2563eb}
@@ -23,7 +35,7 @@ _RECOMMENDATION_STYLE = """
 .ade-reco-pill-row{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}.ade-reco-pill{padding:8px 12px;border-radius:999px;border:1px solid #dbe1e7;background:#fff;font-size:12px;font-weight:800}.ade-reco-pill.active{border:2px solid #111827}
 .ade-evidence-list{margin-top:14px}.ade-evidence-row{display:grid;grid-template-columns:34px 150px 1fr;gap:14px;align-items:start;padding:15px 0;border-top:1px solid #eceff3}.ade-evidence-row:first-child{border-top:0}.ade-evidence-no{width:28px;height:28px;border-radius:999px;background:#101922;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:900}.ade-evidence-label{font-size:14px;font-weight:900}.ade-evidence-body{font-size:14px;line-height:1.45;color:#374151}
 .ade-news-list{margin-top:14px}.ade-news-row{display:grid;grid-template-columns:1fr auto;gap:14px;padding:14px 0;border-top:1px solid #eceff3}.ade-news-row:first-child{border-top:0}.ade-news-title{font-size:15px;font-weight:800;line-height:1.4}.ade-news-meta{font-size:10px;color:#9aa3ad;margin-top:4px}.ade-news-source{font-size:11px;color:#7b8794;white-space:nowrap}
-@media(max-width:900px){.ade-reco-kpis{grid-template-columns:1fr}.ade-replay-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.ade-evidence-row{grid-template-columns:30px 1fr}.ade-evidence-label{grid-column:2}.ade-evidence-body{grid-column:2}}
+@media(max-width:900px){.ade-reco-list-top{grid-template-columns:48px 1fr 1fr}.ade-reco-list-top .optional{display:none}.ade-reco-kpis{grid-template-columns:1fr}.ade-replay-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.ade-evidence-row{grid-template-columns:30px 1fr}.ade-evidence-label{grid-column:2}.ade-evidence-body{grid-column:2}}
 </style>
 """
 
@@ -291,6 +303,58 @@ def _replay_summary(matches: list[dict]) -> tuple[int, int, int, str, str]:
     return success, neutral, fail, avg_max, avg_dd
 
 
+def _render_recommendations() -> None:
+    import streamlit as st
+
+    st.markdown(_RECOMMENDATION_STYLE, unsafe_allow_html=True)
+    market = base_app._market_selector("ade_reco_market")
+    if st.session_state.ade_recommendation_detail:
+        _render_recommendation_detail(market, st.session_state.ade_recommendation_detail)
+        return
+
+    recommendations, context = base_app._load_recommendations(market)
+    title = "국내 추천종목" if market == "kr" else "미국 추천종목"
+    meta = ""
+    if context is not None:
+        meta = f"실행ID {context.run_id} · 생성 {str(context.finished_at or '-')[:19]} · 추천 {context.recommendation_count}개"
+    st.markdown(f'<div class="ade-reco-list-shell"><div class="ade-reco-list-head"><div class="ade-reco-list-title">{title}</div><div class="ade-reco-list-sub">{meta or "저장된 추천결과를 검증 가능한 근거 중심으로 봅니다."}</div></div>', unsafe_allow_html=True)
+
+    if not recommendations:
+        st.markdown('<div class="ade-reco-list-card">저장된 추천 결과가 없습니다.</div></div>', unsafe_allow_html=True)
+        return
+
+    for row in recommendations:
+        ticker = str(row.get("ticker"))
+        symbol = str(row.get("symbol") or row.get("name") or ticker)
+        rank = int(row.get("rank_no") or 0)
+        score = float(row.get("score") or row.get("final_similarity") or row.get("weekly_similarity") or 0)
+        sto = float(row.get("sto_similarity") or 0)
+        payload = base_app._safe_json(row.get("payload_json"))
+        replay_matches = [item for item in (payload.get("replay_matches") or []) if isinstance(item, dict)]
+        success, neutral, fail, _, _ = _replay_summary(replay_matches)
+        reason = _render_recommendation_reason(payload, row)
+        tone = "good" if success > fail else ("bad" if fail > success else "neutral")
+        st.markdown(
+            f'''<div class="ade-reco-list-card"><div class="ade-reco-list-top"><div class="ade-reco-rank">#{rank}</div><div><div class="ade-reco-name">{symbol}</div><div class="ade-reco-code">{ticker}</div></div><div class="ade-reco-stat"><div class="l">추천점수</div><div class="v">{score:.1f}</div></div><div class="ade-reco-stat optional"><div class="l">STO</div><div class="v">{sto:.1f}%</div></div><div class="ade-reco-stat {tone} optional"><div class="l">Replay</div><div class="v">{len(replay_matches)}건</div></div></div><div class="ade-reco-result-row"><div class="ade-reco-result-chip success">성공 {success}</div><div class="ade-reco-result-chip neutral">중립 {neutral}</div><div class="ade-reco-result-chip fail">실패 {fail}</div></div><div class="ade-reco-reason">{reason}</div></div>''',
+            unsafe_allow_html=True,
+        )
+        c1, c2 = st.columns([5, 1])
+        if c1.button(f"{symbol} 검증하기", key=f"detail_{market}_{ticker}", use_container_width=True):
+            st.session_state.ade_recommendation_detail = ticker
+            st.session_state.ade_show_heavy_charts = False
+            st.rerun()
+        if c2.button("주문", key=f"order_{market}_{ticker}", use_container_width=True):
+            try:
+                base_app._add_order_candidate(market, ticker, symbol)
+            except Exception as exc:
+                st.error(str(exc))
+                continue
+            st.session_state.ade_order_ticker = ticker
+            base_app._reset_order_confirmation()
+            base_app._navigate_primary("주문")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
 def _render_recommendation_detail(market: str, ticker: str) -> None:
     import streamlit as st
 
@@ -397,6 +461,7 @@ def run() -> None:
     base_app._render_overview = _render_overview
     base_app._render_status_bar = _render_status_bar
     base_app._render_orders = _render_orders
+    base_app._render_recommendations = _render_recommendations
     base_app._render_recommendation_detail = _render_recommendation_detail
     base_app.run()
 

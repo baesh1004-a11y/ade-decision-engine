@@ -31,6 +31,7 @@ class MarketMetric:
     fetched_at: float | None = None
     market_state: str = "unknown"
     verified: bool = False
+    history: tuple[float, ...] = ()
 
 
 _SYMBOLS: dict[str, tuple[str, str]] = {
@@ -99,24 +100,37 @@ def _last_bar_timestamp(history: pd.DataFrame, fallback: float) -> float:
         return fallback
 
 
+def _spark_history(closes: pd.Series, max_points: int = 48) -> tuple[float, ...]:
+    clean = closes.dropna()
+    if clean.empty:
+        return ()
+    if len(clean) > max_points:
+        indexes = [round(i * (len(clean) - 1) / (max_points - 1)) for i in range(max_points)]
+        sampled = clean.iloc[indexes]
+    else:
+        sampled = clean
+    return tuple(float(value) for value in sampled)
+
+
 def _history_metric(label: str, symbol: str, history: pd.DataFrame, now: float) -> MarketMetric:
     source = "Yahoo Finance · 참고용"
     state = _market_state(symbol, now)
     if history.empty or "Close" not in history:
-        return MarketMetric(label, None, None, None, None, "오류", source, "가격 데이터 없음", now, state, False)
+        return MarketMetric(label, None, None, None, None, "오류", source, "가격 데이터 없음", now, state, False, ())
     closes = history["Close"].dropna()
     if closes.empty:
-        return MarketMetric(label, None, None, None, None, "오류", source, "종가 데이터 없음", now, state, False)
+        return MarketMetric(label, None, None, None, None, "오류", source, "종가 데이터 없음", now, state, False, ())
     value = float(closes.iloc[-1])
     previous = float(closes.iloc[-2]) if len(closes) >= 2 else value
     change = value - previous
     change_rate = change / previous * 100 if previous else 0.0
     updated_at = _last_bar_timestamp(history.loc[closes.index], now)
     minimum, maximum = _VALUE_RANGES.get(symbol, (0.0, float("inf")))
+    spark = _spark_history(closes)
     if not pd.notna(value) or not (minimum <= value <= maximum):
-        return MarketMetric(label, None, None, None, updated_at, "검증 필요", source, f"값 범위 이탈: {value:,.2f}", now, state, False)
+        return MarketMetric(label, None, None, None, updated_at, "검증 필요", source, f"값 범위 이탈: {value:,.2f}", now, state, False, spark)
     if abs(change_rate) > 20:
-        return MarketMetric(label, None, None, None, updated_at, "검증 필요", source, f"비정상 변동률 {change_rate:.2f}%", now, state, False)
+        return MarketMetric(label, None, None, None, updated_at, "검증 필요", source, f"비정상 변동률 {change_rate:.2f}%", now, state, False, spark)
     age = max(0.0, now - updated_at)
     status = "정상"
     verified = True
@@ -127,7 +141,7 @@ def _history_metric(label: str, symbol: str, history: pd.DataFrame, now: float) 
         status = "종가"
     elif state == "장전":
         status = "전일종가"
-    return MarketMetric(label, value, change, change_rate, updated_at, status, source, None, now, state, verified)
+    return MarketMetric(label, value, change, change_rate, updated_at, status, source, None, now, state, verified, spark)
 
 
 def _stale_metrics(now: float, error: str) -> dict[str, MarketMetric] | None:
@@ -143,7 +157,7 @@ def _stale_metrics(now: float, error: str) -> dict[str, MarketMetric] | None:
         if age <= _STALE_TTL_SECONDS:
             stale[key] = replace(metric, status="마지막 정상값 사용", error=error, fetched_at=now, verified=False)
         else:
-            stale[key] = replace(metric, value=None, change=None, change_rate=None, status="만료", error=error, fetched_at=now, verified=False)
+            stale[key] = replace(metric, value=None, change=None, change_rate=None, status="만료", error=error, fetched_at=now, verified=False, history=())
     return stale
 
 
@@ -187,7 +201,7 @@ def load_market_overview(*, refresh: bool = False) -> tuple[dict[str, MarketMetr
             if stale is not None:
                 _CACHE = (_CACHE[0], stale, error)
                 return stale, error
-            metrics = {key: MarketMetric(label, None, None, None, None, "오류", "Yahoo Finance · 참고용", error, now, _market_state(symbol, now), False) for key, (label, symbol) in _SYMBOLS.items()}
+            metrics = {key: MarketMetric(label, None, None, None, None, "오류", "Yahoo Finance · 참고용", error, now, _market_state(symbol, now), False, ()) for key, (label, symbol) in _SYMBOLS.items()}
             _CACHE = (time.time(), metrics, error)
             return metrics, error
 
@@ -321,54 +335,50 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
     rows: list[dict[str, Any]] = []
     used_date = ""
     for business_date in _candidate_business_dates():
-        try:
-            kospi = _load_index_frame(business_date, "KOSPI")
-            kosdaq = _load_index_frame(business_date, "KOSDAQ")
-        except Exception:
-            continue
-        frames = [frame for frame in (kospi, kosdaq) if not frame.empty]
-        if not frames:
-            continue
-        combined = pd.concat(frames)
-        for ticker, row in combined.iterrows():
-            name = str(pykrx_stock.get_index_ticker_name(ticker) or ticker)
-            close = _pick_numeric(row, "종가", "현재가", "지수")
-            open_price = _pick_numeric(row, "시가")
-            previous_close = _previous_index_close(business_date, str(ticker))
-            reference = previous_close or open_price
-            change_rate = ((close / reference) - 1.0) * 100.0 if reference else 0.0
-            turnover = _pick_numeric(row, "거래대금", "거래금액")
-            breadth = _pick_numeric(row, "등락률")
-            rows.append(
-                {
+        for market in ("KOSPI", "KOSDAQ"):
+            try:
+                frame = _load_index_frame(business_date, market)
+            except Exception:
+                continue
+            if frame.empty:
+                continue
+            used_date = used_date or business_date
+            for ticker, row in frame.iterrows():
+                close = _pick_numeric(row, "종가", "현재가", "지수")
+                if close <= 0:
+                    continue
+                change_rate = _pick_numeric(row, "등락률")
+                if change_rate == 0.0:
+                    previous = _previous_index_close(business_date, str(ticker))
+                    if previous > 0:
+                        change_rate = (close / previous - 1) * 100
+                try:
+                    name = str(pykrx_stock.get_index_ticker_name(str(ticker)))
+                except Exception:
+                    name = str(ticker)
+                if not name or name == "None":
+                    continue
+                rows.append({
                     "sector": name,
-                    "change_rate": round(change_rate, 3),
-                    "turnover": turnover,
-                    "breadth": breadth,
-                    "relative_strength": round(change_rate, 3),
-                    "as_of": business_date,
-                    "source": "pykrx",
-                }
-            )
+                    "change_rate": float(change_rate),
+                    "breadth": None,
+                    "relative_strength": float(change_rate),
+                    "source": f"pykrx {business_date}",
+                })
         if rows:
-            used_date = business_date
             break
-    rows.sort(key=lambda item: float(item.get("relative_strength") or 0), reverse=True)
-    warning = None if rows else "국내 업종 등락 데이터를 조회하지 못했습니다."
-    if rows and used_date != _candidate_business_dates()[0]:
-        warning = f"최근 조회 가능한 거래일({used_date}) 기준입니다."
-    _SECTOR_CACHE = (now, rows, warning)
-    return rows[:limit], warning
+    rows = sorted(rows, key=lambda item: item["relative_strength"], reverse=True)[:limit]
+    warning = None if rows else "실시간 국내 섹터 데이터를 계산하지 못했습니다."
+    _SECTOR_CACHE = (time.time(), rows, warning)
+    return rows, warning
 
 
-def load_sector_strength(db_path: str | Path, *, limit: int = 10, refresh: bool = False) -> tuple[list[dict[str, Any]], str | None]:
-    global _SECTOR_CACHE
+def load_sector_strength(db_path: str | Path, *, limit: int = 6, refresh: bool = False) -> tuple[list[dict[str, Any]], str | None]:
     if refresh:
+        global _SECTOR_CACHE
         _SECTOR_CACHE = None
-    rows, warning = _calculate_live_sector_strength(limit)
-    if rows:
-        return rows, warning
-    stored_rows, stored_warning = _load_sector_strength_from_db(Path(db_path), limit)
-    if stored_rows:
-        return stored_rows, warning or stored_warning
-    return [], warning or stored_warning
+    live, warning = _calculate_live_sector_strength(limit)
+    if live:
+        return live, warning
+    stored, stored_warning = _load_sector_strength_from_db(Path(db_path), limit)
+    return stored, warning or stored_warning

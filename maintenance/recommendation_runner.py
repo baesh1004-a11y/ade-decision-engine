@@ -40,6 +40,10 @@ def _status_path(market_code: str) -> Path:
     return _RUNTIME_DIR / f"{market_code}_recommendation_runtime.json"
 
 
+def _history_path(market_code: str) -> Path:
+    return _RUNTIME_DIR / f"{market_code}_recommendation_history.jsonl"
+
+
 def _lock_path(market_code: str) -> Path:
     return _RUNTIME_DIR / f"{market_code}_recommendation.lock"
 
@@ -80,6 +84,26 @@ def _write_status(market_code: str, payload: dict[str, object]) -> dict[str, obj
     saved = {**payload, "updated_at": _now()}
     path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
     return saved
+
+
+def _append_history(market_code: str, payload: dict[str, object]) -> None:
+    path = _history_path(market_code)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {
+        "market": market_code,
+        "request_id": payload.get("request_id"),
+        "run_id": payload.get("run_id"),
+        "state": payload.get("state"),
+        "started_at": payload.get("started_at"),
+        "finished_at": payload.get("finished_at") or _now(),
+        "elapsed_seconds": payload.get("elapsed_seconds"),
+        "recommendation_count": payload.get("recommendation_count"),
+        "stage_durations": payload.get("stage_durations") or {},
+        "diagnostics": payload.get("diagnostics") or {},
+        "error_message": payload.get("error_message"),
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
 def _decorate_health(
@@ -123,8 +147,11 @@ def _recover_stale_status(market_code: str, payload: dict[str, object]) -> dict[
         "running": False,
         "message": "추천 작업의 생존 신호가 끊겨 비정상 종료 상태로 전환했습니다.",
         "error_message": "유효한 작업 스레드·잠금·heartbeat 조합을 확인하지 못했습니다.",
+        "finished_at": _now(),
     }
-    return _write_status(market_code, recovered)
+    saved = _write_status(market_code, recovered)
+    _append_history(market_code, saved)
+    return saved
 
 
 def get_status(market_code: str) -> dict[str, object]:
@@ -337,6 +364,7 @@ def start_job(
                         stage_durations.get(last_stage, 0.0) + (finished_mono - stage_started_at),
                         3,
                     )
+                finished_at = _now()
                 final = {
                     "request_id": request_id,
                     "state": result.status,
@@ -356,7 +384,8 @@ def start_job(
                     "diagnostics": result.diagnostics or {},
                     "error_message": result.error_message,
                     "started_at": started_at,
-                    "heartbeat_at": _now(),
+                    "finished_at": finished_at,
+                    "heartbeat_at": finished_at,
                 }
             except Exception as exc:
                 finished_mono = monotonic()
@@ -365,6 +394,7 @@ def start_job(
                         stage_durations.get(last_stage, 0.0) + (finished_mono - stage_started_at),
                         3,
                     )
+                finished_at = _now()
                 final = {
                     "request_id": request_id,
                     "state": "FAILED",
@@ -380,7 +410,8 @@ def start_job(
                     "stage_durations": stage_durations,
                     "startup_trace": list(startup_trace),
                     "started_at": started_at,
-                    "heartbeat_at": _now(),
+                    "finished_at": finished_at,
+                    "heartbeat_at": finished_at,
                     "elapsed_seconds": _seconds_since(started_at) or 0.0,
                 }
             finally:
@@ -390,7 +421,9 @@ def start_job(
 
             with _LOCK:
                 if market_code in _JOBS:
-                    _JOBS[market_code]["status"] = _write_status(market_code, final)
+                    saved = _write_status(market_code, final)
+                    _JOBS[market_code]["status"] = saved
+                    _append_history(market_code, saved)
 
         thread = threading.Thread(target=worker, name=f"ade-{market_code}-recommendation", daemon=True)
         heartbeat = threading.Thread(target=heartbeat_worker, name=f"ade-{market_code}-heartbeat", daemon=True)

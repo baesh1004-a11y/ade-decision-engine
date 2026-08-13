@@ -83,19 +83,20 @@ def _metric_parts(metrics: dict[str, Any], key: str) -> tuple[str, str, float, f
     return label, f"{metric.value:,.2f}", change, change_rate, tone
 
 
-def _sparkline_html(tone: str, change_rate: float) -> str:
-    magnitude = min(1.0, abs(change_rate) / 3.0)
-    base = [58, 54, 56, 46, 49, 38, 43, 30, 34, 23, 27, 18]
-    if tone == "down":
-        ys = [74 - y for y in base]
-    elif tone == "flat":
-        ys = [38, 37, 39, 36, 38, 35, 37, 36, 38, 36, 37, 36]
+def _sparkline_html(history: tuple[float, ...] | list[float] | None) -> str:
+    values = [float(value) for value in (history or []) if value is not None]
+    if len(values) < 2:
+        return '<div class="baseline"></div>'
+
+    low = min(values)
+    high = max(values)
+    span = high - low
+    if span <= 0:
+        ys = [50.0 for _ in values]
     else:
-        ys = base
-    if magnitude < 0.25:
-        center = 37
-        ys = [round(center + (y - center) * 0.55, 1) for y in ys]
-    xs = [4 + i * (92 / (len(ys) - 1)) for i in range(len(ys))]
+        ys = [84.0 - ((value - low) / span) * 68.0 for value in values]
+
+    xs = [4.0 + i * (92.0 / (len(values) - 1)) for i in range(len(values))]
     segments: list[str] = ['<div class="baseline"></div>']
     for i in range(len(xs) - 1):
         x1, x2 = xs[i], xs[i + 1]
@@ -103,7 +104,9 @@ def _sparkline_html(tone: str, change_rate: float) -> str:
         dx, dy = x2 - x1, y2 - y1
         length = (dx * dx + dy * dy) ** 0.5
         angle = __import__('math').degrees(__import__('math').atan2(dy, dx))
-        segments.append(f'<span class="segment" style="left:{x1:.2f}%;top:{y1:.2f}%;width:{length:.2f}%;transform:rotate({angle:.2f}deg)"></span>')
+        segments.append(
+            f'<span class="segment" style="left:{x1:.2f}%;top:{y1:.2f}%;width:{length:.2f}%;transform:rotate({angle:.2f}deg)"></span>'
+        )
     segments.append(f'<span class="dot" style="left:{xs[-1]:.2f}%;top:{ys[-1]:.2f}%"></span>')
     return ''.join(segments)
 
@@ -112,12 +115,14 @@ def _render_market_strip(metrics: dict[str, Any]) -> None:
     ordered = ["kospi", "kosdaq", "sp500", "nasdaq", "usdkrw", "vix"]
     cards = []
     for key in ordered:
+        metric = metrics.get(key)
         label, value, change, change_rate, tone = _metric_parts(metrics, key)
         arrow = "▲" if tone == "up" else ("▼" if tone == "down" else "•")
         points = f"{change:+,.2f}" if value != "조회 실패" else "-"
         delta = f"{change_rate:+.2f}%" if value != "조회 실패" else "-"
+        history = getattr(metric, "history", ()) if metric is not None else ()
         cards.append(
-            f'<div class="ade-index-card {tone}"><div class="label">{label} · 실시간</div><div class="value">{value}</div><div class="move"><div class="points">{arrow} {points}</div><div class="delta">({delta})</div></div><div class="mini">{_sparkline_html(tone, change_rate)}</div></div>'
+            f'<div class="ade-index-card {tone}"><div class="label">{label} · 실시간</div><div class="value">{value}</div><div class="move"><div class="points">{arrow} {points}</div><div class="delta">({delta})</div></div><div class="mini">{_sparkline_html(history)}</div></div>'
         )
     st.markdown('<div class="ade-market-strip"><div class="ade-index-grid">' + ''.join(cards) + '</div></div>', unsafe_allow_html=True)
 
@@ -182,7 +187,7 @@ def _render_events(important: list[dict[str, Any]]) -> None:
 
 
 def _render_90_day_calendar(rows: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="ade-calendar-card"><div class="ade-calendar-head"><div><div class="ade-calendar-title">향후 90일 전체 일정</div><div class="ade-calendar-sub">중요도와 일정을 카드형 타임라인으로 확인합니다.</div></div></div><div class="ade-calendar-list">', unsafe_allow_html=True)
+    st.markdown('<div class="ade-calendar-card"><div class="ade-calendar-head"><div><div class="ade-calendar-title">90일 주요 일정</div><div class="ade-calendar-sub">앞으로 90일의 주요 경제 이벤트를 시간순으로 확인합니다.</div></div></div><div class="ade-calendar-list">', unsafe_allow_html=True)
     if rows:
         for row in rows[:12]:
             when = str(row.get("일시(KST)") or "-")
@@ -192,68 +197,66 @@ def _render_90_day_calendar(rows: list[dict[str, Any]]) -> None:
             css = _importance_class(importance)
             st.markdown(f'<div class="ade-calendar-row"><div class="ade-calendar-date">{when}</div><div class="ade-calendar-country">{country}</div><div class="ade-calendar-event">{event}</div><div class="ade-calendar-badge {css}">{importance}</div></div>', unsafe_allow_html=True)
         if len(rows) > 12:
-            st.markdown(f'<div class="ade-calendar-more">외 {len(rows)-12}건 · 새로고침 시 최신 일정으로 갱신</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ade-calendar-more">외 {len(rows) - 12}개 일정</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 전체 일정이 없습니다.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 일정이 없습니다.</div>', unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 def _render_sectors(sectors: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="ade-section-card"><div class="ade-section-title">오늘의 시장 흐름</div><div class="ade-section-sub">상위 업종은 pill로 먼저 보고, 아래에서 수익률 순으로 확인합니다.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ade-section-card"><div class="ade-section-title">국내 섹터 흐름</div><div class="ade-section-sub">강한 업종과 약한 업종을 상대강도로 봅니다.</div><div class="ade-sector-list">', unsafe_allow_html=True)
     if sectors:
-        chips = ''.join(f'<div class="ade-sector-chip">{str(row.get("sector") or "-")} {_number(row,"change_rate"):+.2f}%</div>' for row in sectors[:4])
-        st.markdown('<div class="ade-sector-chip-row">'+chips+'</div><div class="ade-sector-list">', unsafe_allow_html=True)
-        for row in sectors[:6]:
-            st.markdown(f'<div class="ade-sector-row"><div class="name">{str(row.get("sector") or "-")}</div><div class="rate">{_number(row,"change_rate"):+.2f}%</div></div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
+        for row in sectors:
+            name = str(row.get("sector") or "-")
+            rate = _number(row, "change_rate", "relative_strength")
+            tone = "up" if rate > 0 else ("down" if rate < 0 else "flat")
+            st.markdown(f'<div class="ade-sector-row"><div class="name">{name}</div><div class="rate {tone}">{rate:+.2f}%</div></div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div style="padding:16px 0;color:#8a94a1">업종 등락 데이터를 아직 가져오지 못했습니다.</div>', unsafe_allow_html=True)
-    st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 섹터 데이터가 없습니다.</div>', unsafe_allow_html=True)
+    st.markdown('</div></div>', unsafe_allow_html=True)
 
 
-def _render_position_detail(base_app: Any, row: dict[str, Any]) -> None:
-    ticker = _text(row, "ticker", "symbol", "code")
-    name = _text(row, "name", "symbol_name", "stock_name") or ticker
-    quantity = int(_number(row, "quantity", "qty", "holding_quantity"))
-    avg_price = _number(row, "average_price", "avg_price", "purchase_price", "buy_price")
-    current_price = _number(row, "current_price", "price", "last_price")
-    evaluation = _number(row, "evaluation_amount", "evaluation", "market_value")
-    pnl = _number(row, "pnl", "profit_loss", "evaluation_profit_loss")
-    invested = avg_price * quantity if avg_price > 0 and quantity > 0 else max(0.0, evaluation - pnl)
-    pnl_rate = pnl / invested * 100 if invested > 0 else _number(row, "pnl_rate", "profit_rate", "return_rate")
-    if st.button("← 상황종합판으로", key="portfolio_detail_back"):
+def _render_position_detail(base_app: Any, holding: dict[str, Any]) -> None:
+    ticker = _text(holding, "ticker")
+    name = _text(holding, "name", "ticker")
+    if st.button("← 상황종합판으로", key=f"portfolio_back_{ticker}"):
         st.session_state.ade_portfolio_ticker = None
         st.rerun()
-    st.markdown(f"## {name} · {ticker}")
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("보유수량", f"{quantity:,}주")
-    c2.metric("평균매입가", f"₩{avg_price:,.0f}" if avg_price else "-")
-    c3.metric("현재가", f"₩{current_price:,.0f}" if current_price else "-")
-    c4.metric("평가손익", f"₩{pnl:+,.0f}", f"{pnl_rate:+.2f}%")
-    c5.metric("평가금액", f"₩{evaluation:,.0f}" if evaluation else "-")
-    st.markdown("### 보유 포지션 차트")
-    profile = base_app.get_market_profile("kr")
-    normalized = base_app.normalize_ticker(ticker, "kr")
+    st.markdown(f"## {name} · 보유종목 검증")
+    qty = int(_number(holding, "quantity"))
+    avg = _number(holding, "average_price")
+    current_price = _number(holding, "current_price")
+    rate = _number(holding, "pnl_rate")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("보유수량", f"{qty:,}주")
+    c2.metric("평균매입가", f"₩{avg:,.0f}")
+    c3.metric("현재가", f"₩{current_price:,.0f}")
+    c4.metric("수익률", f"{rate:+.2f}%")
+
+    profile = get_market_profile("kr")
+    normalized_ticker = base_app.normalize_ticker(ticker, "kr")
     with base_app.sqlite3.connect(str(profile.db_path), timeout=5) as conn:
         conn.row_factory = base_app.sqlite3.Row
-        current, source, chart_warning = base_app._load_current_bars_resilient(conn, "kr", normalized, profile.price_source)
-    if current.empty:
-        st.info("표시할 가격 이력이 없습니다.")
+        current, source, warning = base_app._load_current_bars_resilient(conn, "kr", normalized_ticker, profile.price_source)
+    if warning:
+        st.caption(warning)
+    if not current.empty:
+        chart = base_app.build_trading_chart(current, name)
+        try:
+            chart.add_hline(y=avg, line_dash="dot", annotation_text=f"평단 {avg:,.0f}")
+        except Exception:
+            pass
+        st.plotly_chart(chart, use_container_width=True, config=base_app.CHART_CONFIG)
     else:
-        chart = base_app.build_trading_chart(current, f"{name} · {ticker}", height=680)
-        if avg_price > 0:
-            chart.add_hline(y=avg_price, line_dash="dash", annotation_text=f"내 평균매입가 {avg_price:,.0f}", row=1, col=1)
-        st.plotly_chart(chart, use_container_width=True, config=base_app.CHART_CONFIG, key=f"portfolio_chart_{ticker}")
-    st.caption(f"가격소스 {source}")
-    if chart_warning:
-        st.caption(chart_warning)
-    st.markdown("### 수급")
-    supply = base_app.load_supply_demand_health(normalized, market="kr")
-    investor = supply.get("investor") if isinstance(supply, dict) else None
-    st.info(str((investor or {}).get("detail") or "수급 세부정보가 없습니다."))
-    st.markdown("### ADE 분석")
+        st.info("현재 가격 차트를 불러오지 못했습니다.")
+
+    supply = base_app.load_supply_demand_health(normalized_ticker, market="kr")
+    st.markdown("### 수급·환경")
+    st.write(str((supply.get("investor") or {}).get("detail") or "수급 데이터 확인 필요"))
+
     recommendations, context = base_app._load_recommendations("kr")
-    recommendation = next((item for item in recommendations if str(item.get("ticker")) == str(ticker)), None)
+    recommendation = next((row for row in recommendations if str(row.get("ticker")) == ticker), None)
+    st.markdown("### ADE 추천 상태")
     if recommendation:
         payload = base_app._safe_json(recommendation.get("payload_json"))
         score = _number(recommendation, "score", "final_similarity", "weekly_similarity")

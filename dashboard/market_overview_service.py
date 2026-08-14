@@ -104,12 +104,30 @@ def _spark_history(closes: pd.Series, max_points: int = 48) -> tuple[float, ...]
     clean = closes.dropna()
     if clean.empty:
         return ()
+
+    # Only use the latest continuous trading session for the card sparkline.
+    try:
+        index = pd.DatetimeIndex(clean.index)
+        local_dates = index.tz_convert(index.tz).date if index.tz is not None else index.date
+        latest_date = local_dates[-1]
+        session = clean[[value == latest_date for value in local_dates]]
+        if len(session) >= 2:
+            clean = session
+    except Exception:
+        pass
+
+    # Downsample by bucket means rather than picking isolated points. This avoids
+    # artificial spikes/triangles while preserving the actual intraday direction.
     if len(clean) > max_points:
-        indexes = [round(i * (len(clean) - 1) / (max_points - 1)) for i in range(max_points)]
-        sampled = clean.iloc[indexes]
+        bucket = max(1, len(clean) // max_points)
+        smoothed = clean.rolling(window=bucket, min_periods=1, center=True).mean()
+        indexes = [round(i * (len(smoothed) - 1) / (max_points - 1)) for i in range(max_points)]
+        sampled = smoothed.iloc[indexes]
     else:
-        sampled = clean
-    return tuple(float(value) for value in sampled)
+        window = max(1, len(clean) // 24)
+        sampled = clean.rolling(window=window, min_periods=1, center=True).mean()
+
+    return tuple(float(value) for value in sampled.dropna())
 
 
 def _history_metric(label: str, symbol: str, history: pd.DataFrame, now: float) -> MarketMetric:
@@ -335,50 +353,48 @@ def _calculate_live_sector_strength(limit: int) -> tuple[list[dict[str, Any]], s
     rows: list[dict[str, Any]] = []
     used_date = ""
     for business_date in _candidate_business_dates():
-        for market in ("KOSPI", "KOSDAQ"):
-            try:
-                frame = _load_index_frame(business_date, market)
-            except Exception:
-                continue
+        try:
+            frame = _load_index_frame(business_date, "KOSPI")
             if frame.empty:
                 continue
-            used_date = used_date or business_date
+            used_date = business_date
             for ticker, row in frame.iterrows():
+                name = str(pykrx_stock.get_index_ticker_name(str(ticker)) or ticker)
+                if not name or "KOSPI" in name.upper():
+                    continue
                 close = _pick_numeric(row, "종가", "현재가", "지수")
-                if close <= 0:
-                    continue
                 change_rate = _pick_numeric(row, "등락률")
-                if change_rate == 0.0:
+                if not change_rate and close:
                     previous = _previous_index_close(business_date, str(ticker))
-                    if previous > 0:
-                        change_rate = (close / previous - 1) * 100
-                try:
-                    name = str(pykrx_stock.get_index_ticker_name(str(ticker)))
-                except Exception:
-                    name = str(ticker)
-                if not name or name == "None":
+                    if previous:
+                        change_rate = (close - previous) / previous * 100
+                if not close:
                     continue
-                rows.append({
-                    "sector": name,
-                    "change_rate": float(change_rate),
-                    "breadth": None,
-                    "relative_strength": float(change_rate),
-                    "source": f"pykrx {business_date}",
-                })
-        if rows:
-            break
-    rows = sorted(rows, key=lambda item: item["relative_strength"], reverse=True)[:limit]
-    warning = None if rows else "실시간 국내 섹터 데이터를 계산하지 못했습니다."
-    _SECTOR_CACHE = (time.time(), rows, warning)
+                breadth = _pick_numeric(row, "상승종목수", "상승") - _pick_numeric(row, "하락종목수", "하락")
+                relative_strength = change_rate
+                rows.append({"sector": name, "change_rate": change_rate, "breadth": breadth, "relative_strength": relative_strength, "source": "pykrx", "business_date": business_date})
+            if rows:
+                break
+        except Exception:
+            continue
+    if not rows:
+        _SECTOR_CACHE = (now, [], "국내 섹터 실시간 데이터를 계산하지 못했습니다.")
+        return [], _SECTOR_CACHE[2]
+    rows.sort(key=lambda item: float(item.get("relative_strength") or 0), reverse=True)
+    rows = rows[:limit]
+    warning = None if used_date else "국내 섹터 기준일을 확인하지 못했습니다."
+    _SECTOR_CACHE = (now, rows, warning)
     return rows, warning
 
 
 def load_sector_strength(db_path: str | Path, *, limit: int = 6, refresh: bool = False) -> tuple[list[dict[str, Any]], str | None]:
+    global _SECTOR_CACHE
     if refresh:
-        global _SECTOR_CACHE
         _SECTOR_CACHE = None
-    live, warning = _calculate_live_sector_strength(limit)
-    if live:
-        return live, warning
-    stored, stored_warning = _load_sector_strength_from_db(Path(db_path), limit)
-    return stored, warning or stored_warning
+    live_rows, live_warning = _calculate_live_sector_strength(limit)
+    if live_rows:
+        return live_rows, live_warning
+    db_rows, db_warning = _load_sector_strength_from_db(Path(db_path), limit)
+    if db_rows:
+        return db_rows, live_warning or db_warning
+    return [], live_warning or db_warning

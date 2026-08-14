@@ -17,7 +17,7 @@ _OVERVIEW_STYLE = """
 .ade-section-card{background:#fff;border-radius:28px;padding:24px;margin:14px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
 .ade-section-title{font-size:26px;font-weight:950;letter-spacing:-.04em;color:#0b0f14}.ade-section-sub{font-size:12px;color:#8a94a1;margin-top:5px}
 .ade-market-strip{position:sticky;top:3.35rem;z-index:930;background:rgba(223,245,243,.96);backdrop-filter:blur(18px) saturate(1.15);padding:8px 0 10px;border-bottom:1px solid rgba(91,122,153,.14)}
-.ade-index-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ade-index-card{background:#fff;border-radius:22px;padding:18px;border:1px solid rgba(15,23,42,.07)}.ade-index-card .label{font-size:15px;color:#596573;font-weight:800}.ade-index-card .value{font-size:34px;font-weight:900;letter-spacing:-.05em;margin-top:7px;color:#101418}.ade-index-card .move{display:flex;gap:8px;align-items:baseline;margin-top:7px}.ade-index-card .points{font-size:16px;font-weight:850}.ade-index-card .delta{font-size:17px;font-weight:900}.ade-index-card.up .points,.ade-index-card.up .delta{color:#e5484d}.ade-index-card.down .points,.ade-index-card.down .delta{color:#2563eb}.ade-index-card.flat .points,.ade-index-card.flat .delta{color:#6b7280}.ade-index-card .mini{height:74px;margin-top:10px;position:relative;overflow:hidden;border-radius:12px;background:linear-gradient(180deg,#fbfdff,#f5f8fb);border:1px solid #edf1f5}.ade-index-card .mini .baseline{position:absolute;left:0;right:0;top:50%;border-top:1px dashed #d3dae3}.ade-index-card .mini .segment{position:absolute;height:2.5px;border-radius:999px;transform-origin:left center}.ade-index-card.up .mini .segment{background:#e5484d}.ade-index-card.down .mini .segment{background:#2563eb}.ade-index-card.flat .mini .segment{background:#7c8796}.ade-index-card .mini .dot{position:absolute;width:6px;height:6px;border-radius:50%;transform:translate(-50%,-50%)}.ade-index-card.up .mini .dot{background:#e5484d}.ade-index-card.down .mini .dot{background:#2563eb}.ade-index-card.flat .mini .dot{background:#7c8796}
+.ade-index-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ade-index-card{background:#fff;border-radius:22px;padding:18px;border:1px solid rgba(15,23,42,.07)}.ade-index-card .label{font-size:15px;color:#596573;font-weight:800}.ade-index-card .value{font-size:34px;font-weight:900;letter-spacing:-.05em;margin-top:7px;color:#101418}.ade-index-card .move{display:flex;gap:8px;align-items:baseline;margin-top:7px}.ade-index-card .points{font-size:16px;font-weight:850}.ade-index-card .delta{font-size:17px;font-weight:900}.ade-index-card.up .points,.ade-index-card.up .delta{color:#e5484d}.ade-index-card.down .points,.ade-index-card.down .delta{color:#2563eb}.ade-index-card.flat .points,.ade-index-card.flat .delta{color:#6b7280}.ade-index-card .mini{height:74px;margin-top:10px;position:relative;overflow:hidden;border-radius:12px;background:linear-gradient(180deg,#fbfdff,#f5f8fb);border:1px solid #edf1f5}.ade-index-card .mini .baseline{position:absolute;left:0;right:0;top:50%;border-top:1px dashed #d3dae3}.ade-index-card .mini svg{position:absolute;inset:0;width:100%;height:100%;display:block}.ade-index-card .mini polyline{fill:none;stroke-width:2.35;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}.ade-index-card .mini circle{vector-effect:non-scaling-stroke}.ade-index-card.up .mini polyline,.ade-index-card.up .mini circle{stroke:#e5484d;fill:#e5484d}.ade-index-card.down .mini polyline,.ade-index-card.down .mini circle{stroke:#2563eb;fill:#2563eb}.ade-index-card.flat .mini polyline,.ade-index-card.flat .mini circle{stroke:#7c8796;fill:#7c8796}
 .ade-portfolio-grid{display:grid;grid-template-columns:1.45fr repeat(4,1fr);gap:12px;margin-top:18px}.ade-asset-hero{background:linear-gradient(135deg,#dbeafe 0%,#e0f2fe 52%,#f0fdfa 100%);color:#0f2741;border-radius:20px;padding:18px;border:1px solid rgba(47,128,237,.14);box-shadow:0 10px 24px rgba(47,128,237,.08)}.ade-asset-hero .l{font-size:12px;color:#51708d;letter-spacing:.08em;font-weight:850}.ade-asset-hero .v{font-size:37px;font-weight:950;letter-spacing:-.05em;margin-top:6px}.ade-asset-mini{background:#fafafa;border-radius:18px;padding:16px;border:1px solid rgba(15,23,42,.06)}.ade-asset-mini .l{font-size:13px;color:#6f7b88;font-weight:800}.ade-asset-mini .v{font-size:25px;font-weight:900;margin-top:6px;letter-spacing:-.035em;color:#111827}.ade-asset-mini .s{font-size:14px;font-weight:850;margin-top:6px}.ade-asset-mini.pnl-up .v,.ade-asset-mini.pnl-up .s{color:#e5484d}.ade-asset-mini.pnl-down .v,.ade-asset-mini.pnl-down .s{color:#2563eb}.ade-asset-mini.pnl-flat .v,.ade-asset-mini.pnl-flat .s{color:#697586}
 .ade-holding-row{display:grid;grid-template-columns:1.5fr .85fr 1fr 1fr 1fr;gap:12px;align-items:center;padding:16px 0;border-top:1px solid #eceff3}.ade-holding-row:first-of-type{border-top:0}.ade-holding-row .name{font-size:18px;font-weight:900}.ade-holding-row .code{font-size:10px;color:#98a2ad;margin-top:2px}.ade-holding-row .k{font-size:9px;color:#99a3ae;font-weight:800}.ade-holding-row .v{font-size:14px;font-weight:800;margin-top:3px}.ade-holding-row .rate{font-size:18px;font-weight:950;text-align:right}.ade-holding-row .rate.up{color:#e5484d}.ade-holding-row .rate.down{color:#2563eb}.ade-holding-row .rate.flat{color:#6b7280}.ade-holding-row .price{text-align:right;font-size:17px;font-weight:850}.ade-holding-row .go{text-align:right;font-size:18px;color:#a2abb5}
 .ade-event-list{margin-top:16px}.ade-event-row{display:grid;grid-template-columns:86px 1fr 104px;gap:14px;align-items:start;padding:15px 0;border-top:1px solid #eceff3}.ade-event-row:first-child{border-top:0}.ade-event-row .time{font-size:11px;font-weight:850;color:#4b5563}.ade-event-row .event{font-size:16px;font-weight:780;line-height:1.35}.ade-event-row .meta{font-size:10px;color:#9aa3ad;margin-top:4px}.ade-event-row .badge{font-size:11px;font-weight:900;padding:6px 9px;border-radius:999px;text-align:center}.ade-event-row .badge.high{background:#fff3cd;color:#8a5a00;border:1px solid #f4d27a}.ade-event-row .badge.very-high{background:#ffe3e6;color:#a61b29;border:1px solid #f3a7ae}.ade-event-row .badge.normal{background:#edf2f7;color:#51606f;border:1px solid #d6dde5}
@@ -95,20 +95,16 @@ def _sparkline_html(history: tuple[float, ...] | list[float] | None) -> str:
         ys = [50.0 for _ in values]
     else:
         ys = [84.0 - ((value - low) / span) * 68.0 for value in values]
-
     xs = [4.0 + i * (92.0 / (len(values) - 1)) for i in range(len(values))]
-    segments: list[str] = ['<div class="baseline"></div>']
-    for i in range(len(xs) - 1):
-        x1, x2 = xs[i], xs[i + 1]
-        y1, y2 = ys[i], ys[i + 1]
-        dx, dy = x2 - x1, y2 - y1
-        length = (dx * dx + dy * dy) ** 0.5
-        angle = __import__('math').degrees(__import__('math').atan2(dy, dx))
-        segments.append(
-            f'<span class="segment" style="left:{x1:.2f}%;top:{y1:.2f}%;width:{length:.2f}%;transform:rotate({angle:.2f}deg)"></span>'
-        )
-    segments.append(f'<span class="dot" style="left:{xs[-1]:.2f}%;top:{ys[-1]:.2f}%"></span>')
-    return ''.join(segments)
+    points = ' '.join(f'{x:.2f},{y:.2f}' for x, y in zip(xs, ys))
+    last_x, last_y = xs[-1], ys[-1]
+    return (
+        '<div class="baseline"></div>'
+        f'<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">'
+        f'<polyline points="{points}"></polyline>'
+        f'<circle cx="{last_x:.2f}" cy="{last_y:.2f}" r="1.45"></circle>'
+        '</svg>'
+    )
 
 
 def _render_market_strip(metrics: dict[str, Any]) -> None:
@@ -187,79 +183,72 @@ def _render_events(important: list[dict[str, Any]]) -> None:
 
 
 def _render_90_day_calendar(rows: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="ade-calendar-card"><div class="ade-calendar-head"><div><div class="ade-calendar-title">90일 주요 일정</div><div class="ade-calendar-sub">앞으로 90일의 주요 경제 이벤트를 시간순으로 확인합니다.</div></div></div><div class="ade-calendar-list">', unsafe_allow_html=True)
+    st.markdown('<div class="ade-calendar-card"><div class="ade-calendar-head"><div><div class="ade-calendar-title">앞으로 90일</div><div class="ade-calendar-sub">예정된 주요 경제 이벤트를 시간순으로 확인합니다.</div></div></div><div class="ade-calendar-list">', unsafe_allow_html=True)
     if rows:
         for row in rows[:12]:
             when = str(row.get("일시(KST)") or "-")
+            date = when[:10] if len(when) >= 10 else when
             country = str(row.get("국가") or "-")
             event = str(row.get("이벤트") or row.get("구분") or "-")
-            importance = str(row.get("중요도") or "-")
+            importance = str(row.get("중요도") or "보통")
             css = _importance_class(importance)
-            st.markdown(f'<div class="ade-calendar-row"><div class="ade-calendar-date">{when}</div><div class="ade-calendar-country">{country}</div><div class="ade-calendar-event">{event}</div><div class="ade-calendar-badge {css}">{importance}</div></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ade-calendar-row"><div class="ade-calendar-date">{date}</div><div class="ade-calendar-country">{country}</div><div class="ade-calendar-event">{event}</div><div class="ade-calendar-badge {css}">{importance}</div></div>', unsafe_allow_html=True)
         if len(rows) > 12:
-            st.markdown(f'<div class="ade-calendar-more">외 {len(rows) - 12}개 일정</div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="ade-calendar-more">외 {len(rows)-12}건</div>', unsafe_allow_html=True)
     else:
-        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 일정이 없습니다.</div>', unsafe_allow_html=True)
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">예정된 경제 이벤트가 없습니다.</div>', unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
 
 def _render_sectors(sectors: list[dict[str, Any]]) -> None:
-    st.markdown('<div class="ade-section-card"><div class="ade-section-title">국내 섹터 흐름</div><div class="ade-section-sub">강한 업종과 약한 업종을 상대강도로 봅니다.</div><div class="ade-sector-list">', unsafe_allow_html=True)
-    if sectors:
-        for row in sectors:
-            name = str(row.get("sector") or "-")
-            rate = _number(row, "change_rate", "relative_strength")
-            tone = "up" if rate > 0 else ("down" if rate < 0 else "flat")
-            st.markdown(f'<div class="ade-sector-row"><div class="name">{name}</div><div class="rate {tone}">{rate:+.2f}%</div></div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 섹터 데이터가 없습니다.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="ade-section-card"><div class="ade-section-title">오늘 강한 섹터</div><div class="ade-section-sub">상대강도 기준으로 시장 흐름을 확인합니다.</div>', unsafe_allow_html=True)
+    if not sectors:
+        st.markdown('<div style="padding:16px 0;color:#8a94a1">표시할 섹터 데이터가 없습니다.</div></div>', unsafe_allow_html=True)
+        return
+    chips = []
+    for row in sectors[:4]:
+        name = str(row.get("sector") or "-")
+        rate = _number(row, "change_rate", "relative_strength")
+        chips.append(f'<div class="ade-sector-chip">{name} {rate:+.2f}%</div>')
+    st.markdown('<div class="ade-sector-chip-row">' + ''.join(chips) + '</div><div class="ade-sector-list">', unsafe_allow_html=True)
+    for row in sectors[:6]:
+        name = str(row.get("sector") or "-")
+        rate = _number(row, "change_rate", "relative_strength")
+        st.markdown(f'<div class="ade-sector-row"><div class="name">{name}</div><div class="rate">{rate:+.2f}%</div></div>', unsafe_allow_html=True)
     st.markdown('</div></div>', unsafe_allow_html=True)
 
 
-def _render_position_detail(base_app: Any, holding: dict[str, Any]) -> None:
-    ticker = _text(holding, "ticker")
-    name = _text(holding, "name", "ticker")
-    if st.button("← 상황종합판으로", key=f"portfolio_back_{ticker}"):
+def _render_position_detail(base_app: Any, position: dict[str, Any]) -> None:
+    if st.button("← 상황종합판으로", key="portfolio_detail_back"):
         st.session_state.ade_portfolio_ticker = None
         st.rerun()
-    st.markdown(f"## {name} · 보유종목 검증")
-    qty = int(_number(holding, "quantity"))
-    avg = _number(holding, "average_price")
-    current_price = _number(holding, "current_price")
-    rate = _number(holding, "pnl_rate")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("보유수량", f"{qty:,}주")
-    c2.metric("평균매입가", f"₩{avg:,.0f}")
-    c3.metric("현재가", f"₩{current_price:,.0f}")
-    c4.metric("수익률", f"{rate:+.2f}%")
-
-    profile = get_market_profile("kr")
-    normalized_ticker = base_app.normalize_ticker(ticker, "kr")
+    ticker = str(position.get("ticker"))
+    name = str(position.get("name") or ticker)
+    qty = int(_number(position, "quantity"))
+    avg = _number(position, "average_price")
+    current_price = _number(position, "current_price")
+    rate = _number(position, "pnl_rate")
+    st.markdown(f"## {name} · 보유종목 판단")
+    st.caption(f"{ticker} · {qty:,}주 · 평단 ₩{avg:,.0f} · 현재 ₩{current_price:,.0f} · {rate:+.2f}%")
+    market = "kr"
+    profile = base_app.get_market_profile(market)
+    normalized = base_app.normalize_ticker(ticker, market)
     with base_app.sqlite3.connect(str(profile.db_path), timeout=5) as conn:
         conn.row_factory = base_app.sqlite3.Row
-        current, source, warning = base_app._load_current_bars_resilient(conn, "kr", normalized_ticker, profile.price_source)
+        current, source, warning = base_app._load_current_bars_resilient(conn, market, normalized, profile.price_source)
+    if not current.empty:
+        st.plotly_chart(base_app.build_trading_chart(current, name, average_price=avg), use_container_width=True, config=base_app.CHART_CONFIG)
     if warning:
         st.caption(warning)
-    if not current.empty:
-        chart = base_app.build_trading_chart(current, name)
-        try:
-            chart.add_hline(y=avg, line_dash="dot", annotation_text=f"평단 {avg:,.0f}")
-        except Exception:
-            pass
-        st.plotly_chart(chart, use_container_width=True, config=base_app.CHART_CONFIG)
-    else:
-        st.info("현재 가격 차트를 불러오지 못했습니다.")
-
-    supply = base_app.load_supply_demand_health(normalized_ticker, market="kr")
-    st.markdown("### 수급·환경")
-    st.write(str((supply.get("investor") or {}).get("detail") or "수급 데이터 확인 필요"))
-
-    recommendations, context = base_app._load_recommendations("kr")
+    supply = base_app.load_supply_demand_health(normalized, market=market)
+    st.markdown("### 수급")
+    base_app._render_supply_demand(supply)
+    recommendations, context = base_app._load_recommendations(market)
     recommendation = next((row for row in recommendations if str(row.get("ticker")) == ticker), None)
-    st.markdown("### ADE 추천 상태")
-    if recommendation:
+    st.markdown("### ADE 추천")
+    if recommendation is not None:
         payload = base_app._safe_json(recommendation.get("payload_json"))
-        score = _number(recommendation, "score", "final_similarity", "weekly_similarity")
+        score = _number(recommendation, "score", "weekly_similarity", "final_similarity")
         sto = _number(recommendation, "sto_similarity")
         replay = payload.get("replay_matches") if isinstance(payload, dict) else []
         k1, k2, k3 = st.columns(3)

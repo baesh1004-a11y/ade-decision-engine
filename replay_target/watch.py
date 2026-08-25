@@ -10,8 +10,8 @@ from sto.structure_similarity import STOStructure, STOStructureSimilarityEngine
 
 @dataclass(frozen=True)
 class TargetWatchConfig:
-    ticker: str = "232080"
-    symbol: str = "TIGER 코스닥150"
+    ticker: str = "229200"
+    symbol: str = "KODEX 코스닥150"
     watch_threshold: float = 65.0
     approaching_threshold: float = 75.0
     trigger_threshold: float = 85.0

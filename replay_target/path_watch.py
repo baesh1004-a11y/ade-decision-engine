@@ -12,12 +12,10 @@ from sto.structure_similarity import STOStructureSimilarityEngine
 class PathWatchConfig:
     """Trajectory tracking for Replay Target Watch.
 
-    The target endpoint score answers "how close are we to the box?".
-    Path Watch answers a different question: "are we still travelling through
-    the same sequence that the reference case travelled through?".
-
-    A small timing lead/lag is allowed because two market paths rarely advance
-    at exactly the same trading-day speed.
+    Target Watch answers "how close are we to the target box?".
+    Path Watch answers "are we still travelling through the same sequence as
+    the historical reference?". A small timing lead/lag is allowed because two
+    market paths rarely advance at exactly the same trading-day speed.
     """
 
     ticker: str = "229200"
@@ -67,6 +65,7 @@ class PathWatchSnapshot:
     matched_reference_date: str | None
     consecutive_mismatch_days: int
     divergence_started_at: str | None
+    break_confirmed_at: str | None
     last_sync_date: str | None
     price_direction_match: bool | None
     sto_direction_matches: int | None
@@ -130,7 +129,6 @@ def _direction(value: float, *, epsilon: float = 0.001) -> int:
 
 
 def _return_score(current_return: float, reference_return: float) -> float:
-    # A 5 percentage-point one-day return gap is already a material mismatch.
     distance = abs(float(current_return) - float(reference_return))
     return max(0.0, 100.0 / (1.0 + distance * 20.0))
 
@@ -215,13 +213,27 @@ def _consecutive_below(matches: list[PathDailyMatch], threshold: float) -> int:
     return count
 
 
-def _had_confirmed_break(matches: list[PathDailyMatch], config: PathWatchConfig) -> bool:
+def _break_windows(matches: list[PathDailyMatch], config: PathWatchConfig) -> list[tuple[str, str]]:
+    """Return (warning-start date, confirmed-break date) windows."""
+
+    windows: list[tuple[str, str]] = []
     run = 0
+    warning_start: str | None = None
+    confirmed = False
     for item in matches:
-        run = run + 1 if item.score < config.break_threshold else 0
-        if run >= config.break_confirm_days:
-            return True
-    return False
+        if item.score < config.warning_threshold and warning_start is None:
+            warning_start = item.current_date
+        if item.score < config.break_threshold:
+            run += 1
+            if run >= config.break_confirm_days and not confirmed:
+                windows.append((warning_start or item.current_date, item.current_date))
+                confirmed = True
+        else:
+            run = 0
+            if item.score >= config.sync_threshold:
+                warning_start = None
+                confirmed = False
+    return windows
 
 
 def _path_state(
@@ -229,34 +241,96 @@ def _path_state(
     timing_offset: int,
     *,
     config: PathWatchConfig,
-) -> tuple[str, int, str | None, str | None]:
+) -> tuple[str, int, str | None, str | None, str | None]:
     if not matches:
-        return "데이터 없음", 0, None, None
+        return "데이터 없음", 0, None, None, None
 
     current_score = matches[-1].score
     mismatch_days = _consecutive_below(matches, config.warning_threshold)
-    divergence_started_at = matches[-mismatch_days].current_date if mismatch_days else None
+    active_divergence = matches[-mismatch_days].current_date if mismatch_days else None
     synced = [item.current_date for item in matches if item.score >= config.sync_threshold]
     last_sync_date = synced[-1] if synced else None
+    windows = _break_windows(matches, config)
+    latest_break_start = windows[-1][0] if windows else None
+    latest_break_confirmed = windows[-1][1] if windows else None
 
     confirmed_break = _consecutive_below(matches, config.break_threshold) >= config.break_confirm_days
-    prior_matches = matches[:-config.resync_confirm_days] if len(matches) > config.resync_confirm_days else []
     recent = matches[-config.resync_confirm_days :]
     resynced = (
-        len(recent) >= config.resync_confirm_days
+        bool(windows)
+        and len(recent) >= config.resync_confirm_days
         and all(item.score >= config.sync_threshold for item in recent)
-        and _had_confirmed_break(prior_matches, config)
+        and latest_break_confirmed not in {item.current_date for item in recent}
     )
 
+    divergence_started_at = active_divergence or latest_break_start
     if resynced:
-        return "재동조", mismatch_days, divergence_started_at, last_sync_date
+        return "재동조", mismatch_days, divergence_started_at, latest_break_confirmed, last_sync_date
     if confirmed_break:
-        return "경로 이탈", mismatch_days, divergence_started_at, last_sync_date
+        return "경로 이탈", mismatch_days, divergence_started_at, latest_break_confirmed, last_sync_date
     if current_score < config.warning_threshold:
-        return "이탈 주의", mismatch_days, divergence_started_at, last_sync_date
+        return "이탈 주의", mismatch_days, divergence_started_at, latest_break_confirmed, last_sync_date
     if abs(timing_offset) > 0:
-        return ("선행" if timing_offset > 0 else "지연"), mismatch_days, divergence_started_at, last_sync_date
-    return "동조 중", mismatch_days, divergence_started_at, last_sync_date
+        return ("선행" if timing_offset > 0 else "지연"), mismatch_days, divergence_started_at, latest_break_confirmed, last_sync_date
+    return "동조 중", mismatch_days, divergence_started_at, latest_break_confirmed, last_sync_date
+
+
+def _empty_snapshot(cfg: PathWatchConfig, current: pd.DataFrame, note: str) -> PathWatchSnapshot:
+    return PathWatchSnapshot(
+        ticker=cfg.ticker,
+        symbol=cfg.symbol,
+        reference_ticker=cfg.reference_ticker,
+        reference_symbol=cfg.reference_symbol,
+        as_of=None if current.empty else str(pd.Timestamp(current["Date"].iloc[-1]).date()),
+        path_state="데이터 없음",
+        path_score=None,
+        timing_offset_days=None,
+        timing_label="비교 불가",
+        matched_reference_date=None,
+        consecutive_mismatch_days=0,
+        divergence_started_at=None,
+        break_confirmed_at=None,
+        last_sync_date=None,
+        price_direction_match=None,
+        sto_direction_matches=None,
+        arrangement_match=None,
+        daily_matches=(),
+        note=note,
+    )
+
+
+def _collect_matches(
+    current: pd.DataFrame,
+    reference: pd.DataFrame,
+    *,
+    current_anchor: int,
+    reference_anchor: int,
+    elapsed: int,
+    offset: int,
+    start_step: int,
+    engine: STOStructureSimilarityEngine,
+    config: PathWatchConfig,
+) -> tuple[list[PathDailyMatch], list[int]]:
+    matches: list[PathDailyMatch] = []
+    sto_direction_counts: list[int] = []
+    for step in range(max(1, start_step), elapsed + 1):
+        current_index = current_anchor + step
+        reference_index = reference_anchor + step + offset
+        if current_index <= 0 or current_index >= len(current):
+            continue
+        if reference_index <= 0 or reference_index >= len(reference):
+            continue
+        match, sto_count = _daily_match(
+            current,
+            reference,
+            current_index,
+            reference_index,
+            engine=engine,
+            config=config,
+        )
+        matches.append(match)
+        sto_direction_counts.append(sto_count)
+    return matches, sto_direction_counts
 
 
 def build_path_snapshot(
@@ -269,10 +343,12 @@ def build_path_snapshot(
 ) -> PathWatchSnapshot:
     """Compare the post-anchor trajectory with an historical reference path.
 
-    `current_anchor_date` is the T0 date on KODEX 코스닥150.
-    `reference_anchor_date` is the corresponding circled T0 date on the AK홀딩스
-    historical chart. The function tests alignments within ±lag_tolerance_days and
-    chooses the timing offset with the highest recent average path score.
+    `current_anchor_date` is T0 on KODEX 코스닥150 and
+    `reference_anchor_date` is the corresponding circled T0 on AK홀딩스.
+    The best timing alignment is selected from ±lag_tolerance_days using only
+    recent observations, then the entire T0→today path is evaluated on that
+    alignment so the first divergence and any later resynchronization remain
+    observable.
     """
 
     cfg = config or PathWatchConfig()
@@ -280,85 +356,59 @@ def build_path_snapshot(
     reference = _normalize_ohlcv(reference_ohlcv)
     current_anchor = _date_index(current, current_anchor_date)
     reference_anchor = _date_index(reference, reference_anchor_date)
-
     if current.empty or reference.empty or current_anchor is None or reference_anchor is None:
-        return PathWatchSnapshot(
-            ticker=cfg.ticker,
-            symbol=cfg.symbol,
-            reference_ticker=cfg.reference_ticker,
-            reference_symbol=cfg.reference_symbol,
-            as_of=None if current.empty else str(pd.Timestamp(current["Date"].iloc[-1]).date()),
-            path_state="데이터 없음",
-            path_score=None,
-            timing_offset_days=None,
-            timing_label="비교 불가",
-            matched_reference_date=None,
-            consecutive_mismatch_days=0,
-            divergence_started_at=None,
-            last_sync_date=None,
-            price_direction_match=None,
-            sto_direction_matches=None,
-            arrangement_match=None,
-            daily_matches=(),
-            note="현재/과거 OHLCV 또는 T0 기준일을 확인할 수 없습니다.",
-        )
+        return _empty_snapshot(cfg, current, "현재/과거 OHLCV 또는 T0 기준일을 확인할 수 없습니다.")
 
     elapsed = len(current) - 1 - current_anchor
+    if elapsed < 1:
+        return _empty_snapshot(cfg, current, "T0 이후 최소 1거래일의 데이터가 필요합니다.")
+
     engine = STOStructureSimilarityEngine()
-    best: tuple[float, int, list[PathDailyMatch], list[int]] | None = None
+    best_offset: int | None = None
+    best_recent_score: float | None = None
+    recent_start = max(1, elapsed - cfg.comparison_days + 1)
 
     for offset in range(-cfg.lag_tolerance_days, cfg.lag_tolerance_days + 1):
-        matches: list[PathDailyMatch] = []
-        sto_direction_counts: list[int] = []
-        start_elapsed = max(1, elapsed - cfg.comparison_days + 1)
-        for step in range(start_elapsed, elapsed + 1):
-            current_index = current_anchor + step
-            reference_index = reference_anchor + step + offset
-            if current_index <= 0 or current_index >= len(current):
-                continue
-            if reference_index <= 0 or reference_index >= len(reference):
-                continue
-            match, sto_count = _daily_match(
-                current,
-                reference,
-                current_index,
-                reference_index,
-                engine=engine,
-                config=cfg,
-            )
-            matches.append(match)
-            sto_direction_counts.append(sto_count)
-        if not matches:
-            continue
-        average = sum(item.score for item in matches) / len(matches)
-        candidate = (average, offset, matches, sto_direction_counts)
-        if best is None or candidate[0] > best[0]:
-            best = candidate
-
-    if best is None:
-        return PathWatchSnapshot(
-            ticker=cfg.ticker,
-            symbol=cfg.symbol,
-            reference_ticker=cfg.reference_ticker,
-            reference_symbol=cfg.reference_symbol,
-            as_of=str(pd.Timestamp(current["Date"].iloc[-1]).date()),
-            path_state="데이터 없음",
-            path_score=None,
-            timing_offset_days=None,
-            timing_label="비교 불가",
-            matched_reference_date=None,
-            consecutive_mismatch_days=0,
-            divergence_started_at=None,
-            last_sync_date=None,
-            price_direction_match=None,
-            sto_direction_matches=None,
-            arrangement_match=None,
-            daily_matches=(),
-            note="T0 이후 비교 가능한 과거 거래일이 부족합니다.",
+        recent_matches, _ = _collect_matches(
+            current,
+            reference,
+            current_anchor=current_anchor,
+            reference_anchor=reference_anchor,
+            elapsed=elapsed,
+            offset=offset,
+            start_step=recent_start,
+            engine=engine,
+            config=cfg,
         )
+        if not recent_matches:
+            continue
+        average = sum(item.score for item in recent_matches) / len(recent_matches)
+        if best_recent_score is None or average > best_recent_score:
+            best_recent_score = average
+            best_offset = offset
 
-    average, offset, matches, sto_direction_counts = best
-    state, mismatch_days, divergence_started_at, last_sync_date = _path_state(matches, offset, config=cfg)
+    if best_offset is None or best_recent_score is None:
+        return _empty_snapshot(cfg, current, "T0 이후 비교 가능한 과거 거래일이 부족합니다.")
+
+    matches, sto_direction_counts = _collect_matches(
+        current,
+        reference,
+        current_anchor=current_anchor,
+        reference_anchor=reference_anchor,
+        elapsed=elapsed,
+        offset=best_offset,
+        start_step=1,
+        engine=engine,
+        config=cfg,
+    )
+    if not matches:
+        return _empty_snapshot(cfg, current, "선택된 시간 정렬에서 비교 가능한 거래일이 없습니다.")
+
+    state, mismatch_days, divergence_started_at, break_confirmed_at, last_sync_date = _path_state(
+        matches,
+        best_offset,
+        config=cfg,
+    )
     latest = matches[-1]
     return PathWatchSnapshot(
         ticker=cfg.ticker,
@@ -367,20 +417,22 @@ def build_path_snapshot(
         reference_symbol=cfg.reference_symbol,
         as_of=latest.current_date,
         path_state=state,
-        path_score=round(average, 2),
-        timing_offset_days=offset,
-        timing_label=_timing_label(offset),
+        path_score=round(best_recent_score, 2),
+        timing_offset_days=best_offset,
+        timing_label=_timing_label(best_offset),
         matched_reference_date=latest.reference_date,
         consecutive_mismatch_days=mismatch_days,
         divergence_started_at=divergence_started_at,
+        break_confirmed_at=break_confirmed_at,
         last_sync_date=last_sync_date,
         price_direction_match=latest.price_direction_match,
         sto_direction_matches=sto_direction_counts[-1],
         arrangement_match=latest.arrangement_match,
         daily_matches=tuple(matches),
         note=(
-            "Path State v1 · 최근 경로를 ±3거래일 범위에서 정렬해 가격 방향/변화폭과 "
-            "3계층 STO 구조·배열을 비교합니다. 하루 불일치는 경고, 2거래일 연속 강한 "
-            "불일치는 경로 이탈로 확인합니다."
+            "Path State v1.1 · 최근 5거래일로 ±3거래일 시간차를 정렬한 뒤 T0부터 현재까지의 "
+            "전체 경로를 가격 방향/변화폭과 3계층 STO 구조·배열로 추적합니다. 하루 불일치는 "
+            "이탈 주의, 2거래일 연속 강한 불일치는 경로 이탈, 이후 2거래일 연속 재일치하면 "
+            "재동조로 판정합니다."
         ),
     )

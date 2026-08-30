@@ -8,7 +8,7 @@ from dashboard import ade_ui_v1_entrypoint as terminal
 from dashboard.kis_zero_base_bridge import kis_configuration_status, probe_kis_connection
 from dashboard.order_candidate_store import store_health
 from dashboard.overview_workspace_no_charts import render_overview_workspace
-from dashboard.replay_target_terminal import render_replay_target_terminal
+from dashboard.replay_target_workspace import render_replay_watch_workspace
 
 
 KIS_PROBE_RESULT_KEY = "ade_kis_probe_result"
@@ -185,7 +185,7 @@ def run() -> None:
         base_app._render_jp_radar()
     elif page == "Replay Watch":
         base_app._release_live_lease()
-        render_replay_target_terminal()
+        render_replay_watch_workspace()
     else:
         st.session_state.ade_primary_page = "상황종합판"
         st.rerun()

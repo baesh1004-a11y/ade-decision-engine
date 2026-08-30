@@ -14,6 +14,9 @@ _PERIOD_DAYS = {
     "1y": 366,
     "2y": 731,
     "5y": 1826,
+    "10y": 3653,
+    "15y": 5479,
+    "20y": 7306,
 }
 
 
@@ -60,7 +63,7 @@ class FDRCollector:
         days = _PERIOD_DAYS.get(period)
         if days is None:
             raise ValueError(
-                "Unsupported period. Use one of: 1mo, 3mo, 6mo, 1y, 2y, 5y, max"
+                "Unsupported period. Use one of: 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, 15y, 20y, max"
             )
 
         end = date.today()

@@ -21,12 +21,17 @@ class IntegratedWatchConfig:
     reference_ticker: str = "006840"
     reference_symbol: str = "AK홀딩스(당시 애경유화)"
     current_anchor_date: str = "2026-08-25"
-    reference_window_start: str = "2011-09-01"
-    reference_window_end: str = "2011-12-31"
+
+    reference_window_start: str = "2011-10-17"
+    reference_window_end: str = "2011-11-11"
     reference_anchor_date: str | None = None
-    reference_target_date: str | None = "2011-12-14"
+
+    reference_target_date: str | None = None
+    reference_target_window_start: str = "2011-11-14"
+    reference_target_window_end: str = "2011-12-02"
+
     current_period: str = "2y"
-    reference_period: str = "max"
+    reference_period: str = "20y"
     min_current_rows: int = 80
     min_reference_rows: int = 120
 
@@ -41,12 +46,16 @@ class IntegratedWatchResult:
     reference_quality_score: int
     current_rows: int
     reference_rows: int
+    current_oldest_date: str | None
     current_latest_date: str | None
+    reference_oldest_date: str | None
     reference_latest_date: str | None
+    current_close: float | None
     resolved_current_anchor_date: str | None
     resolved_reference_anchor_date: str | None
     anchor_similarity: float | None
     resolved_reference_target_date: str | None
+    target_selection: str
     target: TargetWatchSnapshot | None
     path: PathWatchSnapshot | None
     warnings: tuple[str, ...]
@@ -59,11 +68,10 @@ class IntegratedWatchResult:
 
 
 class ReplayTargetIntegratedService:
-    """Load ADE market data, calibrate a reference anchor, and run both watches.
+    """Load market data, calibrate the reference, then run both watches.
 
-    This is intentionally isolated from the recommendation and order pipelines.
-    It is a research/verification workbench: no signal, position, or order state is
-    changed by this service.
+    The service is isolated from recommendation and order state. It reads
+    market data and returns research/verification evidence only.
     """
 
     def __init__(self, collector: MarketDataCollector | None = None) -> None:
@@ -120,6 +128,12 @@ class ReplayTargetIntegratedService:
         if len(reference) < cfg.min_reference_rows:
             warnings.append(f"과거 데이터가 {len(reference)}행으로 기준 {cfg.min_reference_rows}행보다 적습니다.")
 
+        reference_oldest = _oldest_date(reference)
+        if reference_oldest and pd.Timestamp(reference_oldest) > pd.Timestamp(cfg.reference_window_start):
+            warnings.append(
+                f"AK 과거 데이터가 {reference_oldest}부터 시작해 2011 기준구간을 포함하지 않습니다."
+            )
+
         resolved_current_anchor = _resolve_date(current, cfg.current_anchor_date)
         if resolved_current_anchor is None:
             warnings.append("KODEX 기준일(T0)을 현재 데이터에서 찾지 못했습니다.")
@@ -147,14 +161,28 @@ class ReplayTargetIntegratedService:
                     window_end=cfg.reference_window_end,
                 )
                 if resolved_reference_anchor is None:
-                    warnings.append("지정한 과거 구간에서 자동 기준일을 찾지 못했습니다.")
+                    warnings.append("AK 동그라미/A 전환 구간에서 대응 T0를 찾지 못했습니다.")
 
-        resolved_target = _resolve_date(reference, cfg.reference_target_date) if cfg.reference_target_date else None
-        if cfg.reference_target_date and resolved_target is None:
-            warnings.append("지정한 Target 기준일을 과거 데이터에서 찾지 못했습니다.")
+        target_selection = "미설정"
+        if cfg.reference_target_date:
+            resolved_target = _resolve_date(reference, cfg.reference_target_date)
+            target_selection = "직접 지정"
+            if resolved_target is None:
+                warnings.append("지정한 B Target 기준일을 과거 데이터에서 찾지 못했습니다.")
+        else:
+            resolved_target = _auto_reference_target(
+                reference,
+                window_start=cfg.reference_target_window_start,
+                window_end=cfg.reference_target_window_end,
+                after_date=resolved_reference_anchor,
+            )
+            target_selection = "B 박스 구간 자동 저점"
+            if resolved_target is None:
+                warnings.append("AK B 박스 후보구간에서 Target 기준일을 찾지 못했습니다.")
+
         if resolved_reference_anchor and resolved_target:
             if pd.Timestamp(resolved_target) <= pd.Timestamp(resolved_reference_anchor):
-                warnings.append("Target 기준일은 과거 기준일보다 뒤여야 합니다.")
+                warnings.append("B Target 기준일은 AK 대응 T0보다 뒤여야 합니다.")
                 resolved_target = None
 
         target_snapshot: TargetWatchSnapshot | None = None
@@ -190,12 +218,16 @@ class ReplayTargetIntegratedService:
             reference_quality_score=int(reference_quality_score),
             current_rows=len(current),
             reference_rows=len(reference),
+            current_oldest_date=_oldest_date(current),
             current_latest_date=_latest_date(current),
+            reference_oldest_date=reference_oldest,
             reference_latest_date=_latest_date(reference),
+            current_close=_latest_close(current),
             resolved_current_anchor_date=resolved_current_anchor,
             resolved_reference_anchor_date=resolved_reference_anchor,
             anchor_similarity=None if anchor_similarity is None else round(anchor_similarity, 2),
             resolved_reference_target_date=resolved_target,
+            target_selection=target_selection,
             target=target_snapshot,
             path=path_snapshot,
             warnings=tuple(dict.fromkeys(warnings)),
@@ -214,7 +246,9 @@ class ReplayTargetIntegratedService:
             return 0.0
         current_structure = self.sto.extract(current_frame)
         reference_structure = self.sto.extract(reference_frame)
-        return float(self.sto.similarity(current_structure, reference_structure))
+        sto_score = float(self.sto.similarity(current_structure, reference_structure))
+        price_score = _price_shape_similarity(current_frame, reference_frame)
+        return sto_score * 0.75 + price_score * 0.25
 
     def _auto_reference_anchor(
         self,
@@ -241,11 +275,51 @@ class ReplayTargetIntegratedService:
             history = reference.loc[:idx]
             if len(history) < 50:
                 continue
-            score = float(self.sto.similarity(current_structure, self.sto.extract(history)))
+            sto_score = float(self.sto.similarity(current_structure, self.sto.extract(history)))
+            price_score = _price_shape_similarity(current_frame, history)
+            score = sto_score * 0.75 + price_score * 0.25
             if best_score is None or score > best_score:
                 best_score = score
                 best_date = str(pd.Timestamp(reference.loc[idx, "Date"]).date())
         return best_date, best_score
+
+
+def _auto_reference_target(
+    reference: pd.DataFrame,
+    *,
+    window_start: str,
+    window_end: str,
+    after_date: str | None,
+) -> str | None:
+    if reference.empty:
+        return None
+    start = pd.Timestamp(window_start)
+    end = pd.Timestamp(window_end)
+    candidates = reference[(reference["Date"] >= start) & (reference["Date"] <= end)].copy()
+    if after_date:
+        candidates = candidates[candidates["Date"] > pd.Timestamp(after_date)]
+    if candidates.empty:
+        return None
+    idx = candidates["Close"].astype(float).idxmin()
+    return str(pd.Timestamp(reference.loc[idx, "Date"]).date())
+
+
+def _price_shape_similarity(a: pd.DataFrame, b: pd.DataFrame, length: int = 20) -> float:
+    if a.empty or b.empty:
+        return 0.0
+    av = a["Close"].astype(float).tail(length).tolist()
+    bv = b["Close"].astype(float).tail(length).tolist()
+    n = min(len(av), len(bv))
+    if n < 5:
+        return 0.0
+    av = av[-n:]
+    bv = bv[-n:]
+    abase = av[0] if av[0] else 1.0
+    bbase = bv[0] if bv[0] else 1.0
+    an = [value / abase - 1.0 for value in av]
+    bn = [value / bbase - 1.0 for value in bv]
+    rmse = (sum((x - y) ** 2 for x, y in zip(an, bn)) / n) ** 0.5
+    return max(0.0, 100.0 / (1.0 + rmse * 10.0))
 
 
 def _normalize_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
@@ -293,7 +367,22 @@ def _resolve_date(frame: pd.DataFrame, requested: str | None) -> str | None:
     return str(pd.Timestamp(eligible["Date"].iloc[-1]).date())
 
 
+def _oldest_date(frame: pd.DataFrame) -> str | None:
+    if frame.empty:
+        return None
+    return str(pd.Timestamp(frame["Date"].iloc[0]).date())
+
+
 def _latest_date(frame: pd.DataFrame) -> str | None:
     if frame.empty:
         return None
     return str(pd.Timestamp(frame["Date"].iloc[-1]).date())
+
+
+def _latest_close(frame: pd.DataFrame) -> float | None:
+    if frame.empty:
+        return None
+    try:
+        return float(frame["Close"].iloc[-1])
+    except (TypeError, ValueError):
+        return None

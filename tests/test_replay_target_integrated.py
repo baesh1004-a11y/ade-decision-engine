@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from collector.fdr import FDRCollector
 from replay_target.integrated import IntegratedWatchConfig, ReplayTargetIntegratedService
 
 
@@ -40,23 +41,37 @@ def test_integrated_watch_with_manual_anchor_produces_target_and_path() -> None:
     assert result.target.target_score is not None
     assert result.path is not None
     assert result.path.path_score is not None
+    assert result.current_close is not None
 
 
-def test_integrated_watch_auto_calibrates_reference_anchor_inside_window() -> None:
+def test_integrated_watch_auto_calibrates_anchor_and_b_target_inside_windows() -> None:
     current = _ohlcv("2026-01-02", 190, phase=0.4)
     reference = _ohlcv("2011-01-03", 280, phase=0.4)
     service = ReplayTargetIntegratedService()
     cfg = IntegratedWatchConfig(
         current_anchor_date="2026-08-25",
         reference_window_start="2011-09-01",
-        reference_window_end="2011-12-31",
+        reference_window_end="2011-10-31",
         reference_anchor_date=None,
-        reference_target_date="2011-12-30",
+        reference_target_date=None,
+        reference_target_window_start="2011-11-01",
+        reference_target_window_end="2011-12-30",
     )
 
     result = service.evaluate_frames(current, reference, config=cfg)
 
     assert result.resolved_reference_anchor_date is not None
     resolved = pd.Timestamp(result.resolved_reference_anchor_date)
-    assert pd.Timestamp("2011-09-01") <= resolved <= pd.Timestamp("2011-12-31")
+    assert pd.Timestamp("2011-09-01") <= resolved <= pd.Timestamp("2011-10-31")
     assert result.anchor_similarity is not None
+    assert result.resolved_reference_target_date is not None
+    target = pd.Timestamp(result.resolved_reference_target_date)
+    assert pd.Timestamp("2011-11-01") <= target <= pd.Timestamp("2011-12-30")
+    assert result.target_selection == "B 박스 구간 자동 저점"
+
+
+def test_fdr_supports_twenty_year_reference_window() -> None:
+    start, end = FDRCollector._date_range("20y")
+    assert start is not None
+    assert end is not None
+    assert (pd.Timestamp(end) - pd.Timestamp(start)).days >= 7300

@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from dashboard import ade_ui_v1_app as base_app
 from dashboard import ade_ui_v1_entrypoint as terminal
+from dashboard.overview_workspace_no_charts import render_overview_workspace
 from dashboard.replay_target_terminal import render_replay_target_terminal
+
+
+def _render_overview_without_charts() -> None:
+    render_overview_workspace(base_app)
 
 
 def _render_top_navigation() -> None:
@@ -44,9 +49,7 @@ def run() -> None:
     base_app._init_state()
     base_app._apply_workspace_theme()
 
-    # Keep the current production renderers and add Replay Watch as a fifth,
-    # isolated primary workspace.
-    base_app._render_overview = terminal._render_overview
+    base_app._render_overview = _render_overview_without_charts
     base_app._render_status_bar = terminal._render_status_bar
     base_app._render_orders = terminal._render_orders
     base_app._render_recommendations = terminal._render_recommendations

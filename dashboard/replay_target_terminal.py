@@ -5,6 +5,7 @@ from html import escape
 
 import pandas as pd
 
+from dashboard.kis_zero_base_bridge import load_kis_quote
 from replay_target.integrated import IntegratedWatchConfig, ReplayTargetIntegratedService
 
 
@@ -32,6 +33,16 @@ def _diagnostic_html(messages: tuple[str, ...] | list[str]) -> str:
     )
 
 
+def _quote_price(quote: dict | None) -> float | None:
+    if not quote:
+        return None
+    try:
+        value = float(quote.get("price") or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
 def render_replay_target_terminal() -> None:
     """Render Replay Target / Path Watch inside the ADE primary terminal."""
 
@@ -56,7 +67,7 @@ def render_replay_target_terminal() -> None:
         <div class="ade-replay-shell">
           <div class="ade-replay-hero">
             <div class="ade-replay-title">Replay Target / Path Watch</div>
-            <div class="ade-replay-sub">KODEX 코스닥150(229200)의 2026-08-25 이후 경로를 AK홀딩스(006840·당시 애경유화)의 2011년 동그라미→A→B 경로와 비교합니다. 추천·주문 상태는 변경하지 않습니다.</div>
+            <div class="ade-replay-sub">KODEX 코스닥150(229200)의 2026-08-25 이후 경로를 AK홀딩스(006840·당시 애경유화)의 2011년 동그라미→A→B 경로와 비교합니다. 현재가는 KIS REST를 우선 사용하고, Target/Path 계산은 종가 일봉 기준으로 수행합니다.</div>
           </div>
         </div>
         """,
@@ -69,7 +80,7 @@ def render_replay_target_terminal() -> None:
     with top_left:
         st.caption(
             "기본 기준 · 현재 T0 2026-08-25 · AK 대응점 2011-10-17~11-11 자동 탐색 · "
-            "B 후보 2011-11-14~12-02 구간 저점 자동 선택 · 종가 기준"
+            "B 후보 2011-11-14~12-02 구간 저점 자동 선택 · AK 2011 데이터는 KRX/pykrx 우선 보강"
         )
     with top_right:
         refresh = st.button("지금 점검", type="primary", use_container_width=True, key="ade_replay_watch_refresh")
@@ -133,22 +144,35 @@ def render_replay_target_terminal() -> None:
 
     target = getattr(result, "target", None)
     path = getattr(result, "path", None)
-    current_close = getattr(result, "current_close", None)
-    if current_close is None and target is not None:
-        current_close = target.current_close
+    eod_close = getattr(result, "current_close", None)
+    if eod_close is None and target is not None:
+        eod_close = target.current_close
+
+    quote, quote_error = load_kis_quote(result.config.ticker, refresh=refresh)
+    kis_price = _quote_price(quote)
+    display_price = kis_price if kis_price is not None else eod_close
+    price_label = "현재가 · KIS" if kis_price is not None else "기준 종가"
 
     st.markdown(
         '<div class="ade-replay-section"><div class="ade-replay-section-title">현재 판정</div>'
-        '<div class="ade-replay-section-sub">Target 접근도와 T0 이후 경로 동조 상태</div>',
+        '<div class="ade-replay-section-sub">현재가는 KIS REST 우선 · Target/Path 점수는 종가 일봉 기준</div>',
         unsafe_allow_html=True,
     )
     a, b, c, d, e, f = st.columns(6)
-    a.metric("현재 종가", "-" if current_close is None else f"{current_close:,.0f}")
+    a.metric(price_label, "-" if display_price is None else f"{display_price:,.0f}")
     b.metric("Target Score", "-" if target is None or target.target_score is None else f"{target.target_score:.1f}")
     c.metric("Target State", "-" if target is None else target.state)
     d.metric("Path Score", "-" if path is None or path.path_score is None else f"{path.path_score:.1f}")
     e.metric("Path State", "-" if path is None else path.path_state)
     f.metric("선행/지연", "-" if path is None else path.timing_label)
+    if kis_price is not None:
+        st.caption(
+            f"KIS REST 현재가 {kis_price:,.0f} · 계산 기준 일봉 최신 "
+            f"{getattr(result, 'current_latest_date', None) or '-'} / 종가 "
+            f"{'-' if eod_close is None else f'{eod_close:,.0f}'}"
+        )
+    elif quote_error:
+        st.caption(f"KIS 현재가 조회 불가 · 일봉 종가 사용: {quote_error}")
     st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(
@@ -166,9 +190,9 @@ def render_replay_target_terminal() -> None:
     current_oldest = getattr(result, "current_oldest_date", None) or "?"
     reference_oldest = getattr(result, "reference_oldest_date", None) or "?"
     st.caption(
-        f"현재 {result.current_source} · {result.current_rows}행 · 품질 {result.current_quality_score}/100 · "
+        f"현재 계산 {result.current_source} · {result.current_rows}행 · 품질 {result.current_quality_score}/100 · "
         f"{current_oldest}~{result.current_latest_date or '-'} | "
-        f"AK {result.reference_source} · {result.reference_rows}행 · 품질 {result.reference_quality_score}/100 · "
+        f"AK 역사 {result.reference_source} · {result.reference_rows}행 · 품질 {result.reference_quality_score}/100 · "
         f"{reference_oldest}~{result.reference_latest_date or '-'} · "
         f"Target 선택 {getattr(result, 'target_selection', '-')}"
     )
@@ -218,7 +242,10 @@ def render_replay_target_terminal() -> None:
         st.markdown("</div>", unsafe_allow_html=True)
 
     if getattr(result, "ready", False):
-        st.markdown('<div class="ade-replay-ready">Target과 Path 동시 판정 가능 · 현재 결과를 거래일별로 이어서 비교합니다.</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="ade-replay-ready">Target과 Path 동시 판정 가능 · 현재 결과를 거래일별로 이어서 비교합니다.</div>',
+            unsafe_allow_html=True,
+        )
 
     diagnostic = _diagnostic_html(getattr(result, "warnings", ()))
     if diagnostic:

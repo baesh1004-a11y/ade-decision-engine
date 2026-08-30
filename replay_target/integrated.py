@@ -70,8 +70,10 @@ class IntegratedWatchResult:
 class ReplayTargetIntegratedService:
     """Load market data, calibrate the reference, then run both watches.
 
-    The service is isolated from recommendation and order state. It reads
-    market data and returns research/verification evidence only.
+    Current KODEX EOD history stays on the normal ADE collector. The historical
+    AK reference is automatically replaced by an explicit-date KRX source when
+    the ordinary collector does not actually contain the 2011 comparison
+    windows. This avoids generating scores from a recent-only 3000-row slice.
     """
 
     def __init__(self, collector: MarketDataCollector | None = None) -> None:
@@ -91,15 +93,38 @@ class ReplayTargetIntegratedService:
                 interval="1d",
             )
         )
+
+        reference_data = _normalize_ohlcv(reference_result.data)
+        reference_source = reference_result.source
+        reference_quality = reference_result.quality_score
+        reference_message = reference_result.message
+
+        if not _reference_has_required_windows(reference_data, cfg):
+            fallback, fallback_source, fallback_message = _load_reference_history(cfg)
+            if not fallback.empty and _reference_has_required_windows(fallback, cfg):
+                reference_data = fallback
+                reference_source = fallback_source
+                reference_quality = _quality_score(fallback)
+                reference_message = (
+                    f"기본 {reference_result.source} 데이터가 2011 기준구간을 포함하지 않아 "
+                    f"{fallback_source} 명시기간 데이터로 교체했습니다."
+                )
+            else:
+                detail = fallback_message or "과거 데이터 공급원에서 2011 구간을 확보하지 못했습니다."
+                reference_message = (
+                    f"{reference_result.message or '기본 과거 데이터 부족'} · "
+                    f"2011 역사 데이터 fallback 실패: {detail}"
+                )
+
         return self.evaluate_frames(
             current_result.data,
-            reference_result.data,
+            reference_data,
             config=cfg,
             current_source=current_result.source,
-            reference_source=reference_result.source,
+            reference_source=reference_source,
             current_quality_score=current_result.quality_score,
-            reference_quality_score=reference_result.quality_score,
-            upstream_messages=(current_result.message, reference_result.message),
+            reference_quality_score=reference_quality,
+            upstream_messages=(current_result.message, reference_message),
         )
 
     def evaluate_frames(
@@ -129,9 +154,10 @@ class ReplayTargetIntegratedService:
             warnings.append(f"과거 데이터가 {len(reference)}행으로 기준 {cfg.min_reference_rows}행보다 적습니다.")
 
         reference_oldest = _oldest_date(reference)
-        if reference_oldest and pd.Timestamp(reference_oldest) > pd.Timestamp(cfg.reference_window_start):
+        if not _reference_has_required_windows(reference, cfg):
             warnings.append(
-                f"AK 과거 데이터가 {reference_oldest}부터 시작해 2011 기준구간을 포함하지 않습니다."
+                "AK 2011 대응점/B Target 구간 또는 선행 STO 계산용 과거 이력이 부족합니다. "
+                f"현재 범위 {reference_oldest or '?'}~{_latest_date(reference) or '?'}"
             )
 
         resolved_current_anchor = _resolve_date(current, cfg.current_anchor_date)
@@ -140,11 +166,16 @@ class ReplayTargetIntegratedService:
 
         resolved_reference_anchor: str | None = None
         anchor_similarity: float | None = None
-        if resolved_current_anchor is not None and not reference.empty:
+        if resolved_current_anchor is not None and _reference_has_required_windows(reference, cfg):
             if cfg.reference_anchor_date:
-                resolved_reference_anchor = _resolve_date(reference, cfg.reference_anchor_date)
+                resolved_reference_anchor = _resolve_exact_or_previous_in_window(
+                    reference,
+                    cfg.reference_anchor_date,
+                    cfg.reference_window_start,
+                    cfg.reference_window_end,
+                )
                 if resolved_reference_anchor is None:
-                    warnings.append("지정한 AK홀딩스 기준일을 과거 데이터에서 찾지 못했습니다.")
+                    warnings.append("지정한 AK홀딩스 기준일을 과거 대응구간에서 찾지 못했습니다.")
                 else:
                     anchor_similarity = self._anchor_similarity(
                         current,
@@ -165,10 +196,15 @@ class ReplayTargetIntegratedService:
 
         target_selection = "미설정"
         if cfg.reference_target_date:
-            resolved_target = _resolve_date(reference, cfg.reference_target_date)
+            resolved_target = _resolve_exact_or_previous_in_window(
+                reference,
+                cfg.reference_target_date,
+                cfg.reference_target_window_start,
+                cfg.reference_target_window_end,
+            )
             target_selection = "직접 지정"
             if resolved_target is None:
-                warnings.append("지정한 B Target 기준일을 과거 데이터에서 찾지 못했습니다.")
+                warnings.append("지정한 B Target 기준일을 과거 B 후보구간에서 찾지 못했습니다.")
         else:
             resolved_target = _auto_reference_target(
                 reference,
@@ -284,6 +320,117 @@ class ReplayTargetIntegratedService:
         return best_date, best_score
 
 
+def _load_reference_history(
+    cfg: IntegratedWatchConfig,
+) -> tuple[pd.DataFrame, str, str | None]:
+    start, end = _reference_history_bounds(cfg)
+    errors: list[str] = []
+
+    try:
+        from pykrx import stock
+
+        raw = stock.get_market_ohlcv_by_date(
+            start.strftime("%Y%m%d"),
+            end.strftime("%Y%m%d"),
+            cfg.reference_ticker,
+            adjusted=True,
+        )
+        frame = _normalize_krx_ohlcv(raw)
+        if not frame.empty:
+            return frame, "pykrx · KRX 수정주가", None
+        errors.append("pykrx: empty")
+    except Exception as exc:
+        errors.append(f"pykrx: {exc}")
+
+    try:
+        import yfinance as yf
+
+        symbols = [f"{cfg.reference_ticker.zfill(6)}.KS", f"{cfg.reference_ticker.zfill(6)}.KQ"]
+        for symbol in symbols:
+            raw = yf.download(
+                symbol,
+                start=start.date().isoformat(),
+                end=(end + pd.Timedelta(days=1)).date().isoformat(),
+                interval="1d",
+                auto_adjust=False,
+                progress=False,
+                threads=False,
+            )
+            frame = _normalize_ohlcv(raw)
+            if not frame.empty:
+                return frame, f"yfinance · {symbol}", None
+        errors.append("yfinance: empty")
+    except Exception as exc:
+        errors.append(f"yfinance: {exc}")
+
+    return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"]), "역사 데이터 없음", " | ".join(errors)
+
+
+def _reference_history_bounds(cfg: IntegratedWatchConfig) -> tuple[pd.Timestamp, pd.Timestamp]:
+    candidates = [
+        pd.Timestamp(cfg.reference_window_start),
+        pd.Timestamp(cfg.reference_window_end),
+        pd.Timestamp(cfg.reference_target_window_start),
+        pd.Timestamp(cfg.reference_target_window_end),
+    ]
+    if cfg.reference_anchor_date:
+        candidates.append(pd.Timestamp(cfg.reference_anchor_date))
+    if cfg.reference_target_date:
+        candidates.append(pd.Timestamp(cfg.reference_target_date))
+    core_start = min(candidates)
+    core_end = max(candidates)
+    return core_start - pd.Timedelta(days=550), core_end + pd.Timedelta(days=120)
+
+
+def _reference_has_required_windows(reference: pd.DataFrame, cfg: IntegratedWatchConfig) -> bool:
+    if reference.empty:
+        return False
+    frame = _normalize_ohlcv(reference)
+    if frame.empty:
+        return False
+    anchor_start = pd.Timestamp(cfg.reference_window_start)
+    anchor_end = pd.Timestamp(cfg.reference_window_end)
+    target_start = pd.Timestamp(cfg.reference_target_window_start)
+    target_end = pd.Timestamp(cfg.reference_target_window_end)
+    anchor_rows = frame[(frame["Date"] >= anchor_start) & (frame["Date"] <= anchor_end)]
+    target_rows = frame[(frame["Date"] >= target_start) & (frame["Date"] <= target_end)]
+    prehistory = frame[frame["Date"] < anchor_start]
+    return bool(not anchor_rows.empty and not target_rows.empty and len(prehistory) >= 120)
+
+
+def _normalize_krx_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
+    if frame is None or frame.empty:
+        return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
+    data = frame.reset_index().rename(
+        columns={
+            "날짜": "Date",
+            "일자": "Date",
+            "시가": "Open",
+            "고가": "High",
+            "저가": "Low",
+            "종가": "Close",
+            "거래량": "Volume",
+        }
+    )
+    if "Date" not in data.columns and len(data.columns):
+        data = data.rename(columns={data.columns[0]: "Date"})
+    return _normalize_ohlcv(data)
+
+
+def _quality_score(frame: pd.DataFrame) -> int:
+    data = _normalize_ohlcv(frame)
+    if data.empty:
+        return 0
+    score = 100
+    if len(data) < 120:
+        score -= 20
+    missing = data[["Open", "High", "Low", "Close", "Volume"]].isna().mean().mean()
+    score -= int(float(missing) * 50)
+    if (data["Close"].astype(float) <= 0).any():
+        score -= 30
+    return max(0, min(100, score))
+
+
 def _auto_reference_target(
     reference: pd.DataFrame,
     *,
@@ -325,7 +472,10 @@ def _price_shape_similarity(a: pd.DataFrame, b: pd.DataFrame, length: int = 20) 
 def _normalize_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
     if frame is None or frame.empty:
         return pd.DataFrame(columns=["Date", "Open", "High", "Low", "Close", "Volume"])
-    result = frame.rename(
+    result = frame.copy()
+    if isinstance(result.columns, pd.MultiIndex):
+        result.columns = [column[0] if isinstance(column, tuple) else column for column in result.columns]
+    result = result.rename(
         columns={
             "trade_date": "Date",
             "date": "Date",
@@ -334,8 +484,9 @@ def _normalize_ohlcv(frame: pd.DataFrame) -> pd.DataFrame:
             "low": "Low",
             "close": "Close",
             "volume": "Volume",
+            "Adj Close": "Close",
         }
-    ).copy()
+    )
     if "Date" not in result.columns:
         result = result.reset_index()
         if "Date" not in result.columns and "index" in result.columns:
@@ -362,6 +513,27 @@ def _resolve_date(frame: pd.DataFrame, requested: str | None) -> str | None:
         return None
     requested_ts = pd.Timestamp(requested).normalize()
     eligible = frame[frame["Date"].dt.normalize() <= requested_ts]
+    if eligible.empty:
+        return None
+    return str(pd.Timestamp(eligible["Date"].iloc[-1]).date())
+
+
+def _resolve_exact_or_previous_in_window(
+    frame: pd.DataFrame,
+    requested: str | None,
+    window_start: str,
+    window_end: str,
+) -> str | None:
+    if frame.empty or not requested:
+        return None
+    requested_ts = pd.Timestamp(requested).normalize()
+    start = pd.Timestamp(window_start).normalize()
+    end = pd.Timestamp(window_end).normalize()
+    eligible = frame[
+        (frame["Date"].dt.normalize() >= start)
+        & (frame["Date"].dt.normalize() <= end)
+        & (frame["Date"].dt.normalize() <= requested_ts)
+    ]
     if eligible.empty:
         return None
     return str(pd.Timestamp(eligible["Date"].iloc[-1]).date())

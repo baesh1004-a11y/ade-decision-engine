@@ -17,7 +17,7 @@ _OVERVIEW_STYLE = """
 .ade-section-card{background:#fff;border-radius:28px;padding:24px;margin:14px 0;box-shadow:0 4px 14px rgba(22,47,66,.04)}
 .ade-section-title{font-size:26px;font-weight:950;letter-spacing:-.04em;color:#0b0f14}.ade-section-sub{font-size:12px;color:#8a94a1;margin-top:5px}
 .ade-market-strip{position:sticky;top:3.35rem;z-index:930;background:rgba(223,245,243,.96);backdrop-filter:blur(18px) saturate(1.15);padding:8px 0 10px;border-bottom:1px solid rgba(91,122,153,.14)}
-.ade-index-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ade-index-card{background:#fff;border-radius:22px;padding:18px;border:1px solid rgba(15,23,42,.07)}.ade-index-card .label{font-size:15px;color:#596573;font-weight:800}.ade-index-card .value{font-size:34px;font-weight:900;letter-spacing:-.05em;margin-top:7px;color:#101418}.ade-index-card .move{display:flex;gap:8px;align-items:baseline;margin-top:7px}.ade-index-card .points{font-size:16px;font-weight:850}.ade-index-card .delta{font-size:17px;font-weight:900}.ade-index-card.up .points,.ade-index-card.up .delta{color:#e5484d}.ade-index-card.down .points,.ade-index-card.down .delta{color:#2563eb}.ade-index-card.flat .points,.ade-index-card.flat .delta{color:#6b7280}.ade-index-card .mini{height:74px;margin-top:10px;position:relative;overflow:hidden;border-radius:12px;background:linear-gradient(180deg,#fbfdff,#f5f8fb);border:1px solid #edf1f5}.ade-index-card .mini .baseline{position:absolute;left:0;right:0;top:50%;border-top:1px dashed #d3dae3}.ade-index-card .mini svg{position:absolute;inset:0;width:100%;height:100%;display:block}.ade-index-card .mini polyline{fill:none;stroke-width:2.35;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}.ade-index-card .mini circle{vector-effect:non-scaling-stroke}.ade-index-card.up .mini polyline,.ade-index-card.up .mini circle{stroke:#e5484d;fill:#e5484d}.ade-index-card.down .mini polyline,.ade-index-card.down .mini circle{stroke:#2563eb;fill:#2563eb}.ade-index-card.flat .mini polyline,.ade-index-card.flat .mini circle{stroke:#7c8796;fill:#7c8796}
+.ade-index-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.ade-index-card{background:#fff;border-radius:22px;padding:17px 18px;border:1px solid rgba(15,23,42,.07)}.ade-index-card .label{font-size:15px;color:#596573;font-weight:800}.ade-index-card .value{font-size:34px;font-weight:900;letter-spacing:-.05em;margin-top:6px;color:#101418}.ade-index-card .move{display:flex;gap:8px;align-items:baseline;margin-top:6px}.ade-index-card .points{font-size:16px;font-weight:850}.ade-index-card .delta{font-size:17px;font-weight:900}.ade-index-card.up .points,.ade-index-card.up .delta{color:#e5484d}.ade-index-card.down .points,.ade-index-card.down .delta{color:#2563eb}.ade-index-card.flat .points,.ade-index-card.flat .delta{color:#6b7280}
 .ade-portfolio-grid{display:grid;grid-template-columns:1.45fr repeat(4,1fr);gap:12px;margin-top:18px}.ade-asset-hero{background:linear-gradient(135deg,#dbeafe 0%,#e0f2fe 52%,#f0fdfa 100%);color:#0f2741;border-radius:20px;padding:18px;border:1px solid rgba(47,128,237,.14);box-shadow:0 10px 24px rgba(47,128,237,.08)}.ade-asset-hero .l{font-size:12px;color:#51708d;letter-spacing:.08em;font-weight:850}.ade-asset-hero .v{font-size:37px;font-weight:950;letter-spacing:-.05em;margin-top:6px}.ade-asset-mini{background:#fafafa;border-radius:18px;padding:16px;border:1px solid rgba(15,23,42,.06)}.ade-asset-mini .l{font-size:13px;color:#6f7b88;font-weight:800}.ade-asset-mini .v{font-size:25px;font-weight:900;margin-top:6px;letter-spacing:-.035em;color:#111827}.ade-asset-mini .s{font-size:14px;font-weight:850;margin-top:6px}.ade-asset-mini.pnl-up .v,.ade-asset-mini.pnl-up .s{color:#e5484d}.ade-asset-mini.pnl-down .v,.ade-asset-mini.pnl-down .s{color:#2563eb}.ade-asset-mini.pnl-flat .v,.ade-asset-mini.pnl-flat .s{color:#697586}
 .ade-holding-row{display:grid;grid-template-columns:1.5fr .85fr 1fr 1fr 1fr;gap:12px;align-items:center;padding:16px 0;border-top:1px solid #eceff3}.ade-holding-row:first-of-type{border-top:0}.ade-holding-row .name{font-size:18px;font-weight:900}.ade-holding-row .code{font-size:10px;color:#98a2ad;margin-top:2px}.ade-holding-row .k{font-size:9px;color:#99a3ae;font-weight:800}.ade-holding-row .v{font-size:14px;font-weight:800;margin-top:3px}.ade-holding-row .rate{font-size:18px;font-weight:950;text-align:right}.ade-holding-row .rate.up{color:#e5484d}.ade-holding-row .rate.down{color:#2563eb}.ade-holding-row .rate.flat{color:#6b7280}.ade-holding-row .price{text-align:right;font-size:17px;font-weight:850}.ade-holding-row .go{text-align:right;font-size:18px;color:#a2abb5}
 .ade-event-list{margin-top:16px}.ade-event-row{display:grid;grid-template-columns:86px 1fr 104px;gap:14px;align-items:start;padding:15px 0;border-top:1px solid #eceff3}.ade-event-row:first-child{border-top:0}.ade-event-row .time{font-size:11px;font-weight:850;color:#4b5563}.ade-event-row .event{font-size:16px;font-weight:780;line-height:1.35}.ade-event-row .meta{font-size:10px;color:#9aa3ad;margin-top:4px}.ade-event-row .badge{font-size:11px;font-weight:900;padding:6px 9px;border-radius:999px;text-align:center}.ade-event-row .badge.high{background:#fff3cd;color:#8a5a00;border:1px solid #f4d27a}.ade-event-row .badge.very-high{background:#ffe3e6;color:#a61b29;border:1px solid #f3a7ae}.ade-event-row .badge.normal{background:#edf2f7;color:#51606f;border:1px solid #d6dde5}
@@ -83,42 +83,16 @@ def _metric_parts(metrics: dict[str, Any], key: str) -> tuple[str, str, float, f
     return label, f"{metric.value:,.2f}", change, change_rate, tone
 
 
-def _sparkline_html(history: tuple[float, ...] | list[float] | None) -> str:
-    values = [float(value) for value in (history or []) if value is not None]
-    if len(values) < 2:
-        return '<div class="baseline"></div>'
-
-    low = min(values)
-    high = max(values)
-    span = high - low
-    if span <= 0:
-        ys = [50.0 for _ in values]
-    else:
-        ys = [84.0 - ((value - low) / span) * 68.0 for value in values]
-    xs = [4.0 + i * (92.0 / (len(values) - 1)) for i in range(len(values))]
-    points = ' '.join(f'{x:.2f},{y:.2f}' for x, y in zip(xs, ys))
-    last_x, last_y = xs[-1], ys[-1]
-    return (
-        '<div class="baseline"></div>'
-        f'<svg viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">'
-        f'<polyline points="{points}"></polyline>'
-        f'<circle cx="{last_x:.2f}" cy="{last_y:.2f}" r="1.45"></circle>'
-        '</svg>'
-    )
-
-
 def _render_market_strip(metrics: dict[str, Any]) -> None:
     ordered = ["kospi", "kosdaq", "sp500", "nasdaq", "usdkrw", "vix"]
     cards = []
     for key in ordered:
-        metric = metrics.get(key)
         label, value, change, change_rate, tone = _metric_parts(metrics, key)
         arrow = "▲" if tone == "up" else ("▼" if tone == "down" else "•")
         points = f"{change:+,.2f}" if value != "조회 실패" else "-"
         delta = f"{change_rate:+.2f}%" if value != "조회 실패" else "-"
-        history = getattr(metric, "history", ()) if metric is not None else ()
         cards.append(
-            f'<div class="ade-index-card {tone}"><div class="label">{label} · 실시간</div><div class="value">{value}</div><div class="move"><div class="points">{arrow} {points}</div><div class="delta">({delta})</div></div><div class="mini">{_sparkline_html(history)}</div></div>'
+            f'<div class="ade-index-card {tone}"><div class="label">{label} · 실시간</div><div class="value">{value}</div><div class="move"><div class="points">{arrow} {points}</div><div class="delta">({delta})</div></div></div>'
         )
     st.markdown('<div class="ade-market-strip"><div class="ade-index-grid">' + ''.join(cards) + '</div></div>', unsafe_allow_html=True)
 

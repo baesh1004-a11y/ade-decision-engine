@@ -47,7 +47,13 @@ def _axis_style() -> dict:
     }
 
 
-def build_trading_chart(data: pd.DataFrame, title: str, *, height: int = 620) -> go.Figure:
+def build_trading_chart(
+    data: pd.DataFrame,
+    title: str,
+    *,
+    height: int = 620,
+    average_price: float | None = None,
+) -> go.Figure:
     df = data.copy()
     df["Date"] = pd.to_datetime(df["Date"])
     for column in ["Open", "High", "Low", "Close", "Volume"]:
@@ -85,6 +91,23 @@ def build_trading_chart(data: pd.DataFrame, title: str, *, height: int = 620) ->
         row=1,
         col=1,
     )
+
+    try:
+        avg = float(average_price or 0)
+    except (TypeError, ValueError):
+        avg = 0.0
+    if avg > 0:
+        fig.add_hline(
+            y=avg,
+            line_width=1.2,
+            line_dash="dash",
+            line_color="rgba(246,166,91,.85)",
+            annotation_text=f"평단 {avg:,.0f}",
+            annotation_position="top left",
+            row=1,
+            col=1,
+        )
+
     fig.add_trace(
         go.Scatter(
             x=df["Date"],

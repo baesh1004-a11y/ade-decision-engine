@@ -179,8 +179,9 @@ def _latest_completed_run(db_path: str, market_code: str) -> dict[str, object] |
         conn.close()
 
 
-def _save_final_decisions(db_path: str, source_run_id: str, results: list[object]) -> None:
-    conn = sqlite3.connect(db_path, timeout=30)
+def _save_final_decisions(db_path: str, source_run_id: str, results: list[object], *,
+                          replace_run: bool = True, connection: sqlite3.Connection | None = None) -> None:
+    conn = connection if connection is not None else sqlite3.connect(db_path, timeout=30)
     try:
         conn.execute(
             """
@@ -197,18 +198,31 @@ def _save_final_decisions(db_path: str, source_run_id: str, results: list[object
             )
             """
         )
-        conn.execute("DELETE FROM final_decisions WHERE source_run_id=?", (source_run_id,))
+        if replace_run:
+            conn.execute("DELETE FROM final_decisions WHERE source_run_id=?", (source_run_id,))
         for item in results:
+            rank = item.rank
+            ticker = normalize_ticker(item.ticker, item.market_code)
+            if not replace_run:
+                saved = conn.execute(
+                    "SELECT rank_no FROM daily_recommendations WHERE run_id=? AND market=? AND ticker=?",
+                    (source_run_id, item.market_code, ticker),
+                ).fetchone()
+                if saved is None:
+                    raise ValueError("환경 검토에 연결할 추천 종목을 찾을 수 없습니다.")
+                rank = int(saved[0])
+                conn.execute("DELETE FROM final_decisions WHERE source_run_id=? AND market=? AND ticker=?",
+                             (source_run_id, item.market_code, ticker))
             conn.execute(
                 """
-                INSERT INTO final_decisions(
+                INSERT OR REPLACE INTO final_decisions(
                     source_run_id, rank_no, market, ticker, name, decision, grade,
                     meta_score, pattern_score, radar_score, market_score,
                     sector_score, risk_score, target_return, stop_return, payload_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    source_run_id, item.rank, item.market_code,
+                    source_run_id, rank, item.market_code,
                     normalize_ticker(item.ticker, item.market_code), item.name,
                     item.decision, item.grade, item.breakdown.replay, item.breakdown.replay,
                     item.breakdown.jp_radar, item.breakdown.market, item.breakdown.sector,
@@ -216,9 +230,11 @@ def _save_final_decisions(db_path: str, source_run_id: str, results: list[object
                     json.dumps(item.to_dict(), ensure_ascii=False),
                 ),
             )
-        conn.commit()
+        if connection is None:
+            conn.commit()
     finally:
-        conn.close()
+        if connection is None:
+            conn.close()
 
 
 def _load_recommendations_for_run(

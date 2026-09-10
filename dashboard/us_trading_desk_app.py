@@ -241,7 +241,7 @@ def _render_analysis_actions(st, selected: dict, ticker: str) -> None:
 
 
 def _render_order_form(st, service, selected: dict, ticker: str) -> None:
-    section("주문 요청", "주문 입력 → 내용 확인 → 승인 대기")
+    section("주문 요청", "① 주문 입력 → ② 내용 확인 → ③ 승인 대기")
     default_exchange = service.exchange_for_ticker(ticker)
     with st.form(f"us_order_form_{ticker}"):
         c1, c2, c3, c4 = st.columns(4)
@@ -288,8 +288,8 @@ def _render_order_form(st, service, selected: dict, ticker: str) -> None:
                 limit_price=float(limit_price),
                 target_return=float(target),
                 stop_return=float(stop),
-                source_run_id=str(selected["run_id"]),
-                source_rank=int(selected["rank_no"]),
+                source_run_id=str(selected["run_id"]) if selected.get("run_id") else None,
+                source_rank=int(selected["rank_no"]) if selected.get("rank_no") is not None else None,
             )
             st.success(f"승인 대기 주문을 만들었습니다. 요청번호 {request_id} · 30분 안에 승인하세요.")
         except Exception as exc:

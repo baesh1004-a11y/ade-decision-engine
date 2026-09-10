@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from broker.kis import load_kis_env
+from broker.kis import kis_config_from_env
 from dashboard.design_system import apply_global_style, page_hero, section_header, status_badge
 from dashboard.system_status import inspect_market_db
 from markets.symbol_display import build_name_map, normalize_ticker, resolve_name
@@ -319,7 +319,10 @@ def _latest_recommendation_count(path: Path) -> int | None:
         return None
     try:
         with sqlite3.connect(path) as conn:
-            row = conn.execute("SELECT COUNT(*) FROM recommendation_runs").fetchone()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM daily_recommendations WHERE run_id=("
+                "SELECT run_id FROM recommendation_runs WHERE status='COMPLETED' ORDER BY started_at DESC LIMIT 1)"
+            ).fetchone()
             return int(row[0]) if row else 0
     except sqlite3.Error:
         return None
@@ -330,7 +333,10 @@ def _latest_validation_count(path: Path) -> int | None:
         return None
     try:
         with sqlite3.connect(path) as conn:
-            row = conn.execute("SELECT COUNT(*) FROM meta_score_results").fetchone()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM final_decisions WHERE source_run_id=("
+                "SELECT run_id FROM recommendation_runs WHERE status='COMPLETED' ORDER BY started_at DESC LIMIT 1)"
+            ).fetchone()
             return int(row[0]) if row else 0
     except sqlite3.Error:
         return None
@@ -380,8 +386,18 @@ def _portfolio_summary(kr_db: Path, us_db: Path) -> PortfolioSummary:
                 tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
                 if "portfolio_positions" in tables:
                     kr_holdings = int(conn.execute("SELECT COUNT(*) FROM portfolio_positions WHERE COALESCE(quantity,0)>0").fetchone()[0])
+                elif "positions" in tables:
+                    kr_holdings = int(conn.execute("SELECT COUNT(*) FROM positions WHERE COALESCE(market_value,0)>0").fetchone()[0])
                 if "account_snapshots" in tables:
                     row = conn.execute("SELECT total_value,cash FROM account_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+                    if row:
+                        krw_value, krw_cash = row[0], row[1]
+                elif "kis_account_snapshots" in tables:
+                    row = conn.execute("SELECT total_assets,cash,position_count,evaluation_amount FROM kis_account_snapshots ORDER BY id DESC LIMIT 1").fetchone()
+                    if row:
+                        krw_value, krw_cash, kr_holdings = row[0] or row[1] + row[3], row[1], row[2]
+                elif "account_summary" in tables:
+                    row = conn.execute("SELECT total_equity,cash FROM account_summary ORDER BY rowid DESC LIMIT 1").fetchone()
                     if row:
                         krw_value, krw_cash = row[0], row[1]
         if us_db.exists():
@@ -393,6 +409,14 @@ def _portfolio_summary(kr_db: Path, us_db: Path) -> PortfolioSummary:
                     row = conn.execute("SELECT total_value FROM account_snapshots ORDER BY id DESC LIMIT 1").fetchone()
                     if row:
                         usd_value = row[0]
+                elif "us_position_snapshots" in tables:
+                    row = conn.execute(
+                        "SELECT COUNT(*),SUM(evaluation_amount) FROM us_position_snapshots "
+                        "WHERE captured_at=(SELECT MAX(captured_at) FROM us_position_snapshots) "
+                        "AND currency='USD' AND evaluation_amount>0"
+                    ).fetchone()
+                    if row:
+                        us_holdings, usd_value = int(row[0]), row[1]
     except sqlite3.Error:
         pass
     return PortfolioSummary(kr_holdings, us_holdings, krw_value, krw_cash, usd_value)
@@ -400,7 +424,7 @@ def _portfolio_summary(kr_db: Path, us_db: Path) -> PortfolioSummary:
 
 def _kis_connection_status() -> tuple[str, bool | None]:
     try:
-        env = load_kis_env()
+        env = kis_config_from_env()
     except Exception:
         return "환경설정 확인 실패", False
     if env is None:

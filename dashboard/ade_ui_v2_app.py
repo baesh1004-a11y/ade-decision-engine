@@ -5,10 +5,10 @@ import time
 import streamlit as st
 
 from dashboard import ade_ui_v1_app as base_ui
-from dashboard.ade_ui_v1_app import *  # noqa: F401,F403
+from broker.kis_websocket import shared_market_client
 from dashboard.ade_recommendation_page import render_recommendation_page
 from dashboard.economic_calendar_service import load_economic_calendar
-from dashboard.kis_zero_base_bridge import load_kis_index
+from dashboard.kis_zero_base_bridge import kis_configured, kis_paper_enabled, load_kis_index
 from dashboard.market_overview_service import (
     database_health,
     load_market_overview,
@@ -16,6 +16,7 @@ from dashboard.market_overview_service import (
     market_health,
 )
 from dashboard.news_disclosure_service import load_market_news, news_diagnostics
+from markets.profiles import get_market_profile
 
 MARKET_REFRESH_SECONDS = 60
 _KIS_INDEX_CODES = {"kospi": "0001", "kosdaq": "1001"}

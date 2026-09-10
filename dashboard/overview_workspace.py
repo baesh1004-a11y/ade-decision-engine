@@ -254,7 +254,7 @@ def _render_position_detail(base_app: Any, position: dict[str, Any]) -> None:
         st.rerun()
 
 
-def render_overview_workspace(base_app: Any) -> None:
+def render_overview_workspace(base_app: Any, *, market_strip=None) -> None:
     st.markdown(_OVERVIEW_STYLE, unsafe_allow_html=True)
     refresh_cols = st.columns([5, 1])
     refresh = refresh_cols[1].button("새로고침", key="overview_workspace_refresh", use_container_width=True)
@@ -269,7 +269,7 @@ def render_overview_workspace(base_app: Any) -> None:
         st.session_state.ade_portfolio_ticker = None
 
     st.markdown('<div class="ade-board-shell"><div class="ade-board-head"><div><div class="ade-board-title">상황종합판</div><div class="ade-board-sub">#43 Reference Replica + #45 Editorial Cards 통합안</div></div></div>', unsafe_allow_html=True)
-    _render_market_strip(metrics)
+    (market_strip or _render_market_strip)(metrics)
     _render_portfolio_summary(account, positions)
     _render_holdings(positions)
     _render_events(important)

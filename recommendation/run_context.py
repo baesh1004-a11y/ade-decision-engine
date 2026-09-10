@@ -46,39 +46,34 @@ def latest_run(conn: sqlite3.Connection, market: str | None = None) -> dict[str,
     market_filter = ""
     params: list[object] = []
     has_recommendations = _table_exists(conn, "daily_recommendations")
-    if market and has_recommendations:
-        market_filter = """
-        AND (
-            EXISTS(
-                SELECT 1 FROM daily_recommendations d
-                WHERE d.run_id=r.run_id AND d.market=?
-            )
-            OR NOT EXISTS(
-                SELECT 1 FROM daily_recommendations d2
-                WHERE d2.run_id=r.run_id
-            )
-        )
-        """
-        params.append(market)
-
-    count_filter = "AND d.market=?" if market and has_recommendations else ""
-    if market and has_recommendations:
-        params.insert(0, market)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(recommendation_runs)")}
+    if market:
+        clauses = []
+        if "market" in columns:
+            clauses.append("r.market=?")
+            params.append(market)
+        if has_recommendations:
+            clauses.append("EXISTS(SELECT 1 FROM daily_recommendations d WHERE d.run_id=r.run_id AND d.market=?)")
+            params.append(market)
+        market_filter = "AND (" + " OR ".join(clauses or ["0"]) + ")"
+    count_sql = "0"
+    if has_recommendations:
+        count_sql = "(SELECT COUNT(*) FROM daily_recommendations d WHERE d.run_id=r.run_id"
+        if market:
+            count_sql += " AND d.market=?"
+            params.insert(0, market)
+        count_sql += ")"
+    order = "COALESCE(r.finished_at,r.started_at)" if "finished_at" in columns else "r.started_at"
 
     row = conn.execute(
         f"""
         SELECT
             r.*,
-            COALESCE((
-                SELECT COUNT(*)
-                FROM daily_recommendations d
-                WHERE d.run_id=r.run_id
-                {count_filter}
-            ), 0) AS actual_recommendation_count
+            {count_sql} AS actual_recommendation_count
         FROM recommendation_runs r
         WHERE 1=1
         {market_filter}
-        ORDER BY COALESCE(r.finished_at, r.started_at) DESC, r.started_at DESC
+        ORDER BY {order} DESC, r.started_at DESC
         LIMIT 1
         """,
         tuple(params),
@@ -98,24 +93,30 @@ def completed_runs(
     market: str,
     limit: int = 30,
 ) -> list[dict[str, Any]]:
-    """Return completed recommendation runs that actually contain recommendations."""
+    """Include completed empty runs so old candidates cannot masquerade as current."""
     if not _table_exists(conn, "recommendation_runs") or not _table_exists(conn, "daily_recommendations"):
         return []
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(recommendation_runs)")}
+    market_clause = "r.market=?" if "market" in columns else "0"
+    params: list[object] = [market]
+    if "market" in columns:
+        params.append(market)
+    params.extend([market, max(1, int(limit))])
     rows = conn.execute(
-        """
+        f"""
         SELECT
             r.*,
-            COUNT(d.rowid) AS recommendation_count
+            (SELECT COUNT(*) FROM daily_recommendations d
+             WHERE d.run_id=r.run_id AND d.market=?) AS actual_recommendation_count
         FROM recommendation_runs r
-        JOIN daily_recommendations d
-          ON d.run_id=r.run_id
-         AND d.market=?
         WHERE r.status='COMPLETED'
-        GROUP BY r.run_id
+          AND ({market_clause} OR EXISTS(
+              SELECT 1 FROM daily_recommendations d WHERE d.run_id=r.run_id AND d.market=?
+          ))
         ORDER BY COALESCE(r.finished_at, r.started_at) DESC, r.started_at DESC
         LIMIT ?
         """,
-        (market, max(1, int(limit))),
+        params,
     ).fetchall()
     return [dict(row) for row in rows]
 
@@ -129,19 +130,25 @@ def completed_run_by_id(
         return None
     if not _table_exists(conn, "recommendation_runs") or not _table_exists(conn, "daily_recommendations"):
         return None
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(recommendation_runs)")}
+    market_clause = "r.market=?" if "market" in columns else "0"
+    params = [run_id]
+    if "market" in columns:
+        params.append(market)
+    params.append(market)
     row = conn.execute(
-        """
+        f"""
         SELECT r.*
         FROM recommendation_runs r
         WHERE r.run_id=?
           AND r.status='COMPLETED'
-          AND EXISTS(
+          AND ({market_clause} OR EXISTS(
               SELECT 1 FROM daily_recommendations d
               WHERE d.run_id=r.run_id AND d.market=?
-          )
+          ))
         LIMIT 1
         """,
-        (run_id, market),
+        params,
     ).fetchone()
     return dict(row) if row else None
 
@@ -177,14 +184,15 @@ def validations_for_run(conn: sqlite3.Connection, run_id: str) -> dict[str, dict
     return {str(row["ticker"]): dict(row) for row in rows}
 
 
-def orders_for_run(conn: sqlite3.Connection, run_id: str) -> tuple[list[dict[str, Any]], int]:
-    if not _table_exists(conn, "trade_order_requests"):
+def orders_for_run(conn: sqlite3.Connection, run_id: str, market: str = "kr") -> tuple[list[dict[str, Any]], int]:
+    table = "us_trade_order_requests" if market == "us" else "trade_order_requests"
+    if not _table_exists(conn, table):
         return [], 0
     pending_statuses = ("PENDING_APPROVAL", "PENDING", "READY", "APPROVED")
     placeholders = ",".join("?" for _ in pending_statuses)
     rows = conn.execute(
         f"""
-        SELECT * FROM trade_order_requests
+        SELECT * FROM {table}
         WHERE source_run_id=? AND status IN ({placeholders})
         ORDER BY created_at DESC
         """,
@@ -193,7 +201,7 @@ def orders_for_run(conn: sqlite3.Connection, run_id: str) -> tuple[list[dict[str
     other = conn.execute(
         f"""
         SELECT COUNT(*) AS count
-        FROM trade_order_requests
+        FROM {table}
         WHERE COALESCE(source_run_id, '')<>? AND status IN ({placeholders})
         """,
         (run_id, *pending_statuses),
@@ -212,7 +220,7 @@ def load_run_context(
         return None
     recommendations = recommendations_for_run(conn, run_id, market, limit)
     validations = validations_for_run(conn, run_id)
-    current_orders, other_pending = orders_for_run(conn, run_id)
+    current_orders, other_pending = orders_for_run(conn, run_id, market)
     return RecommendationRunContext(
         run_id=run_id,
         market=market,

@@ -127,6 +127,8 @@ def _render_standard_order_ticket(market: str, ticker: str) -> None:
         st.session_state.ade_order_ticker = None
         st.rerun()
 
+    _render_candidate_origin(market, ticker)
+
     account, positions, account_error = base_app._cached_kis_snapshot() if market == "kr" else (None, [], None)
     quote, quote_error = base_app.load_kis_quote(ticker) if market == "kr" else (None, None)
     holding = next((row for row in positions if str(row.get("ticker")) == str(ticker)), None)
@@ -173,6 +175,30 @@ def _render_standard_order_ticket(market: str, ticker: str) -> None:
         details = [message for message in [account_error, quote_error, orderable_error] if message]
         if details:
             st.caption(" · ".join(details))
+
+
+def _render_candidate_origin(market: str, ticker: str) -> None:
+    import streamlit as st
+    from dashboard.desk_review import load_review
+    from dashboard.order_candidate_store import list_candidates
+
+    owner = str(st.session_state.ade_owner_id)
+    candidate = next((row for row in list_candidates(owner, market) if str(row["ticker"]) == ticker), None)
+    if not candidate or not candidate.get("source_run_id"):
+        return
+    run_id = str(candidate["source_run_id"])
+    st.caption(f"추천에서 이어진 주문 후보 · #{candidate.get('source_rank') or '—'} · 실행 {run_id}")
+    review = load_review(owner, market, run_id, ticker)
+    if review:
+        with st.expander("이 추천의 검토 메모", expanded=bool(review.get("note"))):
+            st.write(review.get("verdict") or "검토 중")
+            st.write(review.get("note") or "저장된 메모가 없습니다.")
+    if st.button("추천 근거로 돌아가기", key=f"origin_{market}_{ticker}"):
+        st.session_state[f"desk_selected_run_{market}"] = run_id
+        st.session_state[f"desk_ticker_{market}_{run_id}"] = ticker
+        st.session_state.ade_primary_page = "추천결과"
+        base_app._reset_order_confirmation()
+        st.rerun()
 
 
 def _render_orders() -> None:

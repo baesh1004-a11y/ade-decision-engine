@@ -7,7 +7,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 from markets.profiles import get_market_profile
-from surge.multi_horizon import MULTI_PATTERN_VERSION, SURGE_CLASSES
+from surge.multi_horizon import MULTI_PATTERN_VERSION
 
 
 CLASS_LABELS = {

@@ -281,7 +281,7 @@ def start_job(
                         _JOBS[market_code]["status"] = _write_status(market_code, status)
 
             publish_startup("THREAD_STARTED", "추천 작업 스레드를 시작했습니다.")
-            service = DailyRecommendationService(db_path)
+            service = DailyRecommendationService(db_path, market=market_code)
             publish_startup("SERVICE_READY", "추천 서비스 초기화를 완료했습니다.")
             manager = ADEJobManager(
                 lock_path=_lock_path(market_code),

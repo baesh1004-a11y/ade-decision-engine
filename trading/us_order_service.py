@@ -142,6 +142,8 @@ class USTradingOrderService:
         return [dict(row) for row in rows]
 
     def exchange_for_ticker(self, ticker: str) -> str:
+        if self.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='us_universe'").fetchone() is None:
+            return "NASD"
         row = self.conn.execute(
             "SELECT exchange FROM us_universe WHERE symbol=? ORDER BY enabled DESC LIMIT 1",
             (ticker.upper(),),

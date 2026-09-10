@@ -250,7 +250,9 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
         section(f"현재 차트 · {label}")
         timeframe = st.selectbox("차트 주기", ["일봉", "4시간봉", "장중 분봉"], index=0, key=f"chart_timeframe_{normalize_ticker(ticker, 'kr')}")
         if st.button("시세 다시 불러오기", key=f"refresh_market_{normalize_ticker(ticker, 'kr')}"):
-            _clear_market_data_cache(); _load_fallback_bars.clear(); st.rerun()
+            _clear_market_data_cache()
+            _load_fallback_bars.clear()
+            st.rerun()
     else:
         with title_col:
             section(f"현재 차트 · {label}")
@@ -258,7 +260,9 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
             timeframe = st.selectbox("차트 주기", ["일봉", "4시간봉", "장중 분봉"], index=0, key=f"chart_timeframe_{normalize_ticker(ticker, 'kr')}", label_visibility="collapsed")
         with refresh_col:
             if st.button("다시 불러오기", key=f"refresh_market_{normalize_ticker(ticker, 'kr')}"):
-                _clear_market_data_cache(); _load_fallback_bars.clear(); st.rerun()
+                _clear_market_data_cache()
+                _load_fallback_bars.clear()
+                st.rerun()
     bars, quote, source, kis_error = _load_live_market_data(st, db_path, ticker, timeframe)
     if bars.empty:
         render_empty_state(st, "한국 차트를 불러오지 못했습니다", "KIS 연결과 종목코드를 확인한 뒤 다시 불러오기를 실행하세요.", icon=":material/error:")
@@ -285,7 +289,8 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
             q1.markdown(_price_change_text(change, change_rate))
         q2.metric("누적 거래량", f"{volume:,.0f}")
         q3, q4 = st.columns(2)
-        q3.metric("고가", _format_price(high)); q4.metric("저가", _format_price(low))
+        q3.metric("고가", _format_price(high))
+        q4.metric("저가", _format_price(low))
         with st.expander("매수·매도 호가"):
             if ask_price > 0 or bid_price > 0:
                 b1, b2 = st.columns(2)
@@ -302,7 +307,9 @@ def _render_chart_with_quote_panel(st, db_path: str, ticker: str, label: str, mo
             st.metric("현재가" if live_quote else "최근 가격", _format_price(current_price))
             if live_quote:
                 st.markdown(_price_change_text(change, change_rate))
-            st.metric("고가", _format_price(high)); st.metric("저가", _format_price(low)); st.metric("누적 거래량", f"{volume:,.0f}")
+            st.metric("고가", _format_price(high))
+            st.metric("저가", _format_price(low))
+            st.metric("누적 거래량", f"{volume:,.0f}")
             st.markdown("#### 매수·매도 호가")
             if ask_price > 0 or bid_price > 0:
                 st.metric("최우선 매도", _format_price(ask_price) if ask_price > 0 else "미제공")

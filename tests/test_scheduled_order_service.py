@@ -97,8 +97,9 @@ def test_price_trigger_is_evaluated(tmp_path, monkeypatch):
         row = service.list_schedules()[0]
         assert service._is_due(row, datetime.now(timezone.utc), lambda market, ticker: {"current_price": 69000}) is False
         service.conn.execute(
-            "UPDATE scheduled_order_requests SET scheduled_at=? WHERE schedule_id=?",
-            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), schedule_id),
+            "UPDATE scheduled_order_requests SET scheduled_at=?, next_check_at=? WHERE schedule_id=?",
+            ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),
+             (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(), schedule_id),
         )
         service.conn.commit()
         row = service.list_schedules()[0]

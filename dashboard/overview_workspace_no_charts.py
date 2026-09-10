@@ -45,9 +45,4 @@ def render_overview_workspace(base_app: Any) -> None:
         """,
         unsafe_allow_html=True,
     )
-    original = base._render_market_strip
-    base._render_market_strip = _render_market_strip_without_charts
-    try:
-        base.render_overview_workspace(base_app)
-    finally:
-        base._render_market_strip = original
+    base.render_overview_workspace(base_app, market_strip=_render_market_strip_without_charts)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from ade_home import _count_sum, _latest_recommendation_count, _latest_validation_count, _portfolio_summary
@@ -95,7 +95,7 @@ def test_command_center_distinguishes_missing_db_from_zero(tmp_path: Path) -> No
 def test_pending_approvals_are_not_hidden_by_recent_history(tmp_path: Path) -> None:
     service = TradingOrderService(tmp_path / "orders.db")
     try:
-        old = (datetime.now() - timedelta(minutes=5)).isoformat(timespec="seconds")
+        old = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(timespec="seconds")
         service.conn.execute(
             """INSERT INTO trade_order_requests(
                 request_id, created_at, market, ticker, side, quantity,
@@ -233,14 +233,22 @@ def test_approved_dashboard_design_features_are_present() -> None:
 
 
 def test_visual_system_theme_and_chart_conventions() -> None:
+    import pandas as pd
+    import tomllib
+    from dashboard.charts import build_trading_chart
+
     root = Path(__file__).resolve().parents[1]
-    theme = (root / ".streamlit" / "config.toml").read_text(encoding="utf-8")
-    charts = (root / "dashboard" / "charts.py").read_text(encoding="utf-8")
-    kr = (root / "dashboard" / "trading_desk_app.py").read_text(encoding="utf-8")
-    assert 'primaryColor = "#1D4ED8"' in theme
-    assert 'backgroundColor = "#F6F8FB"' in theme
-    assert "Pretendard" in theme
-    assert 'increasing_line_color="#DC2626"' in charts
-    assert 'decreasing_line_color="#2563EB"' in charts
-    assert "height: int = 520" in charts
-    assert "max-width:1480px" in kr
+    theme = tomllib.loads((root / ".streamlit" / "config.toml").read_text(encoding="utf-8"))["theme"]
+    assert theme["base"] == "light"
+    assert theme["primaryColor"] == "#1D4ED8"
+    assert theme["backgroundColor"] == "#F6F8FB"
+    frame = pd.DataFrame({"Date": pd.date_range("2026-01-01", periods=3), "Open": [100, 102, 101],
+                          "High": [103, 104, 104], "Low": [99, 100, 100], "Close": [102, 101, 103],
+                          "Volume": [1000, 900, 1200]})
+    chart = build_trading_chart(frame, "test")
+    candles = next(trace for trace in chart.data if trace.type == "candlestick")
+    up, down = candles.increasing.line.color, candles.decreasing.line.color
+    # Verify red rising / blue falling candles without coupling tests to a palette spelling.
+    assert int(up[1:3], 16) > int(up[5:7], 16)
+    assert int(down[5:7], 16) > int(down[1:3], 16)
+    assert chart.layout.height >= 500

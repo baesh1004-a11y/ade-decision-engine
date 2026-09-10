@@ -30,7 +30,11 @@ def test_integrated_watch_with_manual_anchor_produces_target_and_path() -> None:
     cfg = IntegratedWatchConfig(
         current_anchor_date="2026-08-25",
         reference_anchor_date="2011-10-03",
+        reference_window_start="2011-09-01",
+        reference_window_end="2011-10-31",
         reference_target_date="2011-12-14",
+        reference_target_window_start="2011-12-01",
+        reference_target_window_end="2011-12-30",
     )
 
     result = service.evaluate_frames(current, reference, config=cfg)

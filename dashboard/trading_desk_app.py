@@ -3,8 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sqlite3
-from datetime import datetime, timezone
-from types import SimpleNamespace
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import pandas as pd

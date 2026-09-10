@@ -1,45 +1,12 @@
 [theme]
-base = "dark"
-primaryColor = "#2F86FF"
-backgroundColor = "#0B0F14"
-secondaryBackgroundColor = "#111821"
-textColor = "#EEF4F8"
-linkColor = "#5AA8FF"
-borderColor = "#263341"
-showWidgetBorder = true
-showSidebarBorder = false
-baseRadius = "8px"
-buttonRadius = "8px"
-font = "Pretendard:https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
-headingFont = "Pretendard:https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css"
-codeFont = "monospace"
-baseFontSize = 15
-baseFontWeight = 400
-headingFontSizes = ["32px", "22px", "18px", "16px", "14px", "12px"]
-headingFontWeights = [600, 600, 600, 500, 500, 500]
-redColor = "#FF5B67"
-redBackgroundColor = "#35181E"
-redTextColor = "#FF8C95"
-blueColor = "#4F8FFF"
-blueBackgroundColor = "#15243B"
-blueTextColor = "#8DB6FF"
-greenColor = "#39D98A"
-greenBackgroundColor = "#123126"
-greenTextColor = "#6DE5A9"
-orangeColor = "#F4B860"
-orangeBackgroundColor = "#3A2A16"
-orangeTextColor = "#FFD08A"
-grayColor = "#94A3B2"
-dataframeBorderColor = "#263341"
-dataframeHeaderBackgroundColor = "#151E28"
-chartCategoricalColors = ["#5AA8FF", "#FF5B67", "#39D98A", "#F4B860", "#9B8CFF", "#94A3B2"]
-
-[theme.sidebar]
-backgroundColor = "#0B0F14"
-secondaryBackgroundColor = "#111821"
-textColor = "#EEF4F8"
-borderColor = "#263341"
-primaryColor = "#2F86FF"
+base = "light"
+primaryColor = "#1D4ED8"
+backgroundColor = "#F6F8FB"
+secondaryBackgroundColor = "#EDF3FA"
+textColor = "#13253E"
+# Pretendard is an optional local fallback in decision_desk.css.
+# Keep these options compatible with the pinned Streamlit release.
+font = "sans serif"
 
 [client]
 showSidebarNavigation = false

@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from time import perf_counter
 
+from core.run_models import RunRequest
+from core.run_state_store import RunStateStore
 from datahub.runtime_paths import runtime_path
 from datahub.sqlite_connection import connect_sqlite
 from report.recommendation_html_report import render_recommendation_html
@@ -42,10 +44,12 @@ class DailyRecommendationService:
 
     _process_lock = threading.Lock()
 
-    def __init__(self, db_path: str | Path = "datahub/market.db") -> None:
+    def __init__(self, db_path: str | Path = "datahub/market.db", *, market: str | None = None) -> None:
         self.db_path = Path(db_path)
+        self.market = market or ("us" if self.db_path.stem.startswith("us_") else "kr")
         self.conn = connect_sqlite(self.db_path)
         self.initialize()
+        self.run_store = RunStateStore(self.conn)
 
     def initialize(self) -> None:
         self.conn.execute(
@@ -73,6 +77,8 @@ class DailyRecommendationService:
         }
         if "diagnostics_json" not in columns:
             self.conn.execute("ALTER TABLE recommendation_runs ADD COLUMN diagnostics_json TEXT")
+        if "market" not in columns:
+            self.conn.execute("ALTER TABLE recommendation_runs ADD COLUMN market TEXT")
         self.conn.execute(
             """
             CREATE TABLE IF NOT EXISTS daily_recommendations (
@@ -160,6 +166,7 @@ class DailyRecommendationService:
             run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{normalized_type}-{uuid.uuid4().hex[:8]}"
             started = datetime.now()
             parameters = {
+                "market": self.market,
                 "algorithm": MULTI_PATTERN_VERSION,
                 "pattern_days": 120,
                 "surge_definition": {
@@ -182,8 +189,8 @@ class DailyRecommendationService:
             self.conn.execute(
                 """
                 INSERT INTO recommendation_runs(
-                    run_id, run_type, trading_date, started_at, status, parameters_json
-                ) VALUES (?, ?, ?, ?, 'RUNNING', ?)
+                    run_id, run_type, trading_date, started_at, status, parameters_json, market
+                ) VALUES (?, ?, ?, ?, 'RUNNING', ?, ?)
                 """,
                 (
                     run_id,
@@ -191,14 +198,21 @@ class DailyRecommendationService:
                     started.date().isoformat(),
                     started.isoformat(timespec="seconds"),
                     json.dumps(parameters, ensure_ascii=False),
+                    self.market,
                 ),
             )
+            self.run_store.create(
+                RunRequest(kind="recommendation", market=self.market, parameters=parameters, run_id=run_id),
+                ("RECOMMEND", "REPORT", "PERSIST"),
+            )
             self.conn.commit()
+            self.run_store.start(run_id)
 
             timer = perf_counter()
             diagnostics: dict[str, object] = {}
             report_path: Path | None = None
             try:
+                self.run_store.start_stage(run_id, "RECOMMEND")
                 emit("ENGINE_INIT", "추천 엔진 객체를 생성하고 있습니다.")
                 engine = InteractiveSurgePatternRecommender(self.db_path)
                 try:
@@ -220,6 +234,8 @@ class DailyRecommendationService:
                 finally:
                     engine.close()
 
+                self.run_store.complete_stage(run_id, "RECOMMEND", {"diagnostics": diagnostics})
+                self.run_store.start_stage(run_id, "REPORT")
                 emit("REPORT", "추천 결과 보고서를 생성하고 있습니다.")
                 report_path = runtime_path("daily_recommendations", f"{run_id}.html")
                 report_path = render_recommendation_html(
@@ -227,6 +243,8 @@ class DailyRecommendationService:
                     report_path,
                     lookback_months=lookback_months,
                 )
+                self.run_store.complete_stage(run_id, "REPORT", {"report": {"path": str(report_path)}})
+                self.run_store.start_stage(run_id, "PERSIST")
                 emit("SAVE", "추천 결과를 데이터베이스에 저장하고 있습니다.")
                 recommendation_rows = []
                 for rank_no, item in enumerate(recommendations, start=1):
@@ -281,6 +299,12 @@ class DailyRecommendationService:
                         run_id,
                     ),
                 )
+                self.run_store.complete_stage(run_id, "PERSIST", {"output": {
+                    "run_id": run_id,
+                    "recommendation_count": len(recommendations),
+                    "recommendations": [item.to_dict() for item in recommendations],
+                }})
+                self.run_store.finish(run_id)
                 self.conn.commit()
                 return RecommendationRunResult(
                     run_id=run_id,
@@ -300,6 +324,7 @@ class DailyRecommendationService:
                 self.conn.rollback()
                 if report_path is not None:
                     report_path.unlink(missing_ok=True)
+                self.run_store.finish(run_id, "CANCELLED", str(exc))
                 try:
                     self.conn.execute(
                         """
@@ -337,6 +362,7 @@ class DailyRecommendationService:
                 self.conn.rollback()
                 if report_path is not None:
                     report_path.unlink(missing_ok=True)
+                self.run_store.finish(run_id, "FAILED", f"{type(exc).__name__}: {exc}")
 
                 error_payload = {
                     "run_id": run_id,

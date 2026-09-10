@@ -15,7 +15,7 @@ _LEGACY_JSON_PATH = Path("output/ade_order_candidates.json")
 _LEGACY_OWNER_ID = "legacy-import"
 _LOCK = threading.RLock()
 _SCHEMA_READY = False
-_SCHEMA_VERSION = 2
+_SCHEMA_VERSION = 3
 _MAX_CANDIDATES_PER_OWNER = 100
 _HEALTH_CACHE_TTL_SECONDS = 30.0
 _HEALTH_CACHE: tuple[float, dict[str, Any]] | None = None
@@ -81,6 +81,13 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
             "UPDATE order_candidates SET last_selected_at_epoch=COALESCE(last_selected_at_epoch, strftime('%s', last_selected_at)) WHERE last_selected_at IS NOT NULL"
         )
         _set_schema_version(conn, 2)
+    if version < 3:
+        columns = _column_names(conn, "order_candidates")
+        if "source_run_id" not in columns:
+            conn.execute("ALTER TABLE order_candidates ADD COLUMN source_run_id TEXT")
+        if "source_rank" not in columns:
+            conn.execute("ALTER TABLE order_candidates ADD COLUMN source_rank INTEGER")
+        _set_schema_version(conn, 3)
 
 
 def _ensure_schema() -> None:
@@ -166,7 +173,8 @@ def _migrate_legacy_once() -> None:
         conn.commit()
 
 
-def upsert_candidate(owner_id: str, market: str, ticker: str, symbol: str) -> None:
+def upsert_candidate(owner_id: str, market: str, ticker: str, symbol: str, *,
+                     source_run_id: str | None = None, source_rank: int | None = None) -> None:
     _migrate_legacy_once()
     added_at = datetime.now(timezone.utc).isoformat(timespec="microseconds")
     added_epoch = _utc_now_epoch()
@@ -174,14 +182,16 @@ def upsert_candidate(owner_id: str, market: str, ticker: str, symbol: str) -> No
         conn.execute("BEGIN IMMEDIATE")
         conn.execute(
             """
-            INSERT INTO order_candidates(owner_id, market, ticker, symbol, added_at, added_at_epoch)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO order_candidates(owner_id, market, ticker, symbol, added_at, added_at_epoch, source_run_id, source_rank)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(owner_id, market, ticker) DO UPDATE SET
                 symbol=excluded.symbol,
                 added_at=excluded.added_at,
-                added_at_epoch=excluded.added_at_epoch
+                added_at_epoch=excluded.added_at_epoch,
+                source_run_id=COALESCE(excluded.source_run_id, order_candidates.source_run_id),
+                source_rank=COALESCE(excluded.source_rank, order_candidates.source_rank)
             """,
-            (owner_id, market, ticker, symbol, added_at, added_epoch),
+            (owner_id, market, ticker, symbol, added_at, added_epoch, source_run_id, source_rank),
         )
         conn.execute(
             """
@@ -200,7 +210,7 @@ def upsert_candidate(owner_id: str, market: str, ticker: str, symbol: str) -> No
 
 def list_candidates(owner_id: str, market: str | None = None) -> list[dict[str, Any]]:
     _migrate_legacy_once()
-    sql = "SELECT market, ticker, symbol, added_at, last_selected_at FROM order_candidates WHERE owner_id=?"
+    sql = "SELECT market, ticker, symbol, added_at, last_selected_at, source_run_id, source_rank FROM order_candidates WHERE owner_id=?"
     params: list[Any] = [owner_id]
     if market:
         sql += " AND market=?"

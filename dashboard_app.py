@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dashboard.ade_ui_replay_entrypoint import run
+from dashboard.decision_desk import run
 
 
 if __name__ == "__main__":

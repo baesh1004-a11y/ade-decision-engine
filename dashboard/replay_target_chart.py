@@ -87,8 +87,8 @@ def build_hts_figure(
             decreasing_fillcolor="#2563eb",
             whiskerwidth=0.2,
             hovertext=[
-                f"{d:%Y-%m-%d}<br>시 {o:,.0f} / 고 {h:,.0f}<br>저 {l:,.0f} / 종 {c:,.0f}"
-                for d, o, h, l, c in zip(
+                f"{d:%Y-%m-%d}<br>시 {o:,.0f} / 고 {h:,.0f}<br>저 {low:,.0f} / 종 {c:,.0f}"
+                for d, o, h, low, c in zip(
                     view["Date"], view["Open"], view["High"], view["Low"], view["Close"]
                 )
             ],

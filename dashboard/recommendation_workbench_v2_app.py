@@ -1,19 +1,24 @@
 from __future__ import annotations
 
-import json
 import sqlite3
 
 import pandas as pd
 
 from dashboard.charts import CHART_CONFIG, build_pattern_compare_chart, build_trading_chart
-from feedback.engine import FeedbackEngine
+from dashboard.recommendation_workbench_app import (
+    _current_bars,
+    _order_panel,
+    _pattern_bars,
+    _safe_json,
+    _selected_pattern,
+    _step_title,
+    _style,
+)
 from maintenance.recommendation_runner import get_status, start_job
 from markets.profiles import get_market_profile
 from markets.symbol_display import build_name_map, display_symbol, normalize_ticker, resolve_name
-from meta_score.dashboard import _recommendation_from_payload, _save_final_decisions
-from meta_score.engine import MetaScoreEngine
-from meta_score.validation_context import EnvironmentAdvisor
 from recommendation.run_context import load_latest_context
+from recommendation.validation_service import run_selected_validation as _run_selected_validation
 
 
 def run() -> None:
@@ -53,6 +58,9 @@ def run() -> None:
 
         name_map = build_name_map(conn, profile.code)
         recommendations = _enrich_recommendations(context.recommendations, name_map, profile.code)
+        if not recommendations:
+            st.info("이번 실행에서 조건을 통과한 추천 종목은 0개입니다.")
+            return
         selected = _selected_recommendation(st, recommendations, profile.code)
         ticker = normalize_ticker(selected["ticker"], profile.code)
         payload = _safe_json(selected.get("payload_json"))
@@ -76,7 +84,7 @@ def run() -> None:
             )
         with step3:
             _step_title(st, 3, "주문 관리", "환경 조언은 선택사항이며 주문 전에 참고할 수 있습니다.")
-            _order_panel(st, selected, profile.code, validation, context)
+            _order_panel(st, selected, profile.code, validation, {"pending": len(context.current_orders)})
     finally:
         conn.close()
 
@@ -238,24 +246,6 @@ def _comparison_panel(st, selected, current, historical, pattern, payload, marke
             st.rerun()
     else:
         _render_validation_summary(st, validation)
-
-
-def _run_selected_validation(db_path, run_id, selected, payload) -> None:
-    source = dict(payload)
-    source["ticker"] = selected["ticker"]
-    source["name"] = selected.get("display_name") or selected.get("name")
-    recommendation = _recommendation_from_payload(source)
-    environment = EnvironmentAdvisor().analyze(recommendation)
-    results = MetaScoreEngine().score(
-        [recommendation],
-        validation_contexts={str(recommendation.ticker): environment},
-    )
-    _save_final_decisions(db_path, run_id, results)
-    feedback = FeedbackEngine(db_path)
-    try:
-        feedback.register_meta_results(results)
-    finally:
-        feedback.close()
 
 
 def _render_validation_summary(st, validation) -> None:

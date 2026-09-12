@@ -42,7 +42,7 @@ def _run_streamlit(db_path: str = "datahub/market.db") -> None:
         data.close()
 
     st.markdown(
-        f"""
+        """
         <div class="top-hero">
           <div>
             <div class="eyebrow">ADE v5 · PAPER TRADING COCKPIT</div>
@@ -357,7 +357,7 @@ def _recommendation_audit(st: object, db_path: str) -> None:
         unsafe_allow_html=True,
     )
     c.markdown(
-        f"""
+        """
         <div class="step-card">
           <div class="step-no">STEP 3</div>
           <h3>눈으로 검증</h3>

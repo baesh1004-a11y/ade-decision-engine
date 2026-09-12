@@ -14,7 +14,11 @@ import streamlit as st
 
 from broker.kis_websocket import shared_market_client
 from dashboard import recommendation_workbench_v2_app as recommendation_base
-from dashboard.charts import CHART_CONFIG, build_pattern_compare_chart, build_trading_chart
+from dashboard.charts import (
+    CHART_CONFIG as CHART_CONFIG,
+    build_pattern_compare_chart as build_pattern_compare_chart,
+    build_trading_chart as build_trading_chart,
+)
 from dashboard.data_health_panel import build_data_health_rows, render_data_health_panel
 from dashboard.kis_zero_base_bridge import (
     cancel_paper_order,
@@ -44,7 +48,7 @@ from dashboard.order_candidate_store import (
     upsert_candidate,
 )
 from dashboard.recommendation_detail_enhancements import render_recommendation_detail_enhancements
-from dashboard.sto_professional_panel import render_professional_sto_panel
+from dashboard.sto_professional_panel import render_professional_sto_panel as render_professional_sto_panel
 from dashboard.ui_workspace import DEFAULT_WORKSPACE_KEY, get_workspace
 from jp_radar.live_chart import make_live_radar_chart
 from jp_radar.stock_engine import JPStockRadarEngine

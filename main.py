@@ -11,7 +11,9 @@ from backtest.report import format_summary
 from collector.korea import KoreaCollector
 from collector.usa import USACollector
 from core.context import DecisionContext
-from core.pipeline import ADEPipeline
+from core.orchestrator import RecordedPipeline
+from core.run_state_store import RunStateStore
+from datahub.paths import market_db_path, us_market_db_path
 
 
 DEFAULT_KOREA_TICKER = "005930"
@@ -159,8 +161,13 @@ def run_single_analysis(
         portfolio_heat=portfolio_heat,
         current_position=current_position,
     )
-    result = ADEPipeline().run(context)
-    decisions = result.decisions
+    store = RunStateStore(us_market_db_path() if market == "us" else market_db_path())
+    try:
+        run = RecordedPipeline(store).run(context)
+    finally:
+        store.close()
+    decisions = run.output["decisions"]
+    print(f"Run        : {run.run_id} · {run.status}")
 
     _print_candidate(decisions["candidate"])
     _print_risk(decisions["risk"])
@@ -168,7 +175,7 @@ def run_single_analysis(
     _print_entry(decisions["entry"])
     if "exit" in decisions:
         _print_exit(decisions["exit"])
-    _print_list("Pipeline Errors", result.errors)
+    _print_list("Pipeline Errors", run.output["errors"])
 
     bt = run_backtest(df, min_score=70)
     summary = summarize_backtest(bt)

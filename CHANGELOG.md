@@ -1,5 +1,15 @@
 # Changelog
 
+## Decision Desk · 2026-09-12
+
+- Persist recommendation comparison bars, matched pattern metadata, parameters, and integrity hashes in the result transaction.
+- Prefer frozen comparison evidence and explicitly label legacy source lookups; reject missing or mismatched snapshots.
+- Reconcile interrupted background recommendation runs under their OS worker lock; preserve committed results and prevent concurrent status-file overwrites.
+- Add chart focus, owner-scoped review filters, session drafts, save-and-next review, and run-history filters and links.
+- Refresh the recommendation workspace with a silver sidebar, compact metrics, and a larger central evidence panel.
+- Verify 205 tests, including offline Streamlit flows, evidence mutation/rollback, and worker recovery and ownership.
+
+
 ## ADE Design v0.1 — Universe Selection & Eligibility Engine v1
 
 ### Added

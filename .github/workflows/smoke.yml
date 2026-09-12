@@ -27,7 +27,7 @@ jobs:
       - name: Compile repository
         run: python -m compileall .
       - name: Ruff checks
-        run: ruff check broker dashboard datahub markets recommendation jp_radar tests
+        run: ruff check broker dashboard datahub markets recommendation jp_radar core api tests maintenance/recommendation_runner.py maintenance/recommendation_recovery.py
       - name: Import smoke tests
         env:
           KIS_APP_KEY: ''

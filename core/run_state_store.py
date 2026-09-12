@@ -205,7 +205,10 @@ class RunStateStore:
         if status not in TERMINAL_RUNS:
             raise RunStateError("Invalid terminal run status")
         with self.atomic():
-            if self._run(run_id)["status"] != "RUNNING":
+            allowed = {"RUNNING"}
+            if status in {"FAILED", "CANCELLED"}:
+                allowed.update({"CREATED", "VALIDATING"})
+            if self._run(run_id)["status"] not in allowed:
                 raise RunStateError("Only running runs can finish")
             if status in {"FAILED", "CANCELLED"}:
                 self.conn.execute(

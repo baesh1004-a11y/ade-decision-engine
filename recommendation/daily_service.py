@@ -15,6 +15,7 @@ from core.run_state_store import RunStateStore
 from datahub.runtime_paths import runtime_path
 from datahub.sqlite_connection import connect_sqlite
 from report.recommendation_html_report import render_recommendation_html
+from recommendation.evidence import capture_run_evidence, initialize_evidence
 from surge.interactive_recommender import (
     InteractiveSurgePatternRecommender,
     RecommendationCancelled,
@@ -44,7 +45,9 @@ class DailyRecommendationService:
 
     _process_lock = threading.Lock()
 
-    def __init__(self, db_path: str | Path = "datahub/market.db", *, market: str | None = None) -> None:
+    def __init__(
+        self, db_path: str | Path = "datahub/market.db", *, market: str | None = None
+    ) -> None:
         self.db_path = Path(db_path)
         self.market = market or ("us" if self.db_path.stem.startswith("us_") else "kr")
         self.conn = connect_sqlite(self.db_path)
@@ -73,10 +76,14 @@ class DailyRecommendationService:
         )
         columns = {
             str(row[1])
-            for row in self.conn.execute("PRAGMA table_info(recommendation_runs)").fetchall()
+            for row in self.conn.execute(
+                "PRAGMA table_info(recommendation_runs)"
+            ).fetchall()
         }
         if "diagnostics_json" not in columns:
-            self.conn.execute("ALTER TABLE recommendation_runs ADD COLUMN diagnostics_json TEXT")
+            self.conn.execute(
+                "ALTER TABLE recommendation_runs ADD COLUMN diagnostics_json TEXT"
+            )
         if "market" not in columns:
             self.conn.execute("ALTER TABLE recommendation_runs ADD COLUMN market TEXT")
         self.conn.execute(
@@ -107,6 +114,7 @@ class DailyRecommendationService:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_daily_recommendations_ticker ON daily_recommendations(market, ticker)"
         )
+        initialize_evidence(self.conn)
         self.conn.commit()
 
     def close(self) -> None:
@@ -117,7 +125,9 @@ class DailyRecommendationService:
         error_dir = runtime_path("recommendation_errors")
         error_dir.mkdir(parents=True, exist_ok=True)
         path = error_dir / f"{run_id}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         return path
 
     def run(
@@ -145,12 +155,15 @@ class DailyRecommendationService:
         current_stage = "START"
         run_id = "unassigned"
 
-        def emit(stage: str, message: str, progress: float = 0.0, **extra: object) -> None:
+        def emit(
+            stage: str, message: str, progress: float = 0.0, **extra: object
+        ) -> None:
             nonlocal current_stage
             current_stage = stage
             if progress_callback is None:
                 return
             payload: dict[str, object] = {
+                "run_id": run_id if run_id != "unassigned" else None,
                 "stage": stage,
                 "message": message,
                 "progress": progress,
@@ -162,8 +175,8 @@ class DailyRecommendationService:
             progress_callback(payload)
 
         try:
-            emit("ENGINE_DB", "추천 실행 기록을 생성하고 있습니다.")
             run_id = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{normalized_type}-{uuid.uuid4().hex[:8]}"
+            emit("ENGINE_DB", "추천 실행 기록을 생성하고 있습니다.")
             started = datetime.now()
             parameters = {
                 "market": self.market,
@@ -175,10 +188,16 @@ class DailyRecommendationService:
                     "SWING": "11-15 sessions to +30%",
                     "POSITION": "16-20 sessions to +30%",
                 },
-                "speed_weights": {"FAST": 1.0, "QUICK": 0.9, "SWING": 0.8, "POSITION": 0.7},
+                "speed_weights": {
+                    "FAST": 1.0,
+                    "QUICK": 0.9,
+                    "SWING": 0.8,
+                    "POSITION": 0.7,
+                },
                 "top_n": top_n,
                 "weekly_pool_n": weekly_pool_n,
                 "candidate_years": candidate_years,
+                "lookback_months": lookback_months,
                 "use_recent_replay": use_recent_replay,
                 "use_weekly_filter": use_weekly_filter,
                 "min_weekly_similarity": min_weekly_similarity,
@@ -202,11 +221,22 @@ class DailyRecommendationService:
                 ),
             )
             self.run_store.create(
-                RunRequest(kind="recommendation", market=self.market, parameters=parameters, run_id=run_id),
+                RunRequest(
+                    kind="recommendation",
+                    market=self.market,
+                    parameters=parameters,
+                    run_id=run_id,
+                ),
                 ("RECOMMEND", "REPORT", "PERSIST"),
             )
             self.conn.commit()
             self.run_store.start(run_id)
+
+            def engine_progress(progress: dict[str, object]) -> None:
+                nonlocal current_stage
+                current_stage = str(progress.get("stage") or current_stage)
+                if progress_callback:
+                    progress_callback({**progress, "run_id": run_id})
 
             timer = perf_counter()
             diagnostics: dict[str, object] = {}
@@ -216,7 +246,10 @@ class DailyRecommendationService:
                 emit("ENGINE_INIT", "추천 엔진 객체를 생성하고 있습니다.")
                 engine = InteractiveSurgePatternRecommender(self.db_path)
                 try:
-                    emit("ENGINE_RECOMMEND", "시장 데이터와 과거 패턴을 불러오기 시작했습니다.")
+                    emit(
+                        "ENGINE_RECOMMEND",
+                        "시장 데이터와 과거 패턴을 불러오기 시작했습니다.",
+                    )
                     recommendations, diagnostics = engine.recommend_interactive(
                         candidate_years=candidate_years,
                         lookback_months=lookback_months,
@@ -228,13 +261,15 @@ class DailyRecommendationService:
                         use_recent_replay=use_recent_replay,
                         use_weekly_filter=use_weekly_filter,
                         use_sto_filter=use_sto_filter,
-                        progress_callback=progress_callback,
+                        progress_callback=engine_progress,
                         cancel_check=cancel_check,
                     )
                 finally:
                     engine.close()
 
-                self.run_store.complete_stage(run_id, "RECOMMEND", {"diagnostics": diagnostics})
+                self.run_store.complete_stage(
+                    run_id, "RECOMMEND", {"diagnostics": diagnostics}
+                )
                 self.run_store.start_stage(run_id, "REPORT")
                 emit("REPORT", "추천 결과 보고서를 생성하고 있습니다.")
                 report_path = runtime_path("daily_recommendations", f"{run_id}.html")
@@ -243,7 +278,9 @@ class DailyRecommendationService:
                     report_path,
                     lookback_months=lookback_months,
                 )
-                self.run_store.complete_stage(run_id, "REPORT", {"report": {"path": str(report_path)}})
+                self.run_store.complete_stage(
+                    run_id, "REPORT", {"report": {"path": str(report_path)}}
+                )
                 self.run_store.start_stage(run_id, "PERSIST")
                 emit("SAVE", "추천 결과를 데이터베이스에 저장하고 있습니다.")
                 recommendation_rows = []
@@ -262,7 +299,9 @@ class DailyRecommendationService:
                             item.sto_similarity,
                             prediction.grade if prediction else None,
                             prediction.seven_day_up_probability if prediction else None,
-                            prediction.seven_day_expected_return if prediction else None,
+                            prediction.seven_day_expected_return
+                            if prediction
+                            else None,
                             prediction.target_return if prediction else None,
                             prediction.stop_return if prediction else None,
                             json.dumps(item.to_dict(), ensure_ascii=False),
@@ -279,6 +318,14 @@ class DailyRecommendationService:
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     recommendation_rows,
+                )
+                evidence_manifest = capture_run_evidence(
+                    self.conn,
+                    run_id,
+                    self.market,
+                    [item.to_dict() for item in recommendations],
+                    started.date().isoformat(),
+                    parameters,
                 )
 
                 finished = datetime.now()
@@ -299,11 +346,20 @@ class DailyRecommendationService:
                         run_id,
                     ),
                 )
-                self.run_store.complete_stage(run_id, "PERSIST", {"output": {
-                    "run_id": run_id,
-                    "recommendation_count": len(recommendations),
-                    "recommendations": [item.to_dict() for item in recommendations],
-                }})
+                self.run_store.complete_stage(
+                    run_id,
+                    "PERSIST",
+                    {
+                        "evidence": evidence_manifest,
+                        "output": {
+                            "run_id": run_id,
+                            "recommendation_count": len(recommendations),
+                            "recommendations": [
+                                item.to_dict() for item in recommendations
+                            ],
+                        },
+                    },
+                )
                 self.run_store.finish(run_id)
                 self.conn.commit()
                 return RecommendationRunResult(
@@ -435,11 +491,15 @@ class DailyRecommendationService:
             raw_diagnostics = item.pop("diagnostics_json", None)
             raw_parameters = item.pop("parameters_json", None)
             try:
-                item["diagnostics"] = json.loads(raw_diagnostics) if raw_diagnostics else {}
+                item["diagnostics"] = (
+                    json.loads(raw_diagnostics) if raw_diagnostics else {}
+                )
             except json.JSONDecodeError:
                 item["diagnostics"] = {}
             try:
-                item["parameters"] = json.loads(raw_parameters) if raw_parameters else {}
+                item["parameters"] = (
+                    json.loads(raw_parameters) if raw_parameters else {}
+                )
             except json.JSONDecodeError:
                 item["parameters"] = {}
             result.append(item)

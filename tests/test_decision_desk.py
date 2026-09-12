@@ -197,3 +197,53 @@ def test_us_candidate_uses_usd_request_flow_and_saved_recommendation(
     button(app, "추천 근거로 돌아가기").click().run()
     assert not app.exception
     assert app.session_state["desk_selected_run_us"] == "us-origin"
+
+
+def test_review_draft_survives_ticker_market_and_focus_changes(desk_database, offline):
+    db = desk_database
+    db.add("draft-run")
+    db.add_evidence()
+    app = AppTest.from_file(str(APP), default_timeout=20).run()
+    prefix = "desk_review_kr_draft-run_005930"
+    app.text_area(key=prefix + "note").input("저장 전에도 유지할 반대 근거").run()
+    app.checkbox(key=prefix + "sto").check().run()
+    button(app, "02   두 번째 종목").click().run()
+    button(app, "01   삼성전자").click().run()
+    assert app.text_area(key=prefix + "note").value == "저장 전에도 유지할 반대 근거"
+    app.toggle(key="desk_focus_kr").set_value(True).run()
+    assert app.get("plotly_chart")
+    assert app.checkbox(key=prefix + "sto").value
+    app.selectbox(key="desk_market").select("us").run()
+    app.selectbox(key="desk_market").select("kr").run()
+    assert not app.exception
+    assert app.text_area(key=prefix + "note").value == "저장 전에도 유지할 반대 근거"
+    owner = app.session_state["ade_owner_id"]
+    assert load_review(owner, "kr", "draft-run", "005930") == {}
+
+
+def test_save_and_next_advances_queue_without_changing_rank_or_leaking_owners(
+    desk_database, offline
+):
+    from dashboard.desk_review import save_review
+
+    db = desk_database
+    db.add("queue-run")
+    db.add_evidence()
+    save_review("someone-else", "kr", "queue-run", "000660", {}, {"verdict": "관찰"})
+    app = AppTest.from_file(str(APP), default_timeout=20).run()
+    prefix = "desk_review_kr_queue-run_005930"
+    app.radio(key=prefix + "verdict").set_value("관찰").run()
+    button(app, "저장하고 다음 미검토").click().run()
+    assert not app.exception
+    assert app.session_state["desk_ticker_kr_queue-run"] == "000660"
+    app.selectbox(key="desk_queue_kr").select("미검토").run()
+    assert button(app, "02   두 번째 종목")
+    assert all(item.label != "01   삼성전자" for item in app.button)
+    app.selectbox(key="desk_queue_kr").select("관찰").run()
+    assert button(app, "01   삼성전자")
+    assert all(item.label != "02   두 번째 종목" for item in app.button)
+    button(app, "저장하고 다음 미검토").click().run()
+    assert app.session_state["desk_ticker_kr_queue-run"] == "000660"
+    button(app, "저장하고 다음 미검토").click().run()
+    assert not app.exception
+    assert any("모든 추천 종목" in item.value for item in app.success)

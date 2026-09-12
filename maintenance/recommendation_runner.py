@@ -1,18 +1,21 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from time import monotonic
 from typing import Any
 
-from maintenance.job_manager import ADEJobManager
+from maintenance.job_manager import ADEJobManager, JobBusyError
+from maintenance.recommendation_recovery import reconcile_interrupted_run
 from recommendation.daily_service import DailyRecommendationService
 
 _LOCK = threading.Lock()
+LOGGER = logging.getLogger(__name__)
 _JOBS: dict[str, dict[str, Any]] = {}
 _ACTIVE_STATES = {"STARTING", "RUNNING", "CANCELLING"}
 _HEARTBEAT_INTERVAL_SECONDS = 5
@@ -53,19 +56,27 @@ def _job_status_path(market_code: str) -> Path:
 
 
 def _now() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _seconds_since(value: object) -> float | None:
     try:
-        return max(0.0, (datetime.now() - datetime.fromisoformat(str(value))).total_seconds())
+        parsed = datetime.fromisoformat(str(value))
+        now = datetime.now(timezone.utc) if parsed.tzinfo else datetime.now()
+        return max(0.0, (now - parsed).total_seconds())
     except (TypeError, ValueError):
         return None
 
 
 def _overall_progress(stage: str, stage_progress: float) -> float:
     value = min(1.0, max(0.0, float(stage_progress or 0.0)))
-    if stage in {"STARTING", "THREAD_STARTED", "SERVICE_READY", "LOCK_WAIT", "ENGINE_START"}:
+    if stage in {
+        "STARTING",
+        "THREAD_STARTED",
+        "SERVICE_READY",
+        "LOCK_WAIT",
+        "ENGINE_START",
+    }:
         return 0.02 * value
     if stage == "PREPARE":
         return 0.10 * value
@@ -82,7 +93,14 @@ def _write_status(market_code: str, payload: dict[str, object]) -> dict[str, obj
     path = _status_path(market_code)
     path.parent.mkdir(parents=True, exist_ok=True)
     saved = {**payload, "updated_at": _now()}
-    path.write_text(json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
+    try:
+        temporary.write_text(
+            json.dumps(saved, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return saved
 
 
@@ -114,44 +132,86 @@ def _decorate_health(
 ) -> dict[str, object]:
     snapshot = dict(payload)
     lock_exists = _lock_path(market_code).exists()
-    heartbeat_age = _seconds_since(snapshot.get("heartbeat_at") or snapshot.get("updated_at"))
+    heartbeat_age = _seconds_since(
+        snapshot.get("heartbeat_at") or snapshot.get("updated_at")
+    )
     snapshot["thread_alive"] = thread_alive
     snapshot["lock_exists"] = lock_exists
     snapshot["heartbeat_age_seconds"] = heartbeat_age
-    snapshot["stage_label"] = _STAGE_LABELS.get(str(snapshot.get("stage") or ""), str(snapshot.get("stage") or "-"))
+    snapshot["stage_label"] = _STAGE_LABELS.get(
+        str(snapshot.get("stage") or ""), str(snapshot.get("stage") or "-")
+    )
 
     state = str(snapshot.get("state") or "IDLE")
     if state in _ACTIVE_STATES:
-        heartbeat_fresh = heartbeat_age is not None and heartbeat_age <= _STALE_AFTER_SECONDS
+        heartbeat_fresh = (
+            heartbeat_age is not None and heartbeat_age <= _STALE_AFTER_SECONDS
+        )
         if thread_alive is None:
-            alive = lock_exists and heartbeat_fresh
+            alive = heartbeat_fresh
         else:
-            alive = thread_alive and lock_exists and heartbeat_fresh
+            alive = thread_alive
         snapshot["running"] = alive
     else:
         snapshot["running"] = False
     return snapshot
 
 
-def _recover_stale_status(market_code: str, payload: dict[str, object]) -> dict[str, object]:
-    snapshot = _decorate_health(market_code, payload, thread_alive=None)
-    state = str(snapshot.get("state") or "IDLE")
-    if state not in _ACTIVE_STATES or bool(snapshot.get("running")):
-        return snapshot
+def _read_status(market_code: str) -> dict:
+    try:
+        value = json.loads(_status_path(market_code).read_text(encoding="utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, json.JSONDecodeError):
+        return {}
 
+
+def _record_recovery(market_code: str, payload: dict) -> dict:
+    result = reconcile_interrupted_run(payload, market_code)
+    state = str(result["state"])
     recovered = {
-        **snapshot,
-        "state": "STALE",
-        "stage": "STALE",
-        "stage_label": _STAGE_LABELS["STALE"],
+        **payload,
+        **result,
+        "stage": state,
+        "stage_label": _STAGE_LABELS.get(state, state),
         "running": False,
-        "message": "추천 작업의 생존 신호가 끊겨 비정상 종료 상태로 전환했습니다.",
-        "error_message": "유효한 작업 스레드·잠금·heartbeat 조합을 확인하지 못했습니다.",
-        "finished_at": _now(),
+        "recovered_at": _now(),
+        "finished_at": result.get("finished_at") or _now(),
+        "message": "완료 결과를 복원했습니다."
+        if state == "COMPLETED"
+        else result.get("error_message"),
+        "progress": 1.0 if state == "COMPLETED" else 0.0,
+        "overall_progress": 1.0 if state == "COMPLETED" else 0.0,
     }
     saved = _write_status(market_code, recovered)
     _append_history(market_code, saved)
     return saved
+
+
+def _recover_stale_status(
+    market_code: str, payload: dict[str, object]
+) -> dict[str, object]:
+    snapshot = _decorate_health(market_code, payload, thread_alive=None)
+    if str(snapshot.get("state")) not in _ACTIVE_STATES:
+        return snapshot
+    # Heartbeat is a hint; only the worker's actual OS lock proves ownership.
+    path = _lock_path(market_code)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+", encoding="utf-8") as handle:
+        if not ADEJobManager._try_lock(handle):
+            return {**snapshot, "running": True, "lock_held": True}
+        try:
+            latest = _read_status(market_code)
+            if latest.get("request_id") != payload.get("request_id"):
+                return _decorate_health(market_code, latest, thread_alive=None)
+            if str(latest.get("state")) not in _ACTIVE_STATES:
+                return _decorate_health(market_code, latest, thread_alive=None)
+            # Give a legacy process time to enter its startup lock.
+            age = _seconds_since(latest.get("heartbeat_at") or latest.get("updated_at"))
+            if age is not None and age <= _STALE_AFTER_SECONDS:
+                return {**snapshot, "running": True, "lock_held": False}
+            return _record_recovery(market_code, latest)
+        finally:
+            ADEJobManager._unlock(handle)
 
 
 def get_status(market_code: str) -> dict[str, object]:
@@ -164,15 +224,12 @@ def get_status(market_code: str) -> dict[str, object]:
                 dict(job.get("status", {})),
                 thread_alive=bool(thread and thread.is_alive()),
             )
-            return snapshot
+            if snapshot.get("running"):
+                return snapshot
 
-    path = _status_path(market_code)
-    if path.exists():
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            return _recover_stale_status(market_code, payload)
-        except (OSError, json.JSONDecodeError):
-            pass
+    payload = _read_status(market_code)
+    if payload:
+        return _recover_stale_status(market_code, payload)
     return {
         "state": "IDLE",
         "stage": "IDLE",
@@ -204,12 +261,33 @@ def start_job(
         if existing and existing.get("thread") and existing["thread"].is_alive():
             return None
 
-        request_id = f"REQ-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        manager = ADEJobManager(
+            lock_path=_lock_path(market_code), status_path=_job_status_path(market_code)
+        )
+        lease = manager.acquire(
+            f"{market_code.upper()}_MANUAL_RECOMMENDATION", wait=False
+        )
+        try:
+            lease.__enter__()
+        except JobBusyError:
+            return None
+        try:
+            previous = _read_status(market_code)
+            if previous.get("state") in _ACTIVE_STATES:
+                _record_recovery(market_code, previous)
+        except BaseException as exc:
+            lease.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+
+        request_id = (
+            f"REQ-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+        )
         cancel_event = threading.Event()
         heartbeat_stop = threading.Event()
         started_at = _now()
         startup_trace: list[dict[str, str]] = [{"stage": "STARTING", "at": started_at}]
         initial = {
+            "db_path": str(Path(db_path).resolve()),
             "request_id": request_id,
             "state": "STARTING",
             "running": True,
@@ -228,13 +306,17 @@ def start_job(
             "started_at": started_at,
             "heartbeat_at": started_at,
         }
-        initial = _write_status(market_code, initial)
+        try:
+            initial = _write_status(market_code, initial)
+        except BaseException as exc:
+            lease.__exit__(type(exc), exc, exc.__traceback__)
+            raise
 
         def heartbeat_worker() -> None:
             while not heartbeat_stop.wait(_HEARTBEAT_INTERVAL_SECONDS):
                 with _LOCK:
                     job = _JOBS.get(market_code)
-                    if not job:
+                    if not job or job.get("request_id") != request_id:
                         return
                     status = dict(job.get("status", {}))
                     thread = job.get("thread")
@@ -251,6 +333,7 @@ def start_job(
             last_stage: str | None = None
             stage_durations: dict[str, float] = {}
             service: DailyRecommendationService | None = None
+            failure: Exception | None = None
 
             def publish_startup(stage: str, message: str) -> None:
                 trace = [*startup_trace, {"stage": stage, "at": _now()}]
@@ -278,15 +361,9 @@ def start_job(
                 }
                 with _LOCK:
                     if market_code in _JOBS:
-                        _JOBS[market_code]["status"] = _write_status(market_code, status)
-
-            publish_startup("THREAD_STARTED", "추천 작업 스레드를 시작했습니다.")
-            service = DailyRecommendationService(db_path, market=market_code)
-            publish_startup("SERVICE_READY", "추천 서비스 초기화를 완료했습니다.")
-            manager = ADEJobManager(
-                lock_path=_lock_path(market_code),
-                status_path=_job_status_path(market_code),
-            )
+                        _JOBS[market_code]["status"] = _write_status(
+                            market_code, {**_JOBS[market_code]["status"], **status}
+                        )
 
             def on_progress(progress: dict[str, object]) -> None:
                 nonlocal stage_started_at, last_stage
@@ -297,7 +374,8 @@ def start_job(
                     stage_started_at = now_mono
                 elif stage != last_stage:
                     stage_durations[last_stage] = round(
-                        stage_durations.get(last_stage, 0.0) + (now_mono - stage_started_at),
+                        stage_durations.get(last_stage, 0.0)
+                        + (now_mono - stage_started_at),
                         3,
                     )
                     last_stage = stage
@@ -311,7 +389,8 @@ def start_job(
                 live_stage_durations = dict(stage_durations)
                 if last_stage:
                     live_stage_durations[last_stage] = round(
-                        live_stage_durations.get(last_stage, 0.0) + (now_mono - stage_started_at),
+                        live_stage_durations.get(last_stage, 0.0)
+                        + (now_mono - stage_started_at),
                         3,
                     )
                 status = {
@@ -325,9 +404,15 @@ def start_job(
                     "overall_progress": _overall_progress(stage, stage_progress),
                     "current": current,
                     "total": total,
-                    "processed_symbols": current if stage == "MATCH" else diagnostics.get("symbols_with_120d", 0),
-                    "total_symbols": total if stage == "MATCH" else diagnostics.get("symbols_total", 0),
-                    "remaining_symbols": max(0, total - current) if stage == "MATCH" else None,
+                    "processed_symbols": current
+                    if stage == "MATCH"
+                    else diagnostics.get("symbols_with_120d", 0),
+                    "total_symbols": total
+                    if stage == "MATCH"
+                    else diagnostics.get("symbols_total", 0),
+                    "remaining_symbols": max(0, total - current)
+                    if stage == "MATCH"
+                    else None,
                     "current_ticker": ticker,
                     "matched_symbols": diagnostics.get("symbols_with_matches", 0),
                     "stage_durations": live_stage_durations,
@@ -338,30 +423,40 @@ def start_job(
                 }
                 with _LOCK:
                     if market_code in _JOBS:
-                        _JOBS[market_code]["status"] = _write_status(market_code, status)
+                        _JOBS[market_code]["status"] = _write_status(
+                            market_code, {**_JOBS[market_code]["status"], **status}
+                        )
 
-            final: dict[str, object]
+            final: dict[str, object] = {
+                "state": "FAILED",
+                "stage": "FAILED",
+                "running": False,
+                "error_message": "작업 스레드가 예기치 않게 종료되었습니다.",
+            }
             try:
+                publish_startup("THREAD_STARTED", "추천 작업 스레드를 시작했습니다.")
+                service = DailyRecommendationService(db_path, market=market_code)
+                publish_startup("SERVICE_READY", "추천 서비스 초기화를 완료했습니다.")
                 publish_startup("LOCK_WAIT", "추천 작업 잠금을 확인하고 있습니다.")
-                with manager.acquire(f"{market_code.upper()}_MANUAL_RECOMMENDATION", wait=False):
-                    publish_startup("ENGINE_START", "추천 엔진 실행을 시작했습니다.")
-                    result = service.run(
-                        "MANUAL",
-                        top_n=top_n,
-                        weekly_pool_n=weekly_pool_n,
-                        candidate_years=candidate_years,
-                        use_recent_replay=use_recent_replay,
-                        use_weekly_filter=use_weekly_filter,
-                        min_weekly_similarity=min_weekly_similarity,
-                        use_sto_filter=use_sto_filter,
-                        min_sto_similarity=min_sto_similarity,
-                        progress_callback=on_progress,
-                        cancel_check=cancel_event.is_set,
-                    )
+                publish_startup("ENGINE_START", "추천 엔진 실행을 시작했습니다.")
+                result = service.run(
+                    "MANUAL",
+                    top_n=top_n,
+                    weekly_pool_n=weekly_pool_n,
+                    candidate_years=candidate_years,
+                    use_recent_replay=use_recent_replay,
+                    use_weekly_filter=use_weekly_filter,
+                    min_weekly_similarity=min_weekly_similarity,
+                    use_sto_filter=use_sto_filter,
+                    min_sto_similarity=min_sto_similarity,
+                    progress_callback=on_progress,
+                    cancel_check=cancel_event.is_set,
+                )
                 finished_mono = monotonic()
                 if last_stage:
                     stage_durations[last_stage] = round(
-                        stage_durations.get(last_stage, 0.0) + (finished_mono - stage_started_at),
+                        stage_durations.get(last_stage, 0.0)
+                        + (finished_mono - stage_started_at),
                         3,
                     )
                 finished_at = _now()
@@ -374,7 +469,9 @@ def start_job(
                     "progress": 1.0 if result.status == "COMPLETED" else 0.0,
                     "stage_progress": 1.0 if result.status == "COMPLETED" else 0.0,
                     "overall_progress": 1.0 if result.status == "COMPLETED" else 0.0,
-                    "message": "추천 생성이 완료되었습니다." if result.status == "COMPLETED" else "사용자 요청으로 추천 생성을 중단했습니다.",
+                    "message": "추천 생성이 완료되었습니다."
+                    if result.status == "COMPLETED"
+                    else "사용자 요청으로 추천 생성을 중단했습니다.",
                     "run_id": result.run_id,
                     "recommendation_count": result.recommendation_count,
                     "elapsed_seconds": result.elapsed_seconds,
@@ -388,10 +485,12 @@ def start_job(
                     "heartbeat_at": finished_at,
                 }
             except Exception as exc:
+                failure = exc
                 finished_mono = monotonic()
                 if last_stage:
                     stage_durations[last_stage] = round(
-                        stage_durations.get(last_stage, 0.0) + (finished_mono - stage_started_at),
+                        stage_durations.get(last_stage, 0.0)
+                        + (finished_mono - stage_started_at),
                         3,
                     )
                 finished_at = _now()
@@ -415,18 +514,49 @@ def start_job(
                     "elapsed_seconds": _seconds_since(started_at) or 0.0,
                 }
             finally:
-                if service is not None:
-                    service.close()
                 heartbeat_stop.set()
+                try:
+                    try:
+                        if service is not None:
+                            service.close()
+                    finally:
+                        with _LOCK:
+                            if market_code in _JOBS:
+                                if failure:
+                                    try:
+                                        recovered = reconcile_interrupted_run(
+                                            _JOBS[market_code]["status"], market_code
+                                        )
+                                        if recovered.get("state") == "COMPLETED":
+                                            final.update(recovered)
+                                            final.update(
+                                                stage="COMPLETED",
+                                                overall_progress=1.0,
+                                                message="저장된 완료 결과를 복원했습니다.",
+                                            )
+                                    except Exception:
+                                        LOGGER.exception(
+                                            "Could not reconcile failed recommendation worker"
+                                        )
+                                saved = _write_status(
+                                    market_code,
+                                    {**_JOBS[market_code]["status"], **final},
+                                )
+                                _JOBS[market_code]["status"] = saved
+                                _append_history(market_code, saved)
+                finally:
+                    lease.__exit__(
+                        type(failure) if failure else None,
+                        failure,
+                        failure.__traceback__ if failure else None,
+                    )
 
-            with _LOCK:
-                if market_code in _JOBS:
-                    saved = _write_status(market_code, final)
-                    _JOBS[market_code]["status"] = saved
-                    _append_history(market_code, saved)
-
-        thread = threading.Thread(target=worker, name=f"ade-{market_code}-recommendation", daemon=True)
-        heartbeat = threading.Thread(target=heartbeat_worker, name=f"ade-{market_code}-heartbeat", daemon=True)
+        thread = threading.Thread(
+            target=worker, name=f"ade-{market_code}-recommendation", daemon=True
+        )
+        heartbeat = threading.Thread(
+            target=heartbeat_worker, name=f"ade-{market_code}-heartbeat", daemon=True
+        )
         _JOBS[market_code] = {
             "request_id": request_id,
             "thread": thread,
@@ -435,8 +565,30 @@ def start_job(
             "cancel_event": cancel_event,
             "status": initial,
         }
-        thread.start()
-        heartbeat.start()
+        try:
+            thread.start()
+        except BaseException as exc:
+            _JOBS.pop(market_code, None)
+            try:
+                _write_status(
+                    market_code,
+                    {
+                        **initial,
+                        "state": "FAILED",
+                        "stage": "FAILED",
+                        "running": False,
+                        "error_message": str(exc),
+                        "finished_at": _now(),
+                    },
+                )
+            finally:
+                lease.__exit__(type(exc), exc, exc.__traceback__)
+            raise
+        try:
+            heartbeat.start()
+        except RuntimeError:
+            # The worker and its OS lock still define a live job.
+            LOGGER.exception("Could not start recommendation heartbeat thread")
         return request_id
 
 
@@ -447,13 +599,15 @@ def cancel_job(market_code: str) -> bool:
             return False
         job["cancel_event"].set()
         status = dict(job.get("status", {}))
-        status.update({
-            "state": "CANCELLING",
-            "stage": "CANCELLING",
-            "stage_label": _STAGE_LABELS["CANCELLING"],
-            "running": True,
-            "heartbeat_at": _now(),
-            "message": "현재 비교 작업을 마친 뒤 안전하게 중단합니다.",
-        })
+        status.update(
+            {
+                "state": "CANCELLING",
+                "stage": "CANCELLING",
+                "stage_label": _STAGE_LABELS["CANCELLING"],
+                "running": True,
+                "heartbeat_at": _now(),
+                "message": "현재 비교 작업을 마친 뒤 안전하게 중단합니다.",
+            }
+        )
         job["status"] = _write_status(market_code, status)
     return True

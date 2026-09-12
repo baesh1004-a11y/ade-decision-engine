@@ -58,3 +58,13 @@ def load_review(owner: str, market: str, run_id: str, ticker: str) -> dict:
             (owner, market, run_id, ticker),
         ).fetchone()
     return json.loads(row[0]) if row else {}
+
+
+def load_reviews(owner: str, market: str, run_id: str) -> dict[str, dict]:
+    """One scoped query for queue counts and filters; no cross-owner state."""
+    with _connection() as conn:
+        rows = conn.execute(
+            "SELECT ticker,review_json FROM decision_reviews WHERE owner_id=? AND market=? AND run_id=?",
+            (owner, market, run_id),
+        ).fetchall()
+    return {str(row["ticker"]): json.loads(row["review_json"]) for row in rows}

@@ -13,7 +13,8 @@ import streamlit as st
 
 from dashboard.desk_charts import compare_prices, compare_sto
 from dashboard.desk_data import DeskData, decode, number
-from dashboard.desk_review import load_review, save_review
+from dashboard.desk_review import load_review, load_reviews, save_review
+from dashboard.desk_workflow import REVIEW_FILTERS, candidates, next_unreviewed
 from markets.profiles import get_market_profile
 
 LOGGER = logging.getLogger(__name__)
@@ -195,7 +196,7 @@ def _generation(profile, health: dict) -> None:
         if st.button("계산 중단", key=key + "cancel"):
             cancel_job(profile.code)
             st.rerun()
-    elif runtime.get("state") == "FAILED":
+    elif runtime.get("state") in {"FAILED", "STALE"}:
         st.warning(
             "최근 추천 계산이 완료되지 않았습니다. 이전 완료 결과를 검토할 수 있습니다."
         )
@@ -238,46 +239,31 @@ def _choose_run(data: DeskData, runs: list[dict]):
     return data.context(st.session_state[key]), lookup[st.session_state[key]]
 
 
-def _candidates(context, query: str):
-    rows = [dict(row) for row in context.recommendations]
-    for row in rows:
-        row["symbol"] = (
-            row.get("name")
-            or decode(row.get("payload_json")).get("name")
-            or str(row["ticker"])
-        )
-    term = query.strip().casefold()
-    filtered = [
-        row
-        for row in rows
-        if not term or term in f"{row['ticker']} {row['symbol']}".casefold()
-    ]
-    # Filtering only hides rows; their saved rank and score never change.
+def _candidates(context, query: str, reviews: dict, status: str):
+    rows = candidates(context.recommendations, reviews, query, status)
     key = f"desk_ticker_{context.market}_{context.run_id}"
-    if filtered and st.session_state.get(key) not in [
-        str(row["ticker"]) for row in filtered
-    ]:
-        st.session_state[key] = str(filtered[0]["ticker"])
-    for row in filtered:
+    if rows and st.session_state.get(key) not in [str(row["ticker"]) for row in rows]:
+        st.session_state[key] = str(rows[0]["ticker"])
+    st.caption(f"{len(rows)} / {len(context.recommendations)}종목 · 저장 순위")
+    for row in rows:
         ticker = str(row["ticker"])
-        label = f"{int(row['rank_no']):02d}   {row['symbol']}"
-        if st.button(
-            label,
+        st.button(
+            f"{int(row['rank_no']):02d}   {row['symbol']}",
             key=f"desk_select_{context.market}_{context.run_id}_{ticker}",
             type="primary" if st.session_state.get(key) == ticker else "secondary",
             use_container_width=True,
-        ):
-            st.session_state[key] = ticker
-            st.rerun()
+            on_click=lambda value=ticker: st.session_state.update({key: value}),
+        )
+        status_class = "done" if row["review_status"] != "미검토" else "pending"
         st.markdown(
-            f'<div class="desk-candidate-note">{escape(ticker)} · 주봉 {_fmt(row.get("weekly_similarity"), "%")} · STO {_fmt(row.get("sto_similarity"), "%")}</div>',
+            f'<div class="desk-candidate-note"><span>{escape(ticker)} · {_fmt(row.get("weekly_similarity"), "%")}</span>'
+            f'<span class="desk-review-tag {status_class}">{escape(row["review_status"])}</span></div>',
             unsafe_allow_html=True,
         )
-    if not filtered:
-        st.info("검색 조건과 일치하는 추천 종목이 없습니다.")
+    if not rows:
+        st.info("이 조건에 해당하는 종목이 없습니다. 검색어나 검토 상태를 바꿔보세요.")
     return next(
-        (row for row in filtered if str(row["ticker"]) == st.session_state.get(key)),
-        None,
+        (row for row in rows if str(row["ticker"]) == st.session_state.get(key)), None
     )
 
 
@@ -361,6 +347,9 @@ def _comparison(data: DeskData, context, selected: dict) -> None:
             if mode == "가격 · 거래량"
             else compare_sto(evidence.current, evidence.historical)
         )
+        figure.update_layout(
+            height=600 if st.session_state.get(f"desk_focus_{context.market}") else 490
+        )
         st.plotly_chart(
             figure,
             use_container_width=True,
@@ -370,6 +359,16 @@ def _comparison(data: DeskData, context, selected: dict) -> None:
         st.caption(
             f"현재 기준일 {str(evidence.current.iloc[-1]['Date'])[:10]} · 과거 기준일 {str(evidence.historical.iloc[-1]['Date'])[:10]} · 가격 출처 {evidence.source}"
         )
+    if evidence.frozen:
+        st.markdown(
+            f'<div class="desk-provenance"><span class="desk-dot"></span>추천 결과와 함께 보관한 비교 자료'
+            f' · {escape(evidence.captured_at[:16].replace("T", " "))} UTC</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption(
+            "이전 실행 · 원천 DB에서 조회한 비교 자료입니다. 이후 시세 정정이 반영될 수 있습니다."
+        )
     for warning in evidence.warnings:
         st.warning(warning)
     with st.expander("저장된 계산 근거 전체"):
@@ -378,44 +377,82 @@ def _comparison(data: DeskData, context, selected: dict) -> None:
         st.caption(f"추천 실행 {context.run_id}")
 
 
+def _remember_draft(prefix: str) -> None:
+    st.session_state[prefix + "_draft"] = {
+        "checks": {
+            key: bool(st.session_state.get(prefix + key))
+            for key in ("price", "sto", "environment")
+        },
+        "verdict": st.session_state.get(prefix + "verdict", "검토 중"),
+        "note": st.session_state.get(prefix + "note", ""),
+    }
+
+
 def _review(context, selected: dict) -> None:
     market, ticker, run_id = context.market, str(selected["ticker"]), context.run_id
     owner = str(st.session_state.ade_owner_id)
     saved = load_review(owner, market, run_id, ticker)
     prefix = f"desk_review_{market}_{run_id}_{ticker}"
+    draft = st.session_state.setdefault(
+        prefix + "_draft", saved or {"checks": {}, "verdict": "검토 중", "note": ""}
+    )
     st.markdown(
         '<div class="desk-section-label">03 / 판단 기록</div>', unsafe_allow_html=True
     )
-    st.markdown("### 검토 메모")
+    st.markdown("### 나의 판단")
     checks = {}
     for key, label in [
         ("price", "가격·거래량 비교"),
         ("sto", "STO 전환 흐름 확인"),
         ("environment", "시장·위험 요인 확인"),
     ]:
+        st.session_state[prefix + key] = bool(draft.get("checks", {}).get(key))
         checks[key] = st.checkbox(
-            label, value=bool(saved.get("checks", {}).get(key)), key=prefix + key
+            label, key=prefix + key, on_change=_remember_draft, args=(prefix,)
         )
     options = ["검토 중", "관찰", "주문 검토"]
+    st.session_state[prefix + "verdict"] = (
+        draft.get("verdict") if draft.get("verdict") in options else "검토 중"
+    )
     verdict = st.radio(
         "내 판단",
         options,
-        index=options.index(saved.get("verdict"))
-        if saved.get("verdict") in options
-        else 0,
         key=prefix + "verdict",
+        on_change=_remember_draft,
+        args=(prefix,),
     )
+    st.session_state[prefix + "note"] = str(draft.get("note") or "")
     note = st.text_area(
         "판단 근거와 반대 근거",
-        value=str(saved.get("note") or ""),
         height=140,
         placeholder="과거 사례와의 차이, 진입 조건, 확인할 위험 요인",
         key=prefix + "note",
+        on_change=_remember_draft,
+        args=(prefix,),
     )
     review = {"checks": checks, "verdict": verdict, "note": note}
-    if st.button("검토 내용 저장", key=prefix + "save", use_container_width=True):
+    if review != saved:
+        st.caption("작성 중 · 종목을 바꿔도 이 세션에서 유지됩니다.")
+    else:
+        st.caption("저장된 판단을 보고 있습니다.")
+    save = st.button("검토 내용 저장", key=prefix + "save", use_container_width=True)
+    advance = st.button(
+        "저장하고 다음 미검토", key=prefix + "next", use_container_width=True
+    )
+    if save or advance:
         save_review(owner, market, run_id, ticker, selected, review)
-        st.success("이 추천 실행에 검토 내용을 저장했습니다.")
+        st.session_state.desk_review_notice = "이 추천 실행에 검토 내용을 저장했습니다."
+        if advance:
+            reviews = load_reviews(owner, market, run_id)
+            next_ticker = next_unreviewed(context.recommendations, reviews, ticker)
+            if next_ticker:
+                st.session_state[f"desk_ticker_{market}_{run_id}"] = next_ticker
+            else:
+                st.session_state.desk_review_notice = (
+                    "모든 추천 종목에 검토 기록이 있습니다."
+                )
+            st.session_state[f"desk_reset_queue_{market}"] = True
+        st.rerun()
     validation = context.validations.get(ticker)
     if st.button(
         "시장·업종 환경 확인", key=prefix + "validate", use_container_width=True
@@ -475,12 +512,19 @@ def _desk(profile) -> None:
     notice = st.session_state.pop("desk_validation_notice", None)
     if notice:
         st.warning(notice)
+    review_notice = st.session_state.pop("desk_review_notice", None)
+    if review_notice:
+        st.success(review_notice)
     st.markdown(
-        '<div class="desk-eyebrow">RESEARCH / DECISION</div>', unsafe_allow_html=True
+        f'<div class="desk-eyebrow">ADE / {profile.code.upper()} EQUITIES</div>',
+        unsafe_allow_html=True,
     )
-    st.title("추천과 근거를 한눈에")
+    heading, focus = st.columns([4, 1], vertical_alignment="center")
+    heading.title("추천 판단 데스크")
+    focus.toggle("차트 집중", key=f"desk_focus_{profile.code}")
     st.markdown(
-        '<div class="desk-context"><span class="desk-chip">저장된 추천 기준</span><span>발견 · 비교 · 판단 · 주문 검토</span></div>',
+        '<div class="desk-context"><span class="desk-chip">DECISION WORKSPACE</span>'
+        "<span>종목을 고르고, 근거를 비교하고, 판단을 남기세요.</span></div>",
         unsafe_allow_html=True,
     )
     _generation(profile, health)
@@ -500,18 +544,26 @@ def _desk(profile) -> None:
         return
     scores = [number(row.get("weekly_similarity")) for row in context.recommendations]
     scores = [value for value in scores if value is not None]
-    kpis = st.columns(4)
-    for col, label, value in zip(
-        kpis,
-        ["추천 종목", "평균 주봉 유사도", "환경 검토 기록", "연결된 주문 대기"],
-        [
-            f"{context.recommendation_count}개",
-            _fmt(sum(scores) / len(scores) if scores else None, "%"),
-            f"{len(context.validations)}개",
-            f"{len(context.current_orders)}건",
-        ],
-    ):
-        col.metric(label, value)
+    reviews = load_reviews(
+        str(st.session_state.ade_owner_id), profile.code, context.run_id
+    )
+    tickers = {str(row["ticker"]) for row in context.recommendations}
+    reviewed = sum(ticker in reviews for ticker in tickers)
+    summary = [
+        ("추천 종목", str(context.recommendation_count), "개"),
+        ("평균 주봉 유사도", _fmt(sum(scores) / len(scores) if scores else None), "%"),
+        ("판단 기록", f"{reviewed} / {context.recommendation_count}", "개"),
+        ("주문 대기", str(len(context.current_orders)), "건"),
+    ]
+    st.markdown(
+        '<div class="desk-summary" role="list">'
+        + "".join(
+            f'<div class="desk-summary-item" role="listitem"><span>{label}</span><strong>{value}<small>{unit}</small></strong></div>'
+            for label, value, unit in summary
+        )
+        + "</div>",
+        unsafe_allow_html=True,
+    )
     parameters = decode(run.get("parameters_json"))
     st.caption(
         f"완료 {str(context.finished_at or '')[:19].replace('T', ' ')} · 실행 조건 주봉 {_fmt(parameters.get('min_weekly_similarity'), '%')} / STO {_fmt(parameters.get('min_sto_similarity'), '%')}"
@@ -521,8 +573,12 @@ def _desk(profile) -> None:
             "이 실행에서 조건을 통과한 종목은 0개입니다. 이전 결과는 왼쪽의 ‘검토할 추천’에서 선택할 수 있습니다."
         )
         return
-    left, center, right = st.columns([1.05, 2.6, 1.15], gap="medium")
-    with left, st.container(border=True):
+    if st.session_state.pop(f"desk_reset_queue_{profile.code}", False):
+        st.session_state[f"desk_queue_{profile.code}"] = "전체"
+        st.session_state[f"desk_search_{profile.code}"] = ""
+    focused = bool(st.session_state.get(f"desk_focus_{profile.code}"))
+    columns = st.columns([1, 4] if focused else [1, 3.1, 1.1], gap="large")
+    with columns[0], st.container(key="desk_candidates"):
         st.markdown(
             '<div class="desk-candidates"><div class="desk-section-label">01 / 추천 목록</div></div>',
             unsafe_allow_html=True,
@@ -532,12 +588,19 @@ def _desk(profile) -> None:
             placeholder="종목명 또는 코드",
             key="desk_search_" + profile.code,
         )
-        selected = _candidates(context, query)
+        status = st.selectbox(
+            "검토 상태", REVIEW_FILTERS, key="desk_queue_" + profile.code
+        )
+        selected = _candidates(context, query, reviews, status)
     if selected:
-        with center, st.container(border=True):
+        with columns[1], st.container(key="desk_evidence"):
             _comparison(data, context, selected)
-        with right, st.container(border=True):
-            _review(context, selected)
+        if focused:
+            with columns[1], st.expander("판단 기록 열기", expanded=False):
+                _review(context, selected)
+        else:
+            with columns[2], st.container(key="desk_judgment"):
+                _review(context, selected)
 
 
 def _history(profile) -> None:
@@ -552,6 +615,27 @@ def _history(profile) -> None:
         "decision": "종합 판단",
         "validation": "환경 검토",
     }
+    type_filter, status_filter = st.columns(2)
+    kind = type_filter.selectbox(
+        "실행 종류", ["전체", *kinds.values()], key="desk_history_kind"
+    )
+    state = status_filter.selectbox(
+        "실행 상태", ["전체", "진행 중", "완료", "문제 확인"], key="desk_history_state"
+    )
+    groups = {
+        "진행 중": {"CREATED", "VALIDATING", "RUNNING"},
+        "완료": {"SUCCEEDED"},
+        "문제 확인": {"FAILED", "CANCELLED", "PARTIAL_SUCCESS"},
+    }
+    rows = [
+        row
+        for row in rows
+        if (kind == "전체" or kinds.get(row["kind"]) == kind)
+        and (state == "전체" or row["status"] in groups[state])
+    ]
+    if not rows:
+        st.info("이 조건에 해당하는 실행 기록이 없습니다.")
+        return
     display = pd.DataFrame(
         [
             {
@@ -567,6 +651,17 @@ def _history(profile) -> None:
     )
     st.dataframe(display, use_container_width=True, hide_index=True)
     chosen = st.selectbox("단계별 기록 확인", [row["run_id"] for row in rows])
+    selected_run = next(row for row in rows if row["run_id"] == chosen)
+    if selected_run.get("error"):
+        st.warning(selected_run["error"])
+    if (
+        selected_run["kind"] == "recommendation"
+        and selected_run["status"] == "SUCCEEDED"
+    ):
+        if st.button("이 추천 열기", key="desk_history_open"):
+            st.session_state[f"desk_selected_run_{profile.code}"] = chosen
+            _go("추천결과")
+            st.rerun()
     stages = data.stages(chosen)
     labels = {
         "INPUT": "입력 확인",
@@ -580,8 +675,13 @@ def _history(profile) -> None:
         "PERSIST": "추천 결과 저장",
     }
     for stage in stages:
+        started = str(stage.get("started_at") or "")[:19].replace("T", " ")
+        finished = str(stage.get("finished_at") or "")[:19].replace("T", " ")
         st.markdown(
-            f"**{labels.get(stage['name'], stage['name'])}** · {STATUS_LABELS.get(stage['status'], stage['status'])}"
+            f'<div class="desk-timeline"><strong>{escape(labels.get(stage["name"], stage["name"]))}'
+            f' · {escape(STATUS_LABELS.get(stage["status"], stage["status"]))}</strong>'
+            f'<span>{escape(started or "시작 전")} → {escape(finished or "완료 전")}</span></div>',
+            unsafe_allow_html=True,
         )
         if stage.get("error"):
             st.error(stage["error"])

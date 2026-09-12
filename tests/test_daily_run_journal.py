@@ -100,13 +100,14 @@ def test_cancel_and_engine_failure_are_visible_in_both_run_stores(
         service.close()
 
 
+@pytest.mark.parametrize("table", ["daily_recommendations", "recommendation_evidence"])
 def test_persist_failure_leaves_no_partial_recommendations_or_report(
-    tmp_path, fake_engine
+    tmp_path, fake_engine, table
 ):
     service = DailyRecommendationService(tmp_path / "market.db")
     try:
-        service.conn.executescript("""
-            CREATE TRIGGER reject_result BEFORE INSERT ON daily_recommendations BEGIN
+        service.conn.executescript(f"""
+            CREATE TRIGGER reject_result BEFORE INSERT ON {table} BEGIN
                 SELECT RAISE(ABORT, 'test disk constraint');
             END;
         """)
@@ -128,5 +129,35 @@ def test_persist_failure_leaves_no_partial_recommendations_or_report(
             "SUCCEEDED",
             "FAILED",
         ]
+    finally:
+        service.close()
+
+
+@pytest.mark.parametrize("missing", ["row", "table"])
+def test_new_run_reads_frozen_evidence_and_detects_missing_snapshot(
+    desk_database, fake_engine, missing
+):
+    from dashboard.desk_data import DeskData, decode
+    from recommendation.evidence import EvidenceIntegrityError
+
+    db = desk_database
+    db.add_evidence()
+    service = DailyRecommendationService(db.paths["kr"])
+    try:
+        result = service.run("MANUAL")
+        data = DeskData(db.paths["kr"], "kr")
+        row = data.context(result.run_id).recommendations[0]
+        match = decode(row["payload_json"])["replay_matches"][0]
+        evidence = data.evidence(row, match, result.finished_at)
+        assert evidence.frozen
+        assert len(evidence.current) == len(evidence.historical) == 120
+        with service.conn:
+            service.conn.execute(
+                "DELETE FROM recommendation_evidence"
+                if missing == "row"
+                else "DROP TABLE recommendation_evidence"
+            )
+        with pytest.raises(EvidenceIntegrityError, match="누락"):
+            data.evidence(row, match, result.finished_at)
     finally:
         service.close()

@@ -3,7 +3,7 @@ on:
   pull_request:
     paths:
       - 'ade_v2/**'
-      - 'tests/test_ade_v2_engine.py'
+      - 'tests/test_ade_v2_*.py'
       - '.github/workflows/ade-v2-tests.yml'
   workflow_dispatch:
 
@@ -20,4 +20,4 @@ jobs:
         with:
           python-version: '3.11'
       - name: ADE v2 unit tests (stdlib only)
-        run: python -m unittest discover -s tests -p 'test_ade_v2_engine.py' -v
+        run: python -m unittest discover -s tests -p 'test_ade_v2_*.py' -v

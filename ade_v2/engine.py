@@ -55,8 +55,8 @@ class Ledger:
         """Apply a verified fill only. Sells remain unsettled until settle() is called.
 
         BUY fills require contemporaneous prices for *all* existing positions.
-        This fails closed when a fill price differs from the order reference or
-        when cash/position limits would be breached after transaction fees.
+        This fails closed when a fill price would breach cash/position limits
+        after transaction fees. The fill price is authoritative for accounting.
         """
         if not isfinite(fill_price) or fill_price <= 0 or order.quantity <= 0:
             raise ValueError("Invalid confirmed fill")

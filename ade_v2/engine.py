@@ -51,7 +51,13 @@ class Ledger:
         )
 
     def apply_confirmed_fill(self, order: Order, fill_price: float, policy: Policy,
-                             *, settled: bool = False) -> None:
+                             *, mark_prices: dict[str, float] | None = None) -> None:
+        """Apply a verified fill only. Sells remain unsettled until settle() is called.
+
+        BUY fills require contemporaneous prices for *all* existing positions.
+        This fails closed when a fill price differs from the order reference or
+        when cash/position limits would be breached after transaction fees.
+        """
         if not isfinite(fill_price) or fill_price <= 0 or order.quantity <= 0:
             raise ValueError("Invalid confirmed fill")
         gross = fill_price * order.quantity
@@ -60,6 +66,23 @@ class Ledger:
             debit = gross + fee
             if debit > self.settled_cash + 1e-8:
                 raise ValueError("Insufficient settled cash")
+            if mark_prices is None:
+                raise ValueError("Mark prices required for post-fill risk checks")
+            prices = dict(mark_prices)
+            prices[order.ticker] = fill_price
+            if any(not isfinite(p) or p <= 0 for p in prices.values()):
+                raise ValueError("Invalid mark price")
+            try:
+                nav_after_fees = self.nav(prices) - fee
+            except KeyError as exc:
+                raise ValueError("Missing mark price for held position") from exc
+            if nav_after_fees <= 0:
+                raise ValueError("Nonpositive NAV")
+            if self.settled_cash - debit < policy.min_cash_ratio * nav_after_fees - 1e-8:
+                raise ValueError("Minimum settled cash reserve breached")
+            position_after = (self.positions.get(order.ticker, 0) + order.quantity) * fill_price
+            if position_after > policy.max_weight * nav_after_fees + 1e-8:
+                raise ValueError("Maximum position weight breached")
             self.settled_cash -= debit
             old_qty = self.positions.get(order.ticker, 0)
             old_cost = self.cost_basis.get(order.ticker, 0.0)
@@ -75,10 +98,7 @@ class Ledger:
             self.realized_pnl += proceeds - allocated_cost
             self.positions[order.ticker] = old_qty - order.quantity
             self.cost_basis[order.ticker] = old_cost - allocated_cost
-            if settled:
-                self.settled_cash += proceeds
-            else:
-                self.pending_settlement += proceeds
+            self.pending_settlement += proceeds
         else:
             raise ValueError("Unknown side")
         self.turnover += gross

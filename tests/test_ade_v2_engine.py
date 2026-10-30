@@ -39,6 +39,48 @@ class TestADEv2(unittest.TestCase):
         self.assertFalse(orders)
         self.assertEqual(reasons["X"], "NONPOSITIVE_NET_EDGE")
 
+    def test_buy_requires_prices_and_enforces_weight(self):
+        p = Policy()
+        ledger = Ledger(10_000_000)
+        order = Order("X", "BUY", 11, 100_000, "BUY")
+        with self.assertRaisesRegex(ValueError, "Mark prices"):
+            ledger.apply_confirmed_fill(order, 100_000, p)
+        with self.assertRaisesRegex(ValueError, "Maximum position"):
+            ledger.apply_confirmed_fill(order, 100_000, p, mark_prices={})
+        self.assertEqual(ledger.settled_cash, 10_000_000)
+        self.assertEqual(ledger.turnover, 0)
+
+    def test_buy_enforces_min_cash_reserve(self):
+        p = Policy(max_weight=1.0)
+        ledger = Ledger(10_000_000)
+        with self.assertRaisesRegex(ValueError, "Minimum settled cash"):
+            ledger.apply_confirmed_fill(Order("X", "BUY", 91, 100_000, "BUY"),
+                                        100_000, p, mark_prices={})
+        self.assertEqual(ledger.settled_cash, 10_000_000)
+
+    def test_buy_confirmed_fill_and_settlement(self):
+        p = Policy()
+        ledger = Ledger(10_000_000)
+        ledger.apply_confirmed_fill(Order("X", "BUY", 2, 100_000, "BUY"),
+                                    100_000, p, mark_prices={})
+        self.assertEqual(ledger.positions["X"], 2)
+        self.assertEqual(ledger.turnover, 200_000)
+        ledger.apply_confirmed_fill(Order("X", "SELL", 2, 100_000, "EXIT"), 100_000, p)
+        self.assertEqual(ledger.positions["X"], 0)
+        self.assertGreater(ledger.pending_settlement, 0)
+        pending = ledger.pending_settlement
+        cash = ledger.settled_cash
+        ledger.settle(pending)
+        self.assertAlmostEqual(ledger.settled_cash, cash + pending)
+        self.assertAlmostEqual(ledger.pending_settlement, 0)
+
+    def test_missing_held_mark_blocks_buy(self):
+        ledger = Ledger(9_000_000, {"OLD": 1}, {"OLD": 100_000})
+        with self.assertRaisesRegex(ValueError, "Missing mark price"):
+            ledger.apply_confirmed_fill(Order("NEW", "BUY", 1, 100_000, "BUY"),
+                                        100_000, Policy(), mark_prices={})
+        self.assertEqual(ledger.turnover, 0)
+
     def test_ranking(self):
         a, b = Signal("A", 100, .1, .01), Signal("B", 100, .03, .01)
         self.assertEqual(rank_signals([b, a], Policy())[0].ticker, "A")

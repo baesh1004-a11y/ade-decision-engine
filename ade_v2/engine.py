@@ -126,6 +126,19 @@ def rank_signals(signals: list[Signal], policy: Policy) -> list[Signal]:
 def plan_orders(ledger: Ledger, prices: dict[str, float],
                 signals: list[Signal], policy: Policy = Policy()) -> tuple[list[Order], dict[str, str]]:
     """Risk-first plan; sells precede buys, but unsettled proceeds cannot fund buys."""
+    # Fail closed on stale, missing or contradictory prices. A signal is not a
+    # verified market quote, and repeated tickers could bypass allocation caps.
+    tickers = [s.ticker for s in signals]
+    if len(tickers) != len(set(tickers)):
+        raise ValueError("Duplicate ticker signals are not allowed")
+    required = set(ledger.positions) | set(tickers)
+    if any(ticker not in prices for ticker in required):
+        raise ValueError("Missing verified price for held or candidate ticker")
+    if any(not isfinite(prices[ticker]) or prices[ticker] <= 0 for ticker in required):
+        raise ValueError("Invalid verified market price")
+    for signal in signals:
+        if not isfinite(signal.price) or signal.price <= 0 or signal.price != prices[signal.ticker]:
+            raise ValueError("Signal reference price differs from verified market price")
     nav = ledger.nav(prices)
     if nav <= 0:
         return [], {"portfolio": "NONPOSITIVE_NAV"}

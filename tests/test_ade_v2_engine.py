@@ -81,6 +81,28 @@ class TestADEv2(unittest.TestCase):
                                         100_000, Policy(), mark_prices={})
         self.assertEqual(ledger.turnover, 0)
 
+    def test_duplicate_signal_rejected_before_allocation(self):
+        ledger = Ledger(10_000_000)
+        signals = [Signal("X", 100_000, .05, .01), Signal("X", 100_000, .05, .01)]
+        with self.assertRaisesRegex(ValueError, "Duplicate ticker"):
+            plan_orders(ledger, {"X": 100_000}, signals)
+        self.assertEqual(ledger.turnover, 0)
+
+    def test_missing_or_stale_price_rejected(self):
+        ledger = Ledger(10_000_000)
+        signal = Signal("X", 100_000, .05, .01)
+        with self.assertRaisesRegex(ValueError, "Missing verified price"):
+            plan_orders(ledger, {}, [signal])
+        with self.assertRaisesRegex(ValueError, "differs"):
+            plan_orders(ledger, {"X": 101_000}, [signal])
+        with self.assertRaisesRegex(ValueError, "Invalid verified"):
+            plan_orders(ledger, {"X": float("nan")}, [signal])
+
+    def test_missing_held_quote_blocks_planning(self):
+        ledger = Ledger(9_000_000, {"OLD": 1}, {"OLD": 100_000})
+        with self.assertRaisesRegex(ValueError, "Missing verified price"):
+            plan_orders(ledger, {"NEW": 100_000}, [Signal("NEW", 100_000, .05, .01)])
+
     def test_ranking(self):
         a, b = Signal("A", 100, .1, .01), Signal("B", 100, .03, .01)
         self.assertEqual(rank_signals([b, a], Policy())[0].ticker, "A")

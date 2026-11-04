@@ -104,7 +104,7 @@ class Ledger:
         self.turnover += gross
 
     def settle(self, amount: float) -> None:
-        if amount < 0 or amount > self.pending_settlement + 1e-8:
+        if not isfinite(amount) or amount < 0 or amount > self.pending_settlement + 1e-8:
             raise ValueError("Invalid settlement")
         self.pending_settlement -= amount
         self.settled_cash += amount

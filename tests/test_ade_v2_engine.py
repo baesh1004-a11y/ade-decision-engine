@@ -103,6 +103,14 @@ class TestADEv2(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Missing verified price"):
             plan_orders(ledger, {"NEW": 100_000}, [Signal("NEW", 100_000, .05, .01)])
 
+    def test_settlement_rejects_nonfinite_and_negative(self):
+        ledger = Ledger(100_000, pending_settlement=50_000)
+        for invalid in (float("nan"), float("inf"), float("-inf"), -1, 50_001):
+            with self.assertRaisesRegex(ValueError, "Invalid settlement"):
+                ledger.settle(invalid)
+        self.assertEqual(ledger.pending_settlement, 50_000)
+        self.assertEqual(ledger.settled_cash, 100_000)
+
     def test_ranking(self):
         a, b = Signal("A", 100, .1, .01), Signal("B", 100, .03, .01)
         self.assertEqual(rank_signals([b, a], Policy())[0].ticker, "A")

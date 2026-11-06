@@ -25,6 +25,19 @@ class ReconciliationTests(unittest.TestCase):
             self.r.accept(ConfirmedFill("F3", "O1", "005930", "BUY", 1, 100200), **self.kw)
         self.assertEqual(self.r.filled_qty["O1"], 3)
 
+    def test_order_id_cannot_change_ticker_side_or_quantity(self):
+        self.assertTrue(self.r.accept(self.fill, **self.kw))
+        for changes, alternate in (
+            ({"expected_ticker": "000660"}, ConfirmedFill("F2", "O1", "000660", "BUY", 1, 100000)),
+            ({"expected_side": "SELL"}, ConfirmedFill("F2", "O1", "005930", "SELL", 1, 100000)),
+            ({"ordered_quantity": 10}, ConfirmedFill("F2", "O1", "005930", "BUY", 1, 100000)),
+        ):
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, "Conflicting order identity"):
+                    self.r.accept(alternate, **{**self.kw, **changes})
+        self.assertEqual(self.r.filled_qty["O1"], 2)
+        self.assertEqual(len(self.r.seen), 1)
+
     def test_identity_mismatch(self):
         with self.assertRaisesRegex(ValueError, "does not match"):
             self.r.accept(self.fill, **{**self.kw, "expected_side": "SELL"})

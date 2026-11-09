@@ -34,6 +34,20 @@ class SettlementTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             book.confirm("F1", as_of=date(2026, 11, 11), broker_confirmed=True)
 
+    def test_confirmation_requires_real_boolean(self):
+        book = SettlementBook()
+        book.register(PendingCredit("F2", 100.0, date(2026, 11, 10)))
+        for value in (1, "yes", None):
+            with self.assertRaises(ValueError):
+                book.confirm("F2", as_of=date(2026, 11, 10), broker_confirmed=value)
+        self.assertIn("F2", book.pending)
+
+    def test_lag_requires_positive_integer(self):
+        sessions = [date(2026, 11, 6), date(2026, 11, 9), date(2026, 11, 10)]
+        for lag in (True, 1.5, 0, -1):
+            with self.assertRaises(ValueError):
+                due_date(sessions[0], sessions, lag=lag)
+
     def test_invalid_amount(self):
         for amount in [float("nan"), float("inf"), -1.0, 0.0]:
             with self.assertRaises(ValueError):

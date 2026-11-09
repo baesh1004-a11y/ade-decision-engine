@@ -29,7 +29,7 @@ class SettlementBook:
         if fill_id not in self.pending:
             raise ValueError("Unknown settlement credit")
         credit = self.pending[fill_id]
-        if as_of < credit.due_date or not broker_confirmed:
+        if type(broker_confirmed) is not bool or not broker_confirmed or type(as_of) is not date or as_of < credit.due_date:
             raise ValueError("Settlement not verified or not due")
         del self.pending[fill_id]
         self.settled_ids.add(fill_id)
@@ -38,7 +38,7 @@ class SettlementBook:
 
 def due_date(trade_date: date, exchange_sessions: list[date], lag: int = 2) -> date:
     """Caller must supply a complete, verified exchange-session calendar."""
-    if lag < 1 or exchange_sessions != sorted(set(exchange_sessions)):
+    if type(lag) is not int or lag < 1 or exchange_sessions != sorted(set(exchange_sessions)):
         raise ValueError("Invalid session calendar")
     if trade_date not in exchange_sessions:
         raise ValueError("Trade date not in verified exchange calendar")

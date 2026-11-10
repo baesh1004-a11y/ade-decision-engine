@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime
 from ade_v2.settlement import PendingCredit, SettlementBook, due_date
 
 
@@ -47,6 +47,26 @@ class SettlementTests(unittest.TestCase):
         for lag in (True, 1.5, 0, -1):
             with self.assertRaises(ValueError):
                 due_date(sessions[0], sessions, lag=lag)
+
+    def test_malformed_credit_fails_closed(self):
+        for credit in (
+            PendingCredit("F", 1, "2026-11-10"),
+            PendingCredit(" ", 1, date(2026, 11, 10)),
+            PendingCredit("F", "100", date(2026, 11, 10)),
+            PendingCredit("F", True, date(2026, 11, 10)),
+        ):
+            with self.assertRaises(ValueError):
+                SettlementBook().register(credit)
+
+    def test_invalid_calendar_types_fail_closed(self):
+        trade = date(2026, 11, 6)
+        for sessions in (
+            [trade, "2026-11-09"],
+            (trade, date(2026, 11, 9)),
+            [datetime(2026, 11, 6), date(2026, 11, 9)],
+        ):
+            with self.assertRaises(ValueError):
+                due_date(trade, sessions)
 
     def test_invalid_amount(self):
         for amount in [float("nan"), float("inf"), -1.0, 0.0]:

@@ -17,7 +17,9 @@ class SettlementBook:
     settled_ids: set[str] = field(default_factory=set)
 
     def register(self, credit: PendingCredit) -> None:
-        if not credit.fill_id or not isfinite(credit.amount) or credit.amount <= 0:
+        if (not isinstance(credit.fill_id, str) or not credit.fill_id.strip() or
+                type(credit.due_date) is not date or type(credit.amount) not in (int, float) or
+                not isfinite(credit.amount) or credit.amount <= 0):
             raise ValueError("Invalid settlement credit")
         if credit.fill_id in self.pending or credit.fill_id in self.settled_ids:
             raise ValueError("Duplicate settlement credit")
@@ -38,7 +40,10 @@ class SettlementBook:
 
 def due_date(trade_date: date, exchange_sessions: list[date], lag: int = 2) -> date:
     """Caller must supply a complete, verified exchange-session calendar."""
-    if type(lag) is not int or lag < 1 or exchange_sessions != sorted(set(exchange_sessions)):
+    if (type(trade_date) is not date or type(lag) is not int or lag < 1 or
+            not isinstance(exchange_sessions, list) or
+            any(type(session) is not date for session in exchange_sessions) or
+            exchange_sessions != sorted(set(exchange_sessions))):
         raise ValueError("Invalid session calendar")
     if trade_date not in exchange_sessions:
         raise ValueError("Trade date not in verified exchange calendar")

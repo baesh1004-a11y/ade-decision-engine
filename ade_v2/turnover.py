@@ -25,11 +25,15 @@ def report_turnover(*, confirmed_buy: float, confirmed_sell: float,
     Caller must independently reconcile all fills before passing amounts.
     """
     amounts = (confirmed_buy, confirmed_sell, target)
+    if any(type(v) not in (int, float) for v in amounts):
+        raise ValueError("Turnover amounts must be numeric, not booleans or strings")
     if not all(isfinite(v) for v in amounts) or any(v < 0 for v in amounts) or target == 0:
         raise ValueError("Invalid turnover amounts")
     achieved = confirmed_buy + confirmed_sell
+    if not isfinite(achieved):
+        raise ValueError("Turnover sum overflow")
     shortfall = max(0.0, target - achieved)
-    if shortfall > 0 and not reason:
+    if shortfall > 0 and (not isinstance(reason, str) or not reason.strip()):
         raise ValueError("A verified shortfall requires an explicit reason")
     return TurnoverReport(target, confirmed_buy, confirmed_sell, achieved,
                           100 * achieved / target, shortfall,

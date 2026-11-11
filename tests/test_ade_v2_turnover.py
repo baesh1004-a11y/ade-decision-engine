@@ -16,8 +16,23 @@ class TestTurnover(unittest.TestCase):
         self.assertIsNone(r.shortfall_reason)
 
     def test_no_implicit_zero_for_missing_fills(self):
-        with self.assertRaises(TypeError):
+        with self.assertRaises(ValueError):
             report_turnover(confirmed_buy=None, confirmed_sell=0, reason="UNKNOWN")
+
+    def test_rejects_boolean_and_string_amounts(self):
+        for bad in (True, False, "100", [], None):
+            with self.subTest(bad=bad):
+                with self.assertRaises(ValueError):
+                    report_turnover(confirmed_buy=bad, confirmed_sell=0, reason="BLOCKED")
+
+    def test_rejects_overflowed_sum(self):
+        with self.assertRaises(ValueError):
+            report_turnover(confirmed_buy=1e308, confirmed_sell=1e308, reason="BLOCKED")
+
+    def test_rejects_blank_shortfall_reason(self):
+        for reason in ("", "   ", 1):
+            with self.assertRaises(ValueError):
+                report_turnover(confirmed_buy=0, confirmed_sell=0, reason=reason)
 
     def test_shortfall_requires_reason(self):
         with self.assertRaises(ValueError):

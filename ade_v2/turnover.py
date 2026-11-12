@@ -35,6 +35,9 @@ def report_turnover(*, confirmed_buy: float, confirmed_sell: float,
     shortfall = max(0.0, target - achieved)
     if shortfall > 0 and (not isinstance(reason, str) or not reason.strip()):
         raise ValueError("A verified shortfall requires an explicit reason")
+    achievement_pct = 100 * (achieved / target)
+    if not isfinite(achievement_pct):
+        raise ValueError("Turnover percentage overflow")
     return TurnoverReport(target, confirmed_buy, confirmed_sell, achieved,
-                          100 * achieved / target, shortfall,
+                          achievement_pct, shortfall,
                           reason if shortfall else None)

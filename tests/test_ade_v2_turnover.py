@@ -10,6 +10,14 @@ class TestTurnover(unittest.TestCase):
         self.assertAlmostEqual(r.achievement_pct, 66.6666666667)
         self.assertEqual(r.shortfall, 5_000_000)
 
+    def test_percentage_overflow_rejected(self):
+        with self.assertRaisesRegex(ValueError, "percentage overflow"):
+            report_turnover(confirmed_buy=1e308, confirmed_sell=0, target=1e-300)
+
+    def test_large_equal_amounts_stay_finite(self):
+        r = report_turnover(confirmed_buy=1e308, confirmed_sell=0, target=1e308)
+        self.assertEqual(r.achievement_pct, 100)
+
     def test_full_target(self):
         r = report_turnover(confirmed_buy=9_000_000, confirmed_sell=6_000_000)
         self.assertEqual(r.achievement_pct, 100)

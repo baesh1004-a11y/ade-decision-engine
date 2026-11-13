@@ -33,6 +33,15 @@ class TestTurnover(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     report_turnover(confirmed_buy=bad, confirmed_sell=0, reason="BLOCKED")
 
+    def test_oversized_integer_rejected_cleanly(self):
+        for field in ("confirmed_buy", "confirmed_sell", "target"):
+            with self.subTest(field=field):
+                kwargs = {"confirmed_buy": 0, "confirmed_sell": 0,
+                          "target": 15_000_000, "reason": "BLOCKED"}
+                kwargs[field] = 10 ** 1000
+                with self.assertRaisesRegex(ValueError, "Invalid turnover amounts"):
+                    report_turnover(**kwargs)
+
     def test_rejects_overflowed_sum(self):
         with self.assertRaises(ValueError):
             report_turnover(confirmed_buy=1e308, confirmed_sell=1e308, reason="BLOCKED")

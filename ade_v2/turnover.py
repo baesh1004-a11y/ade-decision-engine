@@ -27,7 +27,11 @@ def report_turnover(*, confirmed_buy: float, confirmed_sell: float,
     amounts = (confirmed_buy, confirmed_sell, target)
     if any(type(v) not in (int, float) for v in amounts):
         raise ValueError("Turnover amounts must be numeric, not booleans or strings")
-    if not all(isfinite(v) for v in amounts) or any(v < 0 for v in amounts) or target == 0:
+    try:
+        valid_finite = all(isfinite(v) for v in amounts)
+    except OverflowError:
+        valid_finite = False
+    if not valid_finite or any(v < 0 for v in amounts) or target == 0:
         raise ValueError("Invalid turnover amounts")
     achieved = confirmed_buy + confirmed_sell
     if not isfinite(achieved):

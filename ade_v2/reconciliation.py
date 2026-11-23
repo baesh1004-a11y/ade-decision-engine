@@ -29,7 +29,7 @@ class FillReconciler:
             raise ValueError("Fill does not match order")
         if fill.side not in ("BUY", "SELL") or type(fill.quantity) is not int or fill.quantity <= 0:
             raise ValueError("Invalid fill side or quantity")
-        if not isfinite(fill.price) or fill.price <= 0:
+        if type(fill.price) not in (int, float) or not isfinite(fill.price) or fill.price <= 0:
             raise ValueError("Invalid fill price")
         if type(ordered_quantity) is not int or ordered_quantity <= 0:
             raise ValueError("Invalid ordered quantity")

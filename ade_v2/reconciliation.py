@@ -23,7 +23,7 @@ class FillReconciler:
     def accept(self, fill: ConfirmedFill, *, expected_order_id: str,
                expected_ticker: str, expected_side: str,
                ordered_quantity: int) -> bool:
-        if not fill.fill_id or not fill.order_id or not fill.ticker:
+        if any(type(value) is not str or not value.strip() for value in (fill.fill_id, fill.order_id, fill.ticker)):
             raise ValueError("Missing fill identity")
         if fill.order_id != expected_order_id or fill.ticker != expected_ticker or fill.side != expected_side:
             raise ValueError("Fill does not match order")
